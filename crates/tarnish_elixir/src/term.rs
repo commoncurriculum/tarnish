@@ -3,13 +3,14 @@
 
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 
 use rustler::types::atom;
 use rustler::types::map::MapIterator;
 use rustler::{BigInt, Binary, Encoder, Env, Term, TermType};
-use tarnish::js::{self, Given};
+use tarnish::js::{self, Given, WrittenNumber};
 use tarnish::json::{self, Key, Map, Number, Value};
-use tarnish::stack;
+use tarnish::{Fields, Mark, Node, stack};
 
 rustler::atoms! {
     __struct__,
@@ -31,19 +32,23 @@ const TEXT_PER_MAP: usize = 256;
 /// The value of a term Jason could encode, reading no more than `limit` maps and lists, each
 /// [`TEXT_PER_MAP`] bytes of text counting as one more.
 pub fn read(term: Term, limit: usize) -> Result<Value, Unread> {
-    read_json(term, limit, |json| json.value())
+    Ok(read_json(term, limit, |json| json.value())?.0)
 }
 
-/// What `read` makes of the term, read as JSON, reading no more than [`read`] does.
+/// What `read` makes of the term, read as JSON, reading no more than [`read`] does, and the
+/// nodes read from maps that aren't what `toJSON` writes for them.
 pub fn read_json<'a, T>(
     term: Term<'a>,
     limit: usize,
     read: impl FnOnce(Json<'a, '_>) -> T,
-) -> Result<T, Unread> {
+) -> Result<(T, HashSet<usize>), Unread> {
     let reading = Reading {
         refused: Cell::new(false),
         left: Cell::new(limit),
         keys: RefCell::new(Vec::new()),
+        open: RefCell::new(Vec::new()),
+        irregular: Cell::new(0),
+        irregular_nodes: RefCell::new(HashSet::new()),
     };
     let read = read(Json {
         term,
@@ -54,7 +59,7 @@ pub fn read_json<'a, T>(
     } else if reading.refused.get() {
         Err(Unread::NotJson)
     } else {
-        Ok(read)
+        Ok((read, reading.irregular_nodes.into_inner()))
     }
 }
 
@@ -80,9 +85,63 @@ pub struct Reading<'a> {
     left: Cell<usize>,
     /// The keys looked up so far, as terms.
     keys: RefCell<Vec<(&'static str, Term<'a>)>>,
+    /// The maps being read as nodes and marks, innermost last.
+    open: RefCell<Vec<Open>>,
+    /// A count of the parts read so far that aren't as `toJSON` writes them. A map is as it
+    /// writes it only when the count didn't grow while the map was read.
+    irregular: Cell<usize>,
+    /// The nodes read from maps that aren't what `toJSON` writes for them, by their ids.
+    irregular_nodes: RefCell<HashSet<usize>>,
+}
+
+/// A map being read as a node or mark, until the reader says what it read.
+struct Open {
+    /// [`Reading::irregular`] when the map was opened.
+    irregular: usize,
+    /// The map's size, when its keys are all among those looked up, and strings.
+    size: Option<usize>,
+    /// The nodes and marks read from its `content` and `marks`.
+    children: usize,
+    marks: usize,
+    /// The rank of the last mark read, and whether the marks came in order of rank.
+    rank: usize,
+    sorted: bool,
+    /// The keys of the map read as its `attrs`.
+    attrs: Option<Vec<Key>>,
 }
 
 impl<'a> Reading<'a> {
+    fn irregular(&self) {
+        self.irregular.set(self.irregular.get() + 1);
+    }
+
+    /// Closes the map just read as a node or mark with these fields and attributes, telling its
+    /// parent through `parent`: whether it's what `toJSON` writes, `more` saying of the rest.
+    /// A type fills in an attribute a node isn't given, and leaves out one it doesn't have, so
+    /// the map read must have the node's attributes and no others.
+    fn close(
+        &self,
+        fields: usize,
+        attrs: &Map,
+        more: impl FnOnce(&Open) -> bool,
+        parent: impl FnOnce(&mut Open),
+    ) -> bool {
+        let mut open = self.open.borrow_mut();
+        let Some(closed) = open.pop() else {
+            return false;
+        };
+        if let Some(open) = open.last_mut() {
+            parent(open);
+        }
+        let given = |given: &Vec<Key>| {
+            given.len() == attrs.len() && attrs.keys().all(|key| given.contains(key))
+        };
+        closed.size == Some(fields)
+            && closed.irregular == self.irregular.get()
+            && (attrs.is_empty() || closed.attrs.as_ref().is_some_and(given))
+            && more(&closed)
+    }
+
     /// Counts `maps` more read, `false` once there are too many.
     fn count(&self, maps: usize) -> bool {
         let left = self.left.get().saturating_sub(maps);
@@ -134,16 +193,29 @@ impl<'a, 'r> Json<'a, 'r> {
             TermType::Atom if atom::nil() == term => Kind::Null,
             TermType::Atom if atom::true_() == term => Kind::Bool(true),
             TermType::Atom if atom::false_() == term => Kind::Bool(false),
-            TermType::Atom => match atom_name(term) {
-                Some(name) => Kind::String(Cow::Owned(name)),
-                None => self.refuse(Kind::Null),
-            },
+            TermType::Atom => {
+                self.reading.irregular();
+                match atom_name(term) {
+                    Some(name) => Kind::String(Cow::Owned(name)),
+                    None => self.refuse(Kind::Null),
+                }
+            }
             TermType::Integer => match integer(term) {
-                Some(number) => Kind::Number(number),
+                Some((number, written)) => {
+                    if !written {
+                        self.reading.irregular();
+                    }
+                    Kind::Number(number)
+                }
                 None => self.refuse(Kind::Null),
             },
             TermType::Float => match term.decode::<f64>().ok().and_then(Number::from_f64) {
-                Some(number) => Kind::Number(number),
+                Some(number) => {
+                    if !matches!(js::written_number(&number), WrittenNumber::Float(_)) {
+                        self.reading.irregular();
+                    }
+                    Kind::Number(number)
+                }
                 None => self.refuse(Kind::Null),
             },
             _ => self.refuse(Kind::Null),
@@ -187,6 +259,41 @@ impl<'a, 'r> Json<'a, 'r> {
             }),
             _ => return None,
         })
+    }
+
+    /// The fields of these names, and the map's size when it has no keys but those found.
+    fn find<const N: usize>(self, keys: [&'static str; N]) -> ([Option<Self>; N], Option<usize>) {
+        let mut fields = [None; N];
+        let Ok(size) = self.term.map_size() else {
+            return (fields, None);
+        };
+        if !self.reading.count(1) {
+            return (fields, None);
+        }
+        // A map with no keys but these, as strings, has each looked up. Any other key might be
+        // an atom or integer that Jason writes as one of them.
+        let mut found = 0;
+        for (field, key) in fields.iter_mut().zip(keys) {
+            if found == size {
+                break;
+            }
+            let key = self.reading.key(self.term.get_env(), key);
+            if let Ok(value) = self.term.map_get(key) {
+                *field = Some(self.at(value));
+                found += 1;
+            }
+        }
+        if found == size {
+            return (fields, Some(size));
+        }
+        fields = [None; N];
+        // Of keys that write the same, the last written is the one that counts.
+        for (name, value) in self.entries() {
+            if let Some(index) = keys.iter().position(|&key| key == name) {
+                fields[index] = Some(value);
+            }
+        }
+        (fields, None)
     }
 
     /// A map's entries, or a `Jason.OrderedObject`'s, as Jason writes them.
@@ -278,6 +385,8 @@ impl<'a, 'r> Entries<'a, 'r> {
         let term = self.json.term;
         self.map = None;
         self.unique = false;
+        // A struct is written as a plain map.
+        self.json.reading.irregular();
         let ordered =
             self.first && term.map_size().is_ok_and(|size| size == 2) && ordered_object() == name;
         match term.map_get(values()) {
@@ -319,7 +428,11 @@ impl<'a, 'r> Iterator for Entries<'a, 'r> {
         };
         match self.json.key(key) {
             Some(key) => {
-                self.unique &= matches!(key, Cow::Borrowed(_));
+                // Only a string key is written as it is.
+                if let Cow::Owned(_) = key {
+                    self.unique = false;
+                    self.json.reading.irregular();
+                }
                 Some((key, self.json.at(value)))
             }
             None => self.refuse(),
@@ -339,36 +452,17 @@ impl<'a> js::Json<'a> for Json<'a, '_> {
     }
 
     fn fields<const N: usize>(self, keys: [&'static str; N]) -> [Option<Self>; N] {
-        let mut fields = [None; N];
-        let Ok(size) = self.term.map_size() else {
-            return fields;
-        };
-        if !self.reading.count(1) {
-            return fields;
-        }
-        // A map with no keys but these, as strings, has each looked up. Any other key might be
-        // an atom or integer that Jason writes as one of them.
-        let mut found = 0;
-        for (field, key) in fields.iter_mut().zip(keys) {
-            if found == size {
-                return fields;
-            }
-            let key = self.reading.key(self.term.get_env(), key);
-            if let Ok(value) = self.term.map_get(key) {
-                *field = Some(self.at(value));
-                found += 1;
-            }
-        }
-        if found == size {
-            return fields;
-        }
-        fields = [None; N];
-        // Of keys that write the same, the last written is the one that counts.
-        for (name, value) in self.entries() {
-            if let Some(index) = keys.iter().position(|&key| key == name) {
-                fields[index] = Some(value);
-            }
-        }
+        let irregular = self.reading.irregular.get();
+        let (fields, size) = self.find(keys);
+        self.reading.open.borrow_mut().push(Open {
+            irregular,
+            size,
+            children: 0,
+            marks: 0,
+            rank: 0,
+            sorted: true,
+            attrs: None,
+        });
         fields
     }
 
@@ -392,24 +486,72 @@ impl<'a> js::Json<'a> for Json<'a, '_> {
 
     fn attrs(self) -> Given<'a> {
         match self.kind() {
-            Kind::Object => Given::Object(Cow::Owned(self.object())),
+            Kind::Object => {
+                let attrs = self.object();
+                if let Some(open) = self.reading.open.borrow_mut().last_mut() {
+                    open.attrs = Some(attrs.keys().cloned().collect());
+                }
+                Given::Object(Cow::Owned(attrs))
+            }
             _ if js::Json::truthy(self) => Given::Object(Cow::Borrowed(&json::EMPTY)),
             _ => Given::Falsy(self.value()),
+        }
+    }
+
+    fn read_node(self, node: &Node) {
+        let reading = self.reading;
+        let regular = reading.close(
+            node.field_count(),
+            node.attrs(),
+            |open| {
+                open.children == node.child_count()
+                    && open.marks == node.marks().len()
+                    && open.sorted
+            },
+            |parent| parent.children += 1,
+        );
+        if !regular {
+            reading.irregular();
+            reading.irregular_nodes.borrow_mut().insert(node.id());
+        }
+    }
+
+    fn read_mark(self, mark: &Mark) {
+        let rank = mark.mark_type().rank();
+        let regular = self.reading.close(
+            mark.field_count(),
+            mark.attrs(),
+            |_| true,
+            |node| {
+                node.marks += 1;
+                node.sorted &= rank >= node.rank;
+                node.rank = rank;
+            },
+        );
+        if !regular {
+            self.reading.irregular();
         }
     }
 }
 
 /// An integer as JSON reads what Jason writes for it: exactly within 64 bits, and as the
-/// nearest double past them.
-fn integer(term: Term) -> Option<Number> {
-    if let Ok(integer) = term.decode::<i64>() {
-        return Some(integer.into());
-    }
-    if let Ok(integer) = term.decode::<u64>() {
-        return Some(integer.into());
-    }
-    let digits = term.decode::<BigInt>().ok()?.to_string();
-    Number::from_f64(digits.parse().ok()?)
+/// nearest double past them. And whether JavaScript writes it back as the same integer.
+fn integer(term: Term) -> Option<(Number, bool)> {
+    let integer: i128 = match (term.decode::<i64>(), term.decode::<u64>()) {
+        (Ok(integer), _) => integer.into(),
+        (_, Ok(integer)) => integer.into(),
+        _ => {
+            let digits = term.decode::<BigInt>().ok()?.to_string();
+            return Some((Number::from_f64(digits.parse().ok()?)?, false));
+        }
+    };
+    let number = match i64::try_from(integer) {
+        Ok(integer) => Number::from(integer),
+        Err(_) => Number::from(integer as u64),
+    };
+    let written =
+        matches!(js::written_number(&number), WrittenNumber::Integer(same) if same == integer);
+    Some((number, written))
 }
 
 /// An atom's name, which Jason writes as a string.

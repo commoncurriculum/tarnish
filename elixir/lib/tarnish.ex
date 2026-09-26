@@ -7,6 +7,10 @@ defmodule Tarnish do
   JSON are ProseMirror's JSON, as Jason decodes it: maps with string keys, or
   `Jason.OrderedObject`s where order matters.
 
+  A document keeps the JSON it was read from. Its own JSON shares every part of that which is
+  what ProseMirror writes for a node it still has, so after steps only the nodes they changed
+  are made anew.
+
   Errors come back as `{:error, {kind, message}}`. The kind names the class ProseMirror throws:
 
     * `:range_error`
@@ -20,10 +24,10 @@ defmodule Tarnish do
   `ArgumentError`. A part it ignores, such as a key a node doesn't have, isn't read.
   """
 
-  alias Tarnish.Native
+  alias Tarnish.{Doc, Native}
 
   @opaque schema :: reference()
-  @opaque doc :: reference()
+  @opaque doc :: %Doc{}
   @type json :: map() | list() | String.t() | number() | boolean() | nil
   @type error :: {:error, {atom(), String.t()}}
 
@@ -67,32 +71,38 @@ defmodule Tarnish do
   @doc "Reads a document, or any node, from its JSON, as `Node.fromJSON` does."
   @spec node_from_json(schema(), json()) :: {:ok, doc()} | error()
   def node_from_json(schema, json) do
-    with :dirty <- Native.node_from_json(schema, json),
-         do: Native.node_from_json_dirty(schema, json)
+    read =
+      with :dirty <- Native.node_from_json(schema, json),
+           do: Native.node_from_json_dirty(schema, json)
+
+    with {:ok, ref} <- read, do: {:ok, %Doc{ref: ref, json: json}}
   end
 
   @doc "The document's JSON."
   @spec to_json(doc()) :: json()
-  def to_json(doc) do
-    with :dirty <- Native.to_json(doc), do: Native.to_json_dirty(doc)
+  def to_json(%Doc{ref: ref, json: json}) do
+    with :dirty <- Native.to_json(ref, json), do: Native.to_json_dirty(ref, json)
   end
 
   @doc "Checks that the document conforms to its schema."
   @spec check(doc()) :: :ok | error()
-  def check(doc) do
-    with :dirty <- Native.check(doc), do: Native.check_dirty(doc)
+  def check(%Doc{ref: ref}) do
+    with :dirty <- Native.check(ref), do: Native.check_dirty(ref)
   end
 
   @doc "Applies steps to the document, in order, and gives the changed document."
   @spec apply_steps(doc(), [json()]) :: {:ok, doc()} | error()
-  def apply_steps(doc, steps) do
-    with :dirty <- Native.apply_steps(doc, steps), do: Native.apply_steps_dirty(doc, steps)
+  def apply_steps(%Doc{ref: ref} = doc, steps) do
+    applied =
+      with :dirty <- Native.apply_steps(ref, steps), do: Native.apply_steps_dirty(ref, steps)
+
+    with {:ok, ref} <- applied, do: {:ok, %{doc | ref: ref}}
   end
 
   @doc "The steps that undo `steps`, applied to `doc`, last first."
   @spec invert_steps(doc(), [json()]) :: {:ok, [json()]} | error()
-  def invert_steps(doc, steps) do
-    with :dirty <- Native.invert_steps(doc, steps), do: Native.invert_steps_dirty(doc, steps)
+  def invert_steps(%Doc{ref: ref}, steps) do
+    with :dirty <- Native.invert_steps(ref, steps), do: Native.invert_steps_dirty(ref, steps)
   end
 
   @doc """

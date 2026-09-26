@@ -9,9 +9,13 @@
 #![forbid(unsafe_code)]
 
 mod etf;
+mod share;
 mod term;
 
+use std::sync::Arc;
+
 use rustler::{Encoder, Env, NifResult, Resource, ResourceArc, Term};
+use share::Source;
 use tarnish::{Error, Node, Schema, Value, api};
 use term::Unread;
 
@@ -35,7 +39,11 @@ pub struct SchemaResource(Schema);
 #[rustler::resource_impl]
 impl Resource for SchemaResource {}
 
-pub struct NodeResource(Node);
+/// A document, and the one read from a map that it is, or that steps made it from.
+pub struct NodeResource {
+    node: Node,
+    source: Arc<Source>,
+}
 
 #[rustler::resource_impl]
 impl Resource for NodeResource {}
@@ -125,8 +133,8 @@ fn respond<'a, T>(
     }
 }
 
-fn node(env: Env, node: Node) -> Term {
-    ResourceArc::new(NodeResource(node)).encode(env)
+fn document(env: Env, node: Node, source: Arc<Source>) -> Term {
+    ResourceArc::new(NodeResource { node, source }).encode(env)
 }
 
 /// The steps, when there are few enough for the limits to apply to `doc`.
@@ -144,12 +152,20 @@ fn make<'a>(env: Env<'a>, bytes: Option<Vec<u8>>) -> Answer<'a> {
 }
 
 fn read_node<'a>(env: Env<'a>, limits: &Limits, schema: &Schema, json: Term<'a>) -> Answer<'a> {
-    let doc = term::read_json(json, limits.read, |json| Node::from_json(schema, json))?;
-    Ok(respond(env, doc, |doc| node(env, doc)))
+    let (doc, irregular) =
+        term::read_json(json, limits.read, |json| Node::from_json(schema, json))?;
+    Ok(respond(env, doc, |doc| {
+        let source = Source {
+            doc: doc.clone(),
+            irregular,
+        };
+        document(env, doc, Arc::new(source))
+    }))
 }
 
-fn write_node<'a>(env: Env<'a>, limits: &Limits, doc: &Node) -> Answer<'a> {
-    make(env, etf::write_node(doc, limits.write))
+fn write_node<'a>(env: Env<'a>, limits: &Limits, doc: &NodeResource, json: Term<'a>) -> Answer<'a> {
+    share::json(env, &doc.node, &doc.source, json, limits.write)
+        .map_err(|share::TooBig| Unanswered::Dirty)
 }
 
 fn check_node<'a>(env: Env<'a>, limits: &Limits, doc: &Node) -> Answer<'a> {
@@ -160,9 +176,11 @@ fn check_node<'a>(env: Env<'a>, limits: &Limits, doc: &Node) -> Answer<'a> {
     })
 }
 
-fn apply<'a>(env: Env<'a>, limits: &Limits, doc: &Node, json: Term<'a>) -> Answer<'a> {
-    let applied = api::apply_steps(doc, &steps(limits, doc, json)?);
-    Ok(respond(env, applied, |doc| node(env, doc)))
+fn apply<'a>(env: Env<'a>, limits: &Limits, doc: &NodeResource, json: Term<'a>) -> Answer<'a> {
+    let applied = api::apply_steps(&doc.node, &steps(limits, &doc.node, json)?);
+    Ok(respond(env, applied, |node| {
+        document(env, node, doc.source.clone())
+    }))
 }
 
 fn invert<'a>(env: Env<'a>, limits: &Limits, doc: &Node, json: Term<'a>) -> Answer<'a> {
@@ -215,23 +233,31 @@ fn node_from_json_dirty<'a>(
 }
 
 #[rustler::nif]
-fn to_json(env: Env, doc: ResourceArc<NodeResource>) -> NifResult<Term> {
-    answer(env, write_node(env, &NORMAL, &doc.0))
+fn to_json<'a>(
+    env: Env<'a>,
+    doc: ResourceArc<NodeResource>,
+    json: Term<'a>,
+) -> NifResult<Term<'a>> {
+    answer(env, write_node(env, &NORMAL, &doc, json))
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
-fn to_json_dirty(env: Env, doc: ResourceArc<NodeResource>) -> NifResult<Term> {
-    answer(env, write_node(env, &DIRTY, &doc.0))
+fn to_json_dirty<'a>(
+    env: Env<'a>,
+    doc: ResourceArc<NodeResource>,
+    json: Term<'a>,
+) -> NifResult<Term<'a>> {
+    answer(env, write_node(env, &DIRTY, &doc, json))
 }
 
 #[rustler::nif]
 fn check(env: Env, doc: ResourceArc<NodeResource>) -> NifResult<Term> {
-    answer(env, check_node(env, &NORMAL, &doc.0))
+    answer(env, check_node(env, &NORMAL, &doc.node))
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
 fn check_dirty(env: Env, doc: ResourceArc<NodeResource>) -> NifResult<Term> {
-    answer(env, check_node(env, &DIRTY, &doc.0))
+    answer(env, check_node(env, &DIRTY, &doc.node))
 }
 
 #[rustler::nif]
@@ -240,7 +266,7 @@ fn apply_steps<'a>(
     doc: ResourceArc<NodeResource>,
     steps: Term<'a>,
 ) -> NifResult<Term<'a>> {
-    answer(env, apply(env, &NORMAL, &doc.0, steps))
+    answer(env, apply(env, &NORMAL, &doc, steps))
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
@@ -249,7 +275,7 @@ fn apply_steps_dirty<'a>(
     doc: ResourceArc<NodeResource>,
     steps: Term<'a>,
 ) -> NifResult<Term<'a>> {
-    answer(env, apply(env, &DIRTY, &doc.0, steps))
+    answer(env, apply(env, &DIRTY, &doc, steps))
 }
 
 #[rustler::nif]
@@ -258,7 +284,7 @@ fn invert_steps<'a>(
     doc: ResourceArc<NodeResource>,
     steps: Term<'a>,
 ) -> NifResult<Term<'a>> {
-    answer(env, invert(env, &NORMAL, &doc.0, steps))
+    answer(env, invert(env, &NORMAL, &doc.node, steps))
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
@@ -267,7 +293,7 @@ fn invert_steps_dirty<'a>(
     doc: ResourceArc<NodeResource>,
     steps: Term<'a>,
 ) -> NifResult<Term<'a>> {
-    answer(env, invert(env, &DIRTY, &doc.0, steps))
+    answer(env, invert(env, &DIRTY, &doc.node, steps))
 }
 
 #[rustler::nif]

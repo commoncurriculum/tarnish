@@ -81,6 +81,12 @@ a term that ProseMirror reads and Jason couldn't encode, such as a tuple, raises
 schema's `"nodes"` and `"marks"` as lists of `{name, spec}` pairs, or as `Jason.OrderedObject`s,
 because their order matters and a map doesn't keep it.
 
+A document keeps the map it was read from, and its JSON shares every part of that map which is
+the JSON of a node it still has, as ProseMirror writes it. So the JSON of a document read and
+then changed by steps is a few new maps, for the nodes the steps changed, around the maps it was
+read from. A map that isn't what ProseMirror writes, such as one with a key a node doesn't have,
+or with a float where ProseMirror writes an integer, is written anew.
+
 A call runs on a normal scheduler when it has no more than about a millisecond's work, and on a
 dirty one otherwise. A dirty scheduler takes a few microseconds to hand a call to, which is most
 of the time a small document takes.

@@ -32,7 +32,10 @@ round_trip = fn ->
 end
 
 IO.puts("node_from_json:           #{median.(fn -> Tarnish.node_from_json(schema, json) end)} µs")
-IO.puts("to_json:                  #{median.(fn -> Tarnish.to_json(doc) end)} µs")
+{:ok, changed} = Tarnish.apply_steps(doc, steps)
+
+IO.puts("to_json, unchanged:       #{median.(fn -> Tarnish.to_json(doc) end)} µs")
+IO.puts("to_json after the steps:  #{median.(fn -> Tarnish.to_json(changed) end)} µs")
 IO.puts("check:                    #{median.(fn -> Tarnish.check(doc) end)} µs")
 IO.puts("apply_steps, 10 steps:    #{median.(fn -> Tarnish.apply_steps(doc, steps) end)} µs")
 IO.puts("from JSON, apply, to JSON: #{median.(round_trip)} µs")

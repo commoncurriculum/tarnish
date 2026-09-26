@@ -58,6 +58,13 @@ impl Fields for Node {
             field(Field::Text(text));
         }
     }
+
+    fn field_count(&self) -> usize {
+        1 + usize::from(!self.attrs().is_empty())
+            + usize::from(self.child_count() > 0)
+            + usize::from(!self.marks().is_empty())
+            + usize::from(self.text().is_some())
+    }
 }
 
 impl Fields for Mark {
@@ -67,6 +74,10 @@ impl Fields for Mark {
         if !self.attrs().is_empty() {
             field(Field::Attrs(self.attrs()));
         }
+    }
+
+    fn field_count(&self) -> usize {
+        1 + usize::from(!self.attrs().is_empty())
     }
 }
 

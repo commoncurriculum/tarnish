@@ -159,10 +159,17 @@ defmodule TarnishTest do
       for json <- [paragraphs(10_000, "many"), paragraphs(1, String.duplicate("long ", 200_000))] do
         assert Tarnish.Native.node_from_json(schema, json) == :dirty
         doc = doc(schema, json)
-        assert Tarnish.Native.to_json(doc) == :dirty
         assert Tarnish.to_json(doc) == json
         assert Tarnish.check(doc) == :ok
       end
+    end
+
+    test "write JSON on a dirty scheduler", %{schema: schema} do
+      # Two texts with the same marks are read as one, so every paragraph is written anew.
+      split = %{"type" => "paragraph", "content" => [text("ma"), text("ny")]}
+      doc = doc(schema, %{"type" => "doc", "content" => List.duplicate(split, 10_000)})
+      assert Tarnish.Native.to_json(doc.ref, doc.json) == :dirty
+      assert Tarnish.to_json(doc) == paragraphs(10_000, "many")
     end
 
     test "apply many steps on a dirty scheduler", %{schema: schema} do
@@ -172,11 +179,72 @@ defmodule TarnishTest do
       steps =
         List.duplicate(%{"stepType" => "replace", "from" => 2, "to" => 2, "slice" => slice}, 200)
 
-      assert Tarnish.Native.apply_steps(doc, steps) == :dirty
+      assert Tarnish.Native.apply_steps(doc.ref, steps) == :dirty
       {:ok, applied} = Tarnish.apply_steps(doc, steps)
       %{"content" => [first | _]} = Tarnish.to_json(applied)
       text = "t" <> String.duplicate("x", 200) <> "ext"
       assert first == %{"type" => "paragraph", "content" => [%{"type" => "text", "text" => text}]}
+    end
+  end
+
+  describe "a document's JSON" do
+    setup %{schemas: [schema | _]}, do: %{schema: schema}
+
+    defp text(text, marks \\ []) do
+      case marks do
+        [] -> %{"type" => "text", "text" => text}
+        marks -> %{"type" => "text", "text" => text, "marks" => marks}
+      end
+    end
+
+    defp paragraph(content), do: %{"type" => "paragraph", "content" => content}
+
+    defp heading(level, text),
+      do: %{"type" => "heading", "attrs" => %{"level" => level}, "content" => [text(text)]}
+
+    test "is the map it was read from, as ProseMirror writes it", %{schema: schema} do
+      json = %{"type" => "doc", "content" => [heading(2, "Title"), paragraph([text("a")])]}
+      assert :erts_debug.same(Tarnish.to_json(doc(schema, json)), json)
+    end
+
+    test "shares the maps of the nodes steps leave", %{schema: schema} do
+      [first, second, third] =
+        content = for text <- ~w(one two three), do: paragraph([text(text)])
+
+      doc = doc(schema, %{"type" => "doc", "content" => content})
+      slice = %{"content" => [text("!")]}
+      step = %{"stepType" => "replace", "from" => 9, "to" => 9, "slice" => slice}
+      {:ok, changed} = Tarnish.apply_steps(doc, [step])
+      %{"content" => [one, two, three]} = Tarnish.to_json(changed)
+      assert :erts_debug.same(one, first) and :erts_debug.same(three, third)
+      assert two == paragraph([text("two!")]) and not :erts_debug.same(two, second)
+    end
+
+    test "is what ProseMirror writes, whatever the map read", %{schema: schema} do
+      em = %{"type" => "em"}
+      strong = %{"type" => "strong"}
+
+      for {read, written} <- [
+            {%{"type" => :paragraph}, %{"type" => "paragraph"}},
+            {%{type: "paragraph"}, %{"type" => "paragraph"}},
+            {%{"type" => "paragraph", "extra" => 1}, %{"type" => "paragraph"}},
+            {%{"type" => "paragraph", "attrs" => %{}}, %{"type" => "paragraph"}},
+            {%{"type" => "paragraph", "content" => []}, %{"type" => "paragraph"}},
+            {paragraph([%{"type" => "text", "text" => "a", "marks" => []}]),
+             paragraph([text("a")])},
+            {paragraph([text("a"), text("b")]), paragraph([text("ab")])},
+            {paragraph([text("a", [strong, em])]), paragraph([text("a", [em, strong])])},
+            {paragraph([text("a", [%{"type" => "em", "attrs" => nil}])]),
+             paragraph([text("a", [em])])},
+            {%{"type" => "heading", "content" => [text("a")]}, heading(1, "a")},
+            {heading(1.0, "a"), heading(1, "a")},
+            {heading(2, "a") |> put_in(["attrs", "extra"], 1), heading(2, "a")},
+            {Jason.OrderedObject.new([{"type", "paragraph"}]), %{"type" => "paragraph"}}
+          ] do
+        json = %{"type" => "doc", "content" => [paragraph([text("same")]), read]}
+        written = %{"type" => "doc", "content" => [paragraph([text("same")]), written]}
+        assert Tarnish.to_json(doc(schema, json)) == written, inspect(read)
+      end
     end
   end
 

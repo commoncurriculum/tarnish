@@ -6,6 +6,7 @@ pub mod json;
 use std::borrow::Cow;
 
 use crate::json::{EMPTY, Map, Number, Value};
+use crate::model::{Mark, Node};
 
 /// `Number.MAX_SAFE_INTEGER`.
 pub const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
@@ -184,6 +185,12 @@ pub trait Json<'a>: Copy {
 
     /// The value as attributes a type is given, as [`attrs`] reads them.
     fn attrs(self) -> Given<'a>;
+
+    /// Told the node read from the value, after the nodes and marks read from its parts.
+    fn read_node(self, _node: &Node) {}
+
+    /// Told the mark read from the value.
+    fn read_mark(self, _mark: &Mark) {}
 }
 
 impl<'a> Json<'a> for &'a Value {

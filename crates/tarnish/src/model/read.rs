@@ -54,7 +54,9 @@ impl<'s> Reader<'s> {
                 .default_attrs()
                 .cloned()
                 .expect("text has no attributes");
-            return Node::new_text(text_type, attrs, Text::from(&*text), marks);
+            let node = Node::new_text(text_type, attrs, Text::from(&*text), marks)?;
+            json.read_node(&node);
+            return Ok(node);
         }
         let content = match content {
             Some(content) => self.fragment(content)?,
@@ -64,7 +66,9 @@ impl<'s> Reader<'s> {
         let attrs = attrs.map_or(Given::Falsy(Value::Null), Json::attrs);
         let attrs = node_type.attrs_given(&attrs)?;
         node_type.check_attrs(&attrs)?;
-        Ok(Node::new(node_type, attrs, content, marks))
+        let node = Node::new(node_type, attrs, content, marks);
+        json.read_node(&node);
+        Ok(node)
     }
 
     pub fn fragment<'a>(&mut self, json: impl Json<'a>) -> Result<Fragment> {
@@ -116,6 +120,7 @@ impl<'s> Reader<'s> {
             _ => mark_type.create_given(&attrs)?,
         };
         mark_type.check_attrs(mark.attrs())?;
+        json.read_mark(&mark);
         Ok(mark)
     }
 
