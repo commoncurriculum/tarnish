@@ -5,9 +5,9 @@ mod parse;
 mod serialize;
 
 pub use parse::{
-    AttrsHook, ClearMarkHook, ContentElement, ContentElementHook, DomParser, FindPosition,
-    GetAttrs, GetContentHook, ParseOptions, ParseRule, PreserveWhitespace, RuleFromNode, RuleKind,
-    SchemaRule, Skip, StyleAttrsHook, TagRule, schema_rules,
+    AttrsHook, ClearMarkHook, Content, ContentElement, ContentElementHook, DomParser, ElementRule,
+    FindPosition, GetAttrsResult, GetContentHook, Namespace, ParseOptions, PreserveWhitespace,
+    Rule, RuleFromNode, Skip, StyleAttrsHook, StyleRule, TagRule, by_priority,
 };
 pub use serialize::{DomSerializer, DomSpec, MarkToDom, NodeToDom, Rendered, render_spec};
 
@@ -71,4 +71,6 @@ pub trait Dom {
     /// Set the element's inline style from CSS text. `false` when the element has no style to
     /// set, for the attribute to be set instead.
     fn set_style(&self, element: &Self::Node, css: &Value) -> Result<bool>;
+    /// `String(node)`: what an attribute set to the node holds.
+    fn stringify(&self, node: &Self::Node) -> Result<String>;
 }

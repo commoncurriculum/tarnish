@@ -9,6 +9,9 @@ use crate::json::{Map, Value};
 use crate::model::{Fragment, Mark, Node};
 use crate::stack;
 
+#[cfg(test)]
+mod tests;
+
 /// What a node's or mark's `toDOM` gives: ProseMirror's `DOMOutputSpec`.
 #[derive(Clone)]
 pub enum DomSpec<N> {
@@ -16,15 +19,18 @@ pub enum DomSpec<N> {
     Node(N),
     /// An element, and the element in it to put the content in: `{dom, contentDOM}`.
     Rendered(Rendered<N>),
-    /// `[name, attrs?, ...children]`, with DOM nodes among its items. `origin` identifies the
-    /// array of an attribute value it is, if it is one: see [`DomSpec::Value`].
+    /// `[name, attrs?, ...children]`, with DOM nodes among its items. For an array made from
+    /// one in the node's or mark's attributes, `origin` is where that array's items are
+    /// (`Vec::as_ptr`): such an array is refused when it starts with a string, as an attacker
+    /// may have written it. Only this origin is checked.
     Array {
         items: Vec<DomSpec<N>>,
         origin: Option<usize>,
     },
     /// A value: a string, the content hole `0`, an attributes object, or an array spec of
-    /// values. An array taken from a node's or mark's attributes is refused, as it may be one
-    /// an attacker wrote.
+    /// values. Its arrays aren't checked against the attributes, as a copy of one can't be told
+    /// from an array the hook built: a hook that gives back an attribute's array has to check
+    /// it, or give it as a [`DomSpec::Array`] with its origin.
     Value(Value),
 }
 
@@ -111,7 +117,7 @@ impl<N: Clone> DomSerializer<N> {
             .get(name)
             .ok_or_else(|| Error::Other(format!("No toDOM for node type {name}")))?;
         let spec = to_dom(node)?;
-        let rendered = render(dom, &spec, None, Some(node.attrs()))?;
+        let rendered = render(dom, Item::Spec(&spec), None, Some(node.attrs()))?;
         if let Some(content_dom) = rendered.content_dom {
             if node.is_leaf() {
                 return Err(Error::Range(
@@ -146,7 +152,7 @@ impl<N: Clone> DomSerializer<N> {
             return Ok(None);
         };
         let spec = to_dom(mark, inline)?;
-        render(dom, &spec, None, Some(mark.attrs())).map(Some)
+        render(dom, Item::Spec(&spec), None, Some(mark.attrs())).map(Some)
     }
 }
 
@@ -163,28 +169,63 @@ pub fn render_spec<D: Dom>(
             content_dom: None,
         });
     }
-    render(dom, structure, xml_ns, None)
+    render(dom, Item::Spec(structure), xml_ns, None)
 }
 
-/// An item of an array spec.
+/// A spec, or an item of an array spec, where a [`DomSpec::Value`] array's items are values.
 enum Item<'a, N> {
     Spec(&'a DomSpec<N>),
     Value(&'a Value),
 }
 
-impl<'a, N: Clone> Item<'a, N> {
-    fn spec(&self) -> DomSpec<N> {
-        match self {
-            Item::Spec(spec) => (*spec).clone(),
-            Item::Value(value) => DomSpec::Value((*value).clone()),
-        }
+impl<N> Clone for Item<'_, N> {
+    fn clone(&self) -> Self {
+        *self
     }
+}
 
-    fn value(&self) -> Option<&'a Value> {
-        match *self {
+impl<N> Copy for Item<'_, N> {}
+
+impl<'a, N> Item<'a, N> {
+    fn value(self) -> Option<&'a Value> {
+        match self {
             Item::Spec(DomSpec::Value(value)) | Item::Value(value) => Some(value),
             Item::Spec(_) => None,
         }
+    }
+}
+
+/// The items of an array spec.
+enum Items<'a, N> {
+    Specs(&'a [DomSpec<N>]),
+    Values(&'a [Value]),
+}
+
+impl<N> Clone for Items<'_, N> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<N> Copy for Items<'_, N> {}
+
+impl<'a, N> Items<'a, N> {
+    fn len(self) -> usize {
+        match self {
+            Items::Specs(specs) => specs.len(),
+            Items::Values(values) => values.len(),
+        }
+    }
+
+    fn get(self, index: usize) -> Option<Item<'a, N>> {
+        match self {
+            Items::Specs(specs) => specs.get(index).map(Item::Spec),
+            Items::Values(values) => values.get(index).map(Item::Value),
+        }
+    }
+
+    fn iter(self) -> impl Iterator<Item = Item<'a, N>> {
+        (0..self.len()).map_while(move |index| self.get(index))
     }
 }
 
@@ -194,32 +235,33 @@ fn invalid() -> Error {
 
 fn render<D: Dom>(
     dom: &D,
-    structure: &DomSpec<D::Node>,
+    structure: Item<'_, D::Node>,
     xml_ns: Option<&str>,
     block_arrays_in: Option<&Map>,
 ) -> Result<Rendered<D::Node>> {
-    let (items, origin): (Vec<Item<D::Node>>, Option<usize>) = match structure {
-        DomSpec::Node(node) if dom.kind(node)? == NodeKind::Element => {
+    let (items, origin) = match structure {
+        Item::Spec(DomSpec::Node(node)) if dom.kind(node)? == NodeKind::Element => {
             return Ok(Rendered {
                 dom: node.clone(),
                 content_dom: None,
             });
         }
-        DomSpec::Rendered(rendered) if dom.kind(&rendered.dom)? == NodeKind::Element => {
+        Item::Spec(DomSpec::Rendered(rendered))
+            if dom.kind(&rendered.dom)? == NodeKind::Element =>
+        {
             return Ok(rendered.clone());
         }
-        DomSpec::Array { items, origin } => (items.iter().map(Item::Spec).collect(), *origin),
-        DomSpec::Value(Value::Array(items)) => (
-            items.iter().map(Item::Value).collect(),
-            Some(items.as_ptr() as usize),
-        ),
+        Item::Spec(DomSpec::Array { items, origin }) => (Items::Specs(items), *origin),
+        Item::Spec(DomSpec::Value(Value::Array(items))) | Item::Value(Value::Array(items)) => {
+            (Items::Values(items), None)
+        }
         _ => return Err(invalid()),
     };
-    let Some(Value::String(tag)) = items.first().and_then(Item::value) else {
+    let Some(Value::String(tag)) = items.get(0).and_then(Item::value) else {
         return Err(invalid());
     };
     if let (Some(attrs), Some(origin)) = (block_arrays_in, origin)
-        && suspicious_arrays(attrs).contains(&origin)
+        && holds_spec_array(attrs, origin)
     {
         return Err(Error::Range(
             "Using an array from an attribute object as a DOM spec. This may be an attempted cross site scripting attack.".into(),
@@ -230,22 +272,30 @@ fn render<D: Dom>(
         _ => (xml_ns, tag.as_str()),
     };
     let element = dom.create_element(namespace, tag)?;
-    let mut start = 1;
-    if let Some(Value::Object(attrs)) = items.get(1).and_then(Item::value) {
-        start = 2;
-        for (name, value) in attrs.iter() {
-            if matches!(value, Value::Null) {
-                continue;
+    // Any object that is neither an array nor a DOM node holds the attributes, a
+    // `{dom, contentDOM}` one included.
+    let start = match items.get(1) {
+        Some(Item::Spec(DomSpec::Rendered(rendered))) => {
+            let nodes = [
+                ("dom", Some(&rendered.dom)),
+                ("contentDOM", rendered.content_dom.as_ref()),
+            ];
+            for (name, node) in nodes {
+                let Some(node) = node else { continue };
+                let value = Value::String(dom.stringify(node)?);
+                dom.set_attribute(&element, None, name, &value)?;
             }
-            match name.find(' ') {
-                Some(space) if space > 0 => {
-                    dom.set_attribute(&element, Some(&name[..space]), &name[space + 1..], value)?
-                }
-                _ if name == "style" && dom.set_style(&element, value)? => {}
-                _ => dom.set_attribute(&element, None, name, value)?,
-            }
+            2
         }
-    }
+        Some(item) => match item.value() {
+            Some(Value::Object(attrs)) => {
+                set_attributes(dom, &element, attrs)?;
+                2
+            }
+            _ => 1,
+        },
+        None => 1,
+    };
     let mut content_dom = None;
     for (index, child) in items.iter().enumerate().skip(start) {
         match child.value() {
@@ -265,7 +315,7 @@ fn render<D: Dom>(
                 dom.append_child(&element, &text)?;
             }
             _ => {
-                let inner = stack::grow(|| render(dom, &child.spec(), namespace, block_arrays_in))?;
+                let inner = stack::grow(|| render(dom, child, namespace, block_arrays_in))?;
                 dom.append_child(&element, &inner.dom)?;
                 if let Some(inner_content) = inner.content_dom {
                     if content_dom.is_some() {
@@ -282,19 +332,36 @@ fn render<D: Dom>(
     })
 }
 
-/// The arrays in attribute values that start with a string, and so could be taken for specs.
-fn suspicious_arrays(attrs: &Map) -> Vec<usize> {
-    fn scan(value: &Value, found: &mut Vec<usize>) {
-        match value {
-            Value::Array(items) if matches!(items.first(), Some(Value::String(_))) => {
-                found.push(items.as_ptr() as usize);
+fn set_attributes<D: Dom>(dom: &D, element: &D::Node, attrs: &Map) -> Result<()> {
+    for (name, value) in attrs.iter() {
+        if matches!(value, Value::Null) {
+            continue;
+        }
+        match name.find(' ') {
+            Some(space) if space > 0 => {
+                dom.set_attribute(element, Some(&name[..space]), &name[space + 1..], value)?
             }
-            Value::Array(items) => items.iter().for_each(|item| scan(item, found)),
-            Value::Object(object) => object.iter().for_each(|(_, item)| scan(item, found)),
-            _ => {}
+            _ if name == "style" && dom.set_style(element, value)? => {}
+            _ => dom.set_attribute(element, None, name, value)?,
         }
     }
-    let mut found = Vec::new();
-    attrs.iter().for_each(|(_, value)| scan(value, &mut found));
-    found
+    Ok(())
+}
+
+/// Whether the attributes hold the array whose items are at `origin` where it could be taken
+/// for a spec: starting with a string, and not inside another such array.
+fn holds_spec_array(attrs: &Map, origin: usize) -> bool {
+    fn scan(value: &Value, origin: usize) -> bool {
+        match value {
+            Value::Array(items) if matches!(items.first(), Some(Value::String(_))) => {
+                items.as_ptr() as usize == origin
+            }
+            Value::Array(items) => items.iter().any(|item| stack::grow(|| scan(item, origin))),
+            Value::Object(object) => object
+                .iter()
+                .any(|(_, item)| stack::grow(|| scan(item, origin))),
+            _ => false,
+        }
+    }
+    attrs.iter().any(|(_, value)| scan(value, origin))
 }

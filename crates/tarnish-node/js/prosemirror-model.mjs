@@ -435,27 +435,35 @@ function copy(obj) {
   return copy
 }
 
+// A rule as the native parser reads it, which takes the handle of the fragment `getContent` gives.
+function nativeRule(rule, schema) {
+  return rule && rule.getContent ? { ...rule, getContent: dom => rule.getContent(dom, schema).h } : rule
+}
+
 // Parse options as the native parser reads them, with handles in place of wrappers.
-function parseOptions(options) {
-  return { ...options, topNode: options.topNode?.h, topMatch: options.topMatch?.h, context: options.context?.h }
+function parseOptions(options, schema) {
+  return {
+    ...options,
+    topNode: options.topNode?.h,
+    topMatch: options.topMatch?.h,
+    context: options.context?.h,
+    ruleFromNode: options.ruleFromNode && (dom => nativeRule(options.ruleFromNode(dom), schema)),
+  }
 }
 
 export class DOMParser {
   constructor(schema, rules) {
     this.schema = schema
     this.rules = rules
-    // The native parser takes the handle of the fragment a rule's `getContent` gives.
-    let nativeRules = rules.map(rule =>
-      rule.getContent ? { ...rule, getContent: dom => rule.getContent(dom, schema).h } : rule)
-    this.h = new native.DomParserHandle(schema.h, nativeRules)
+    this.h = new native.DomParserHandle(schema.h, rules.map(rule => nativeRule(rule, schema)))
   }
 
-  parse(dom, options = {}) { return this.h.parse(dom, parseOptions(options)) }
-  parseSlice(dom, options = {}) { return this.h.parseSlice(dom, parseOptions(options)) }
+  parse(dom, options = {}) { return this.h.parse(dom, parseOptions(options, this.schema)) }
+  parseSlice(dom, options = {}) { return this.h.parseSlice(dom, parseOptions(options, this.schema)) }
 
   static schemaRules(schema) {
     let rulesOf = type => type.spec.parseDOM || []
-    let order = native.schemaRules(schema.h, schema.markList.map(rulesOf), schema.nodeList.map(rulesOf))
+    let order = native.schemaRules(schema.markList.map(rulesOf), schema.nodeList.map(rulesOf))
     return order.map(([ofMark, typeIndex, ruleIndex, named]) => {
       let type = (ofMark ? schema.markList : schema.nodeList)[typeIndex]
       let rule = copy(rulesOf(type)[ruleIndex])
