@@ -17,6 +17,7 @@ mod node;
 mod position;
 mod schema;
 mod slice;
+mod transform;
 
 use napi::{Env, Result};
 use napi_derive::napi;

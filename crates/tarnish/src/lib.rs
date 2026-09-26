@@ -7,6 +7,7 @@ pub mod dom;
 pub mod error;
 pub mod model;
 pub mod text;
+pub mod transform;
 pub mod value;
 
 pub use error::{Error, Result};
