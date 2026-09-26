@@ -188,7 +188,7 @@ pub(crate) fn clear_incompatible(
                     && parent_type.whitespace() != Whitespace::Pre
                 {
                     let mut slice = None;
-                    for (index, length) in line_breaks(text.units()) {
+                    for (index, length) in line_breaks(&text.units()) {
                         if slice.is_none() {
                             let marks = parent_type.allowed_marks(child.marks());
                             let space = parent_type.schema().text(" ", &marks)?;

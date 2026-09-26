@@ -106,6 +106,9 @@ impl Mark {
         if marks.is_empty() {
             return Mark::none();
         }
+        if marks.is_sorted_by_key(|mark| mark.mark_type().rank()) {
+            return marks.into();
+        }
         let mut copy = marks.to_vec();
         copy.sort_by_key(|mark| mark.mark_type().rank());
         copy.into()

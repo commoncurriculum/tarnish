@@ -527,12 +527,19 @@ impl Node {
         crate::stack::check()?;
         self.node_type().check_content(self.content())?;
         self.node_type().check_attrs(self.attrs())?;
-        let mut copy = Mark::none();
         for mark in self.marks().iter() {
             mark.mark_type().check_attrs(mark.attrs())?;
-            copy = mark.add_to_set(&copy);
         }
-        if !Mark::same_set(&copy, self.marks()) {
+        // Adding one mark to no marks gives that mark, so only a longer set can be invalid.
+        if self.marks().len() > 1
+            && !Mark::same_set(
+                &self
+                    .marks()
+                    .iter()
+                    .fold(Mark::none(), |copy, mark| mark.add_to_set(&copy)),
+                self.marks(),
+            )
+        {
             let names: Vec<&str> = self
                 .marks()
                 .iter()
@@ -563,7 +570,10 @@ impl Node {
             );
         }
         if let Some(text) = &self.0.text {
-            json.push("text".into(), Value::String(text.to_string_lossy()));
+            json.push(
+                "text".into(),
+                Value::String(text.to_string_lossy().into_owned()),
+            );
         }
         Value::Object(json)
     }

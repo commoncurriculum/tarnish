@@ -137,6 +137,9 @@ pub fn number(env: sys::napi_env, number: f64) -> Result<sys::napi_value> {
 }
 
 pub fn text_to_js(env: sys::napi_env, text: &Text) -> Result<sys::napi_value> {
+    if let Some(text) = text.as_str() {
+        return string(env, text);
+    }
     let units = text.units();
     let mut value = ptr::null_mut();
     check(unsafe {

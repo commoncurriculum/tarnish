@@ -201,10 +201,10 @@ impl Fragment {
                     if first {
                         first = false;
                     } else {
-                        text.extend_from_slice(separator.units());
+                        text.extend_from_slice(&separator.units());
                     }
                 }
-                text.extend_from_slice(node_text.units());
+                text.extend_from_slice(&node_text.units());
                 Ok(true)
             },
             0,

@@ -3,6 +3,8 @@
 
 pub mod json;
 
+use std::borrow::Cow;
+
 use crate::json::{Map, Number, Value};
 
 /// `Number.MAX_SAFE_INTEGER`.
@@ -70,9 +72,13 @@ pub fn to_string(value: &Value) -> String {
     }
 }
 
-/// `String(value)`, `None` being `undefined`.
-pub fn string(value: Option<&Value>) -> String {
-    value.map_or_else(|| "undefined".into(), to_string)
+/// `String(value)`, `None` being `undefined`, borrowing a string rather than copying it.
+pub fn string(value: Option<&Value>) -> Cow<'_, str> {
+    match value {
+        Some(Value::String(string)) => Cow::Borrowed(string),
+        Some(value) => Cow::Owned(to_string(value)),
+        None => Cow::Borrowed("undefined"),
+    }
 }
 
 /// Attributes as a type's `create` reads them: `null` and `undefined` are none, and a value

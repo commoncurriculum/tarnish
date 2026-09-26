@@ -17,6 +17,9 @@ rustler::atoms! {
     js_error,
 }
 
+#[global_allocator]
+static GLOBAL: tarnish::allocator::MiMalloc = tarnish::allocator::MiMalloc;
+
 pub struct SchemaResource(Schema);
 
 #[rustler::resource_impl]

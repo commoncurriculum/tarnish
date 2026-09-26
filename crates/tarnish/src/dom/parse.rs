@@ -725,8 +725,8 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
                     let after_space = node_before.is_some_and(|before| {
                         before
                             .text()
-                            .and_then(|text| text.units().last())
-                            .is_some_and(|&unit| is_html_space(unit))
+                            .and_then(|text| text.units().last().copied())
+                            .is_some_and(is_html_space)
                     });
                     if node_before.is_none() || after_break || after_space {
                         value.remove(0);

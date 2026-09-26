@@ -7,7 +7,8 @@
     "fixtures": "node harness/fixtures.mjs",
     "test:js": "TARNISH_TARGET=js node harness/run.mjs",
     "test:rust": "node harness/build.mjs && TARNISH_TARGET=rust node harness/run.mjs",
-    "test:c": "node harness/test-c.mjs"
+    "test:c": "node harness/test-c.mjs",
+    "bench": "node bench/document.mjs && node bench/prosemirror.mjs"
   },
   "devDependencies": {
     "ist": "1.1.7",

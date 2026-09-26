@@ -14,6 +14,9 @@ use std::ptr;
 use tarnish::js::json::stringify;
 use tarnish::{Error, Result, Schema, Value, api, stack};
 
+#[global_allocator]
+static GLOBAL: tarnish::allocator::MiMalloc = tarnish::allocator::MiMalloc;
+
 pub struct TarnishSchema(Schema);
 
 /// `JSON.parse` of the string.

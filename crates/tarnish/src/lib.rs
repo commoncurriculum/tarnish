@@ -3,6 +3,7 @@
 //!
 //! Positions count UTF-16 units, as they do in the browser, so a step lands where it did there.
 
+pub mod allocator;
 pub mod api;
 pub mod dom;
 pub mod error;

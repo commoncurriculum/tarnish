@@ -260,7 +260,7 @@ fn replace_newlines(tr: &mut Transform, node: &Node, pos: usize, map_from: usize
     let schema = node.node_type().schema().clone();
     for (offset, child) in node.content().children_with_offsets() {
         let Some(text) = child.text() else { continue };
-        for (index, _) in line_breaks(text.units()) {
+        for (index, _) in line_breaks(&text.units()) {
             let start = tr.map_from(map_from, pos + 1 + offset + index, 1);
             let linebreak = schema
                 .linebreak_replacement()

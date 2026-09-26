@@ -21,7 +21,7 @@ pub(crate) fn find_diff_start(a: &Fragment, b: &Fragment, mut pos: usize) -> Opt
             let (units_a, units_b) = (text_a.units(), text_b.units());
             let same = units_a
                 .iter()
-                .zip(units_b)
+                .zip(units_b.iter())
                 .take_while(|(a, b)| a == b)
                 .count();
             pos += same;

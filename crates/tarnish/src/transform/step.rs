@@ -644,7 +644,7 @@ impl Step {
         };
         let field = |key: &str| json.get(key).unwrap_or(&NULL);
         let structure = js::truthy(json.get("structure"));
-        Ok(match step_type.as_str() {
+        Ok(match &*step_type {
             "replace" => {
                 let (from, to) = (
                     position("from", "ReplaceStep")?,
