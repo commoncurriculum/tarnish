@@ -14,7 +14,7 @@ JavaScript. For example, an Elixir backend can apply the steps an editor sends.
 | `crates/tarnish-c`      | A shared and static library for any other language: JSON strings in and out, declared in `include/tarnish.h`                                   |
 | `crates/tarnish-node`   | A Node bridge, used only to run ProseMirror's own tests against the Rust code. It isn't published                                              |
 | `upstream/`             | ProseMirror's repositories, pinned as submodules, for their test suites                                                                         |
-| `fixtures/`             | The transforms `prosemirror-transform`'s tests check, recorded from the real package                                                            |
+| `fixtures/`             | What the real packages do: the transforms `prosemirror-transform`'s tests check, and `prosemirror-model` on inputs its tests don't give it     |
 
 ## How it's proven
 
@@ -28,11 +28,14 @@ The proof doesn't depend on anyone reading the Rust. CI checks it:
 2. **The bindings are checked against JavaScript's output.** `npm run test:js` also records each
    transform the upstream suite checks with steps, using the upstream test file's own
    `EMIT_JSON` option: the schema, the starting document, the steps, the resulting document, and
-   mapped positions. CI fails if what it records differs from the committed file.
+   mapped positions. It also records what `prosemirror-model` does with inputs its tests don't
+   give it, such as attributes that aren't objects, and types that no content fills. CI fails if
+   what it records differs from the committed files.
    - The Elixir tests apply every recorded transform and must get the recorded document. They
      also invert the steps and map the positions.
    - The C test does the same, and the JSON the library returns must equal `JSON.stringify`'s
      output byte for byte.
+   - The Rust and Elixir tests read the recorded nodes and must get the same nodes or errors.
 
 ## Elixir
 

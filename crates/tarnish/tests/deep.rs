@@ -3,7 +3,7 @@
 
 use tarnish::json::{self, Value};
 use tarnish::transform::{BlockAttrs, Step, Transform, Wrapper};
-use tarnish::{Node, Schema, Slice, api};
+use tarnish::{Fragment, Node, Schema, Slice, api};
 
 const DEPTH: usize = 20_000;
 
@@ -234,5 +234,41 @@ fn content_expressions_nest_as_deeply_as_memory_allows() {
         Node::from_json(&schema, &doc)
             .and_then(|doc| doc.check())
             .expect("a valid document");
+    });
+}
+
+#[test]
+fn repetitions_nest_as_deeply_as_memory_allows() {
+    on_small_stack(|| {
+        let content = format!("{}block{}", "(".repeat(DEPTH), ")*".repeat(DEPTH));
+        let spec = SCHEMA.replace(
+            r#""content": "block+""#,
+            &format!(r#""content": "{content}""#),
+        );
+        let schema = api::schema(&json::from_str(&spec).expect("the spec")).expect("the schema");
+        let doc = schema
+            .top_node_type()
+            .create_and_fill(None, Fragment::empty(), &[])
+            .expect("no error")
+            .expect("a document");
+        assert_eq!(doc.child_count(), 0);
+    });
+}
+
+#[test]
+fn content_may_hold_as_many_nodes_as_memory_allows() {
+    on_small_stack(|| {
+        let spec = SCHEMA.replace(
+            r#""content": "block+""#,
+            &format!(r#""content": "paragraph{{{DEPTH}}}""#),
+        );
+        let schema = api::schema(&json::from_str(&spec).expect("the spec")).expect("the schema");
+        let doc = schema
+            .top_node_type()
+            .create_and_fill(None, Fragment::empty(), &[])
+            .expect("no error")
+            .expect("a document");
+        assert_eq!(doc.child_count(), DEPTH);
+        doc.check().expect("a valid document");
     });
 }

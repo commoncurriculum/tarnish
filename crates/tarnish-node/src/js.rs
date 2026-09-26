@@ -10,6 +10,7 @@ use napi::bindgen_prelude::{
     ToNapiValue, Unknown, Utf16String,
 };
 use napi::{Env, Error, JsString, JsValue, Result, Status, ValueType};
+use tarnish::js::Given;
 use tarnish::{Attrs, Map, Text, Value};
 
 thread_local! {
@@ -242,11 +243,13 @@ pub fn json_from_js(value: Unknown) -> Result<Value> {
     Ok(value_from_js(value)?.unwrap_or(Value::Null))
 }
 
-/// Attributes as a type's `create` reads them from a value: `null` and `undefined` are none,
-/// and a value that isn't an object has no properties.
+/// Attributes as a type's `create` reads them from a value, a falsy value as `null`.
 pub fn attrs_from_js(value: Unknown) -> Result<Option<Attrs>> {
     let value = value_from_js(value)?;
-    Ok(tarnish::js::attrs(value.as_ref()).map(|attrs| Arc::new(attrs.clone())))
+    Ok(match value.as_ref().map(tarnish::js::attrs) {
+        Some(Given::Object(attrs)) => Some(Arc::new(attrs.into_owned())),
+        Some(Given::Falsy(_)) | None => None,
+    })
 }
 
 pub fn value_to_js<'env>(env: &'env Env, value: &Value) -> Result<Unknown<'env>> {

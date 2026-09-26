@@ -4,7 +4,7 @@
 
 use std::borrow::Cow;
 
-use crate::js::{self, Json};
+use crate::js::{self, Given, Json};
 use crate::json::{Key, Map, Number, Value};
 use crate::model::Node;
 use crate::stack;
@@ -238,11 +238,11 @@ impl<'a> Json<'a> for Term<'a> {
         }
     }
 
-    fn attrs(self) -> Option<Cow<'a, Map>> {
+    fn attrs(self) -> Given<'a> {
         match self.kind() {
-            Kind::Null => None,
-            Kind::Object { unique } => Some(Cow::Owned(self.object(unique))),
-            _ => Some(Cow::Owned(Map::new())),
+            Kind::Object { unique } => Given::Object(Cow::Owned(self.object(unique))),
+            _ if self.truthy() => Given::Object(Cow::Owned(Map::new())),
+            _ => Given::Falsy(self.value()),
         }
     }
 }

@@ -11,7 +11,7 @@ use super::replace::{self, Slice};
 use super::resolved_pos::ResolvedPos;
 use super::schema::{Attrs, MarkType, NodeType, Schema};
 use crate::error::{Error, Result};
-use crate::js::Json;
+use crate::js::{Given, Json};
 use crate::json::{Map, Value};
 use crate::stack;
 use crate::text::Text;
@@ -628,10 +628,12 @@ impl Node {
             Some(content) => Fragment::from_json(schema, content)?,
             None => Fragment::empty(),
         };
-        let attrs = json.get("attrs").and_then(Json::attrs);
-        let node = schema
-            .expect_node_type(&name)?
-            .create(attrs.as_deref(), content, marks)?;
+        let node_type = schema.expect_node_type(&name)?;
+        let attrs = json
+            .get("attrs")
+            .map_or(Given::Falsy(Value::Null), Json::attrs);
+        let attrs = node_type.attrs_given(&attrs)?;
+        let node = Node::new(node_type, attrs, content, Mark::set_from(marks));
         node.node_type().check_attrs(node.attrs())?;
         Ok(node)
     }

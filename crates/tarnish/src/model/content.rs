@@ -4,7 +4,8 @@
 //! that order decides which nodes [`ContentMatch::fill_before`] and
 //! [`ContentMatch::find_wrapping`] choose.
 
-use std::collections::{HashMap, VecDeque};
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::sync::{Arc, LazyLock, Mutex};
 
@@ -153,14 +154,19 @@ impl ContentMatch {
     }
 
     pub fn match_type(&self, node_type: &NodeType) -> Option<ContentMatch> {
-        if node_type.schema != self.schema && !self.is_empty() {
+        self.step(self.state, node_type).map(|next| self.at(next))
+    }
+
+    /// The state that a node of `node_type` leads to from `state`.
+    fn step(&self, state: usize, node_type: &NodeType) -> Option<usize> {
+        if node_type.schema != self.schema {
             return None;
         }
-        self.state()
+        self.automaton.states[state]
             .next
             .iter()
             .find(|&&(node, _)| node == node_type.index)
-            .map(|&(_, next)| self.at(next))
+            .map(|&(_, next)| next)
     }
 
     /// Match the children of `fragment` from index `start` to `end`.
@@ -170,13 +176,13 @@ impl ContentMatch {
         start: usize,
         end: usize,
     ) -> Option<ContentMatch> {
-        let mut current = self.clone();
         let children = fragment.children();
         let end = end.min(children.len());
+        let mut state = self.state;
         for child in &children[start.min(end)..end] {
-            current = current.match_type(child.node_type())?;
+            state = self.step(state, child.node_type())?;
         }
-        Some(current)
+        Some(self.at(state))
     }
 
     pub fn inline_content(&self) -> bool {
@@ -217,8 +223,37 @@ impl ContentMatch {
         to_end: bool,
         start_index: usize,
     ) -> Result<Option<Fragment>> {
-        let mut seen = vec![self.state];
+        let mut seen = vec![false; self.automaton.states.len()];
+        seen[self.state] = true;
         self.search_fill(self, after, to_end, start_index, &mut Vec::new(), &mut seen)
+    }
+
+    /// A node of the type, filled, as `fillBefore` makes each node it inserts.
+    fn generate(&self, node: usize) -> Result<Node> {
+        thread_local! {
+            /// The types being generated on this thread, each inside the one before.
+            static GENERATING: RefCell<Vec<(usize, usize)>> = const { RefCell::new(Vec::new()) };
+        }
+        struct Generating;
+        impl Drop for Generating {
+            fn drop(&mut self) {
+                GENERATING.with_borrow_mut(Vec::pop);
+            }
+        }
+        let key = (self.schema.id(), node);
+        // Generating a type inside its own generation generates it the same way again, without
+        // end, so ProseMirror recurses until its stack runs out.
+        if GENERATING.with_borrow(|generating| generating.contains(&key)) {
+            return Err(Error::Range("Maximum call stack size exceeded".into()));
+        }
+        GENERATING.with_borrow_mut(|generating| generating.push(key));
+        let _generating = Generating;
+        // A type nothing fills gives ProseMirror a `null` node, whose size the fragment reads.
+        self.node_type(node)
+            .create_and_fill(None, Fragment::empty(), &[])?
+            .ok_or_else(|| {
+                Error::Type("Cannot read properties of null (reading 'nodeSize')".into())
+            })
     }
 
     fn search_fill(
@@ -228,25 +263,20 @@ impl ContentMatch {
         to_end: bool,
         start_index: usize,
         types: &mut Vec<usize>,
-        seen: &mut Vec<usize>,
+        seen: &mut [bool],
     ) -> Result<Option<Fragment>> {
         let finished = current.match_fragment(after, start_index, after.child_count());
         if finished.is_some_and(|finished| !to_end || finished.valid_end()) {
             let nodes = types
                 .iter()
-                .map(|&node| {
-                    Ok(self
-                        .node_type(node)
-                        .create_and_fill(None, Fragment::empty(), &[])?
-                        .expect("a generatable node type fills"))
-                })
+                .map(|&node| self.generate(node))
                 .collect::<Result<Vec<Node>>>()?;
             return Ok(Some(Fragment::from_array(nodes)));
         }
         for &(node, next) in &current.state().next {
             let data = &self.schema.0.nodes[node];
-            if !(data.is_text || data.has_required_attrs() || seen.contains(&next)) {
-                seen.push(next);
+            if !(data.is_text || data.has_required_attrs() || seen[next]) {
+                seen[next] = true;
                 types.push(node);
                 let found = stack::grow(|| {
                     self.search_fill(&current.at(next), after, to_end, start_index, types, seen)
@@ -753,21 +783,24 @@ fn nfa(expr: &Expr) -> Nfa {
 /// The states reachable from `node` over null edges, but for those with a single null edge out,
 /// in descending order.
 fn null_from(nfa: &Nfa, node: usize) -> Vec<usize> {
-    fn scan(nfa: &Nfa, node: usize, result: &mut Vec<usize>) {
+    /// `pushed` holds what `result` does, to look up in constant time.
+    fn scan(nfa: &Nfa, node: usize, result: &mut Vec<usize>, pushed: &mut HashSet<usize>) {
         let edges = &nfa.states[node];
         if edges.len() == 1 && edges[0].term.is_none() {
-            return scan(nfa, edges[0].to.expect("connected"), result);
+            let to = edges[0].to.expect("connected");
+            return stack::grow(|| scan(nfa, to, result, pushed));
         }
         result.push(node);
+        pushed.insert(node);
         for edge in edges {
             let to = edge.to.expect("connected");
-            if edge.term.is_none() && !result.contains(&to) {
-                scan(nfa, to, result);
+            if edge.term.is_none() && !pushed.contains(&to) {
+                stack::grow(|| scan(nfa, to, result, pushed));
             }
         }
     }
     let mut result = Vec::new();
-    scan(nfa, node, &mut result);
+    scan(nfa, node, &mut result, &mut HashSet::new());
     result.sort_by(|a, b| b.cmp(a));
     result
 }
@@ -783,19 +816,11 @@ fn dfa(nfa: &Nfa) -> Automaton {
         for &node in states {
             for edge in &nfa.states[node] {
                 let Some(term) = edge.term else { continue };
-                let mut set = out.iter().rposition(|(t, _)| *t == term);
-                for reached in null_from(nfa, edge.to.expect("connected")) {
-                    let index = match set {
-                        Some(index) => index,
-                        None => {
-                            out.push((term, Vec::new()));
-                            set = Some(out.len() - 1);
-                            out.len() - 1
-                        }
-                    };
-                    if !out[index].1.contains(&reached) {
-                        out[index].1.push(reached);
-                    }
+                let reached = null_from(nfa, edge.to.expect("connected"));
+                match out.iter_mut().rfind(|(t, _)| *t == term) {
+                    Some((_, set)) => set.extend(reached),
+                    None if !reached.is_empty() => out.push((term, reached)),
+                    None => {}
                 }
             }
         }
@@ -807,9 +832,10 @@ fn dfa(nfa: &Nfa) -> Automaton {
         labeled.insert(states.to_vec(), index);
         for (term, mut set) in out {
             set.sort_by(|a, b| b.cmp(a));
+            set.dedup();
             let next = match labeled.get(&set) {
                 Some(&next) => next,
-                None => explore(nfa, &set, labeled, out_states),
+                None => stack::grow(|| explore(nfa, &set, labeled, out_states)),
             };
             out_states[index].next.push((term, next));
         }
@@ -826,6 +852,8 @@ fn dfa(nfa: &Nfa) -> Automaton {
 
 fn check_for_dead_ends(automaton: &Automaton, stream: &TokenStream) -> Result<()> {
     let mut work = vec![0];
+    let mut queued = vec![false; automaton.states.len()];
+    queued[0] = true;
     let mut i = 0;
     while i < work.len() {
         let state = &automaton.states[work[i]];
@@ -837,7 +865,8 @@ fn check_for_dead_ends(automaton: &Automaton, stream: &TokenStream) -> Result<()
             if dead && !(data.is_text || data.has_required_attrs()) {
                 dead = false;
             }
-            if !work.contains(&next) {
+            if !queued[next] {
+                queued[next] = true;
                 work.push(next);
             }
         }

@@ -2,21 +2,27 @@ defmodule TarnishTest do
   use ExUnit.Case, async: true
 
   # Transforms prosemirror-transform's own tests make, recorded from the real package by
-  # `npm run fixtures`: a schema, a starting document, the steps, the document they give, and
+  # `npm run test:js`: a schema, a starting document, the steps, the document they give, and
   # positions mapped through them.
   @fixtures Path.expand("../../fixtures/transform.json", __DIR__)
   @external_resource @fixtures
 
+  # What the real prosemirror-model makes of inputs its own tests don't give it, recorded by
+  # `npm run test:js` too.
+  @model Path.expand("../../fixtures/model.json", __DIR__)
+  @external_resource @model
+
+  defp schemas(path) do
+    specs = path |> File.read!() |> Jason.decode!(objects: :ordered_objects)
+
+    for spec <- specs["schemas"] do
+      {:ok, schema} = Tarnish.schema(spec)
+      schema
+    end
+  end
+
   setup_all do
-    specs = @fixtures |> File.read!() |> Jason.decode!(objects: :ordered_objects)
-
-    schemas =
-      for spec <- specs["schemas"] do
-        {:ok, schema} = Tarnish.schema(spec)
-        schema
-      end
-
-    %{schemas: schemas}
+    %{schemas: schemas(@fixtures), model_schemas: schemas(@model)}
   end
 
   fixtures = @fixtures |> File.read!() |> Jason.decode!()
@@ -37,6 +43,26 @@ defmodule TarnishTest do
 
       for [from, to] <- @fixture["mapping"] do
         assert Tarnish.map_position(schema, steps, from, 1) == {:ok, to}
+      end
+    end
+  end
+
+  model = @model |> File.read!() |> Jason.decode!()
+  kinds = %{"RangeError" => :range_error, "TypeError" => :type_error, "Error" => :js_error}
+
+  for {fixture, index} <- Enum.with_index(model["fromJSON"]) do
+    @fixture fixture
+    @kinds kinds
+    test "node #{index} from JSON is the one ProseMirror reads", %{model_schemas: schemas} do
+      schema = Enum.at(schemas, @fixture["schema"])
+
+      case Tarnish.node_from_json(schema, @fixture["json"]) do
+        {:ok, doc} ->
+          assert Tarnish.to_json(doc) == @fixture["result"]
+
+        {:error, {kind, message}} ->
+          %{"class" => class, "message" => expected} = @fixture["error"]
+          assert {kind, message} == {@kinds[class], expected}
       end
     end
   end

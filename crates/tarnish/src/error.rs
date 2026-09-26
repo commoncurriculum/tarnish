@@ -11,6 +11,8 @@ pub enum Error {
     Replace(String),
     /// `TransformError`: a step that fails to apply in a transform.
     Transform(String),
+    /// `TypeError`: where ProseMirror reads a property of `null`, as V8 words it.
+    Type(String),
     /// A plain `Error`.
     Other(String),
     /// What a hook of the host, such as a spec's `leafText`, threw. The host keeps what was
@@ -28,6 +30,7 @@ impl Error {
             Error::Syntax(_) => "SyntaxError",
             Error::Replace(_) => "ReplaceError",
             Error::Transform(_) => "TransformError",
+            Error::Type(_) => "TypeError",
             Error::Other(_) | Error::Host => "Error",
         }
     }
@@ -38,6 +41,7 @@ impl Error {
             | Error::Syntax(message)
             | Error::Replace(message)
             | Error::Transform(message)
+            | Error::Type(message)
             | Error::Other(message) => message,
             Error::Host => "an error thrown by a host hook",
         }

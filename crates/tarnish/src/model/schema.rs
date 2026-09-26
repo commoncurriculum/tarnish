@@ -9,7 +9,7 @@ use super::fragment::Fragment;
 use super::mark::{Mark, Marks};
 use super::node::Node;
 use crate::error::{Error, Result};
-use crate::js;
+use crate::js::{self, Given};
 use crate::json::{Key, Map, Value};
 use crate::text::Text;
 
@@ -144,22 +144,31 @@ fn default_attrs(attrs: &[(Key, Attribute)]) -> Option<Attrs> {
     Some(Arc::new(defaults))
 }
 
-/// `given` of `None` is JavaScript's `null`, and `null && null[name]` is `null`: every attribute
-/// then gets `null`, required or not.
-fn compute_attrs(attrs: &[(Key, Attribute)], given: Option<&Map>) -> Result<Attrs> {
+/// A type's `computeAttrs`: a falsy value gives the defaults where every attribute has one, and
+/// is every attribute otherwise, required or not.
+fn compute_attrs(
+    attrs: &[(Key, Attribute)],
+    defaults: Option<&Attrs>,
+    given: &Given,
+) -> Result<Attrs> {
+    let given = match (given, defaults) {
+        (Given::Falsy(_), Some(defaults)) => return Ok(defaults.clone()),
+        (Given::Falsy(value), None) => {
+            let built = attrs.iter().map(|(name, _)| (name.clone(), value.clone()));
+            return Ok(Arc::new(built.collect()));
+        }
+        (Given::Object(given), _) => given,
+    };
     let mut built = Map::with_capacity(attrs.len());
     for (name, attr) in attrs {
-        let value = match given.map(|given| given.get(name)) {
-            None => Some(Value::Null),
-            Some(Some(value)) => Some(value.clone()),
-            Some(None) => match &attr.default {
-                Some(default) => default.clone(),
-                None => {
-                    return Err(Error::Range(format!(
-                        "No value supplied for attribute {name}"
-                    )));
-                }
-            },
+        let value = match (given.get(name), &attr.default) {
+            (Some(value), _) => Some(value.clone()),
+            (None, Some(default)) => default.clone(),
+            (None, None) => {
+                return Err(Error::Range(format!(
+                    "No value supplied for attribute {name}"
+                )));
+            }
         };
         if let Some(value) = value {
             built.push(name.clone(), value);
@@ -636,10 +645,13 @@ impl NodeType {
     }
 
     pub fn compute_attrs(&self, attrs: Option<&Map>) -> Result<Attrs> {
-        match (attrs, &self.data().default_attrs) {
-            (None, Some(defaults)) => Ok(defaults.clone()),
-            _ => compute_attrs(&self.data().attrs, attrs),
-        }
+        self.attrs_given(&attrs.into())
+    }
+
+    /// The attributes JavaScript makes of what it's given for a node of this type.
+    pub fn attrs_given(&self, given: &Given) -> Result<Attrs> {
+        let data = self.data();
+        compute_attrs(&data.attrs, data.default_attrs.as_ref(), given)
     }
 
     /// Create a node of this type, as `NodeType.create`.
@@ -834,10 +846,13 @@ impl MarkType {
 
     /// Create a mark of this type, filling in attributes' defaults.
     pub fn create(&self, attrs: Option<&Map>) -> Result<Mark> {
-        let attrs = match (attrs, &self.data().default_attrs) {
-            (None, Some(defaults)) => defaults.clone(),
-            _ => compute_attrs(&self.data().attrs, attrs)?,
-        };
+        self.create_given(&attrs.into())
+    }
+
+    /// Create a mark of this type from what JavaScript gives it as attributes.
+    pub fn create_given(&self, given: &Given) -> Result<Mark> {
+        let data = self.data();
+        let attrs = compute_attrs(&data.attrs, data.default_attrs.as_ref(), given)?;
         Ok(Mark::new(self.clone(), attrs))
     }
 

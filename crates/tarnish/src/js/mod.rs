@@ -81,14 +81,29 @@ pub fn string(value: Option<&Value>) -> Cow<'_, str> {
     }
 }
 
-/// Attributes as a type's `create` reads them: `null` and `undefined` are none, and a value
-/// that isn't an object has no properties.
-pub fn attrs(value: Option<&Value>) -> Option<&Map> {
+/// Attributes as JavaScript gives them to a type, which reads each as `given && given[name]`.
+pub enum Given<'a> {
+    /// A falsy value, `null` among them, which every attribute is when the type has no defaults.
+    Falsy(Value),
+    /// An object's properties. A truthy value that isn't an object has none.
+    Object(Cow<'a, Map>),
+}
+
+impl<'a> From<Option<&'a Map>> for Given<'a> {
+    fn from(attrs: Option<&'a Map>) -> Self {
+        attrs.map_or(Given::Falsy(Value::Null), |attrs| {
+            Given::Object(Cow::Borrowed(attrs))
+        })
+    }
+}
+
+/// A value as attributes a type is given.
+pub fn attrs(value: &Value) -> Given<'_> {
     static EMPTY: Map = Map::new();
     match value {
-        None | Some(Value::Null) => None,
-        Some(Value::Object(object)) => Some(object),
-        Some(_) => Some(&EMPTY),
+        Value::Object(object) => Given::Object(Cow::Borrowed(object)),
+        value if truthy(Some(value)) => Given::Object(Cow::Borrowed(&EMPTY)),
+        value => Given::Falsy(value.clone()),
     }
 }
 
@@ -109,8 +124,8 @@ pub trait Json<'a>: Copy {
     /// An array's items; `None` for a value that isn't an array.
     fn items(self) -> Option<impl Iterator<Item = Self>>;
 
-    /// The value as attributes, as [`attrs`] reads them.
-    fn attrs(self) -> Option<Cow<'a, Map>>;
+    /// The value as attributes a type is given, as [`attrs`] reads them.
+    fn attrs(self) -> Given<'a>;
 }
 
 impl<'a> Json<'a> for &'a Value {
@@ -134,7 +149,7 @@ impl<'a> Json<'a> for &'a Value {
         Some(self.as_array()?.iter())
     }
 
-    fn attrs(self) -> Option<Cow<'a, Map>> {
-        attrs(Some(self)).map(Cow::Borrowed)
+    fn attrs(self) -> Given<'a> {
+        attrs(self)
     }
 }
