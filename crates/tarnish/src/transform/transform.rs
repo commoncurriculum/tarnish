@@ -173,18 +173,16 @@ impl Transform {
                 }
             }
             MarkMatch::Type(mark_type) => {
-                let mut set = node.marks().clone();
-                let mut steps = Vec::new();
-                while let Some(found) = mark_type.is_in_set(&set).cloned() {
-                    set = found.remove_from_set(&set);
-                    steps.push(Step::NodeMark {
+                let found = node
+                    .marks()
+                    .iter()
+                    .filter(|mark| mark.mark_type() == mark_type);
+                for mark in found.rev() {
+                    self.step(Step::NodeMark {
                         op: MarkOp::Remove,
                         pos,
-                        mark: found,
-                    });
-                }
-                for step in steps.into_iter().rev() {
-                    self.step(step)?;
+                        mark: mark.clone(),
+                    })?;
                 }
             }
         }

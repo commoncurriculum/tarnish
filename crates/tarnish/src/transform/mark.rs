@@ -18,8 +18,7 @@ impl Transform {
         // Ranges the steps cover, extended while the next node continues them.
         let mut removed: Vec<(usize, usize, Mark)> = Vec::new();
         let mut added: Vec<(usize, usize)> = Vec::new();
-        let mut removing: Option<usize> = None;
-        self.doc().clone().nodes_between(
+        self.doc().nodes_between(
             from,
             to,
             &mut |node, pos, parent, _| {
@@ -32,19 +31,12 @@ impl Transform {
                     let start = pos.max(from);
                     let end = (pos + node.node_size()).min(to);
                     let new_set = mark.add_to_set(marks);
-                    for old in marks.iter() {
-                        if !old.is_in_set(&new_set) {
-                            match removing {
-                                Some(index)
-                                    if removed[index].1 == start && removed[index].2 == *old =>
-                                {
-                                    removed[index].1 = end;
-                                }
-                                _ => {
-                                    removed.push((start, end, old.clone()));
-                                    removing = Some(removed.len() - 1);
-                                }
+                    for old in marks.iter().filter(|old| !old.is_in_set(&new_set)) {
+                        match removed.last_mut() {
+                            Some(removing) if removing.1 == start && removing.2 == *old => {
+                                removing.1 = end;
                             }
+                            _ => removed.push((start, end, old.clone())),
                         }
                     }
                     match added.last_mut() {
@@ -91,7 +83,7 @@ impl Transform {
         }
         let mut matched: Vec<Matched> = Vec::new();
         let mut step = 0;
-        self.doc().clone().nodes_between(
+        self.doc().nodes_between(
             from,
             to,
             &mut |node, pos, _, _| {
@@ -99,35 +91,29 @@ impl Transform {
                     return Ok(true);
                 }
                 step += 1;
-                let to_remove: Vec<Mark> = match mark {
-                    Some(MarkMatch::Type(mark_type)) => {
-                        let mut set = node.marks().clone();
-                        let mut found = Vec::new();
-                        while let Some(mark) = mark_type.is_in_set(&set).cloned() {
-                            set = mark.remove_from_set(&set);
-                            found.push(mark);
-                        }
-                        found
-                    }
-                    Some(MarkMatch::Mark(mark)) if mark.is_in_set(node.marks()) => {
-                        vec![mark.clone()]
-                    }
+                let marks = node.marks();
+                let to_remove: Vec<&Mark> = match mark {
+                    Some(MarkMatch::Type(mark_type)) => marks
+                        .iter()
+                        .filter(|mark| mark.mark_type() == mark_type)
+                        .collect(),
+                    Some(MarkMatch::Mark(mark)) if mark.is_in_set(marks) => vec![mark],
                     Some(MarkMatch::Mark(_)) => Vec::new(),
-                    None => node.marks().to_vec(),
+                    None => marks.iter().collect(),
                 };
                 let end = (pos + node.node_size()).min(to);
                 for style in to_remove {
                     let found = matched
                         .iter_mut()
                         .rev()
-                        .find(|m| m.step == step - 1 && m.style == style);
+                        .find(|m| m.step == step - 1 && m.style == *style);
                     match found {
                         Some(found) => {
                             found.to = end;
                             found.step = step;
                         }
                         None => matched.push(Matched {
-                            style,
+                            style: style.clone(),
                             from: pos.max(from),
                             to: end,
                             step,
@@ -162,7 +148,7 @@ impl Transform {
     }
 }
 
-/// The ends of the line breaks in a text: `\r\n`, `\r` or `\n`, as start and length.
+/// The line breaks in a text, `\r\n`, `\r` or `\n`: each one's start and length.
 pub(crate) fn line_breaks(units: &[u16]) -> Vec<(usize, usize)> {
     let mut found = Vec::new();
     let mut index = 0;
@@ -219,19 +205,19 @@ pub(super) fn clear_incompatible(
                     && let Some(text) = child.text()
                     && parent_type.whitespace() != Whitespace::Pre
                 {
-                    let mut slice = None;
-                    for (index, length) in line_breaks(&text.units()) {
-                        if slice.is_none() {
-                            let marks = parent_type.allowed_marks(child.marks());
-                            let space = parent_type.schema().text(" ", &marks)?;
-                            slice = Some(Slice::new(Fragment::from_node(space), 0, 0));
+                    let breaks = line_breaks(&text.units());
+                    if !breaks.is_empty() {
+                        let marks = parent_type.allowed_marks(child.marks());
+                        let space = parent_type.schema().text(" ", &marks)?;
+                        let slice = Slice::new(Fragment::from_node(space), 0, 0);
+                        for (index, length) in breaks {
+                            replace_steps.push(Step::Replace {
+                                from: cur + index,
+                                to: cur + index + length,
+                                slice: slice.clone(),
+                                structure: false,
+                            });
                         }
-                        replace_steps.push(Step::Replace {
-                            from: cur + index,
-                            to: cur + index + length,
-                            slice: slice.clone().expect("a slice"),
-                            structure: false,
-                        });
                     }
                 }
             }
