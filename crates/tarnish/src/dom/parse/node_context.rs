@@ -105,8 +105,8 @@ impl NodeContext {
             .and_then(|matched| matched.find_wrapping(node.node_type())))
     }
 
-    /// Whether text goes in inline content here: the node's, or the node's so far, or failing
-    /// both, the content of the text's DOM parent unless it is a block.
+    /// Whether text here is inline: by the node's type, or else by its first child, or else by
+    /// whether the text's DOM parent is anything but a block.
     pub(super) fn inline_context<D: Dom>(&self, dom: &D, text: Option<&D::Node>) -> Result<bool> {
         if let Some(node_type) = &self.node_type {
             return Ok(node_type.inline_content());

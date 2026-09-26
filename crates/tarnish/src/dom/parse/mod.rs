@@ -251,7 +251,8 @@ struct Matched<'r, N> {
     mark: Option<&'r str>,
     ignore: bool,
     attrs: Option<Attrs>,
-    /// The parser's rule, when it isn't consuming, for the rules after it to be tried too.
+    /// The index of the parser's rule, when it isn't consuming, for the rules after it to match
+    /// the element too.
     continue_after: Option<usize>,
 }
 

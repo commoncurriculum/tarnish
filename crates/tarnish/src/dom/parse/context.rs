@@ -17,7 +17,7 @@ pub(super) struct ParseContext<'p, 'o, D: Dom> {
     pub(super) needs_block: bool,
     pub(super) nodes: Vec<NodeContext>,
     pub(super) local_preserve_ws: bool,
-    pub(super) next_id: usize,
+    next_id: usize,
 }
 
 impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
@@ -180,7 +180,7 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
     }
 
     /// Open a node of this type, giving it the marks it allows and leaving the rest.
-    pub(super) fn enter_inner(
+    fn enter_inner(
         &mut self,
         node_type: &NodeType,
         attrs: Option<Attrs>,
@@ -219,7 +219,7 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
     }
 
     /// Finish the nodes above the open one and add them to their parents.
-    pub(super) fn close_extra(&mut self, open_end: bool) -> Result<()> {
+    fn close_extra(&mut self, open_end: bool) -> Result<()> {
         while self.nodes.len() - 1 > self.open {
             let context = self.nodes.pop().expect("a node above the open one");
             let node = context.finish_node(open_end)?;
@@ -265,7 +265,7 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
         Ok(pos)
     }
 
-    pub(super) fn textblock_from_context(&self) -> Result<Option<NodeType>> {
+    fn textblock_from_context(&self) -> Result<Option<NodeType>> {
         if let Some(context) = &self.options.context {
             for depth in (0..=context.depth()).rev() {
                 let found = context

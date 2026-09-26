@@ -16,13 +16,13 @@ use crate::stack;
 use crate::text::{Text, is_blank, line_breaks, replace_line_breaks, split_lines};
 
 /// A text to add: a DOM text node's, or the newline a `<br>` stands for.
-pub(super) struct TextSource<'n, N> {
+struct TextSource<'n, N> {
     dom: Option<&'n N>,
     value: Text,
 }
 
 impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
-    pub(super) fn add_dom(&mut self, node: &D::Node, marks: &[Mark]) -> Result<()> {
+    fn add_dom(&mut self, node: &D::Node, marks: &[Mark]) -> Result<()> {
         match self.dom.kind(node)? {
             NodeKind::Text => {
                 let value = self.dom.text(node)?;
@@ -39,11 +39,7 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
         }
     }
 
-    pub(super) fn add_text_node(
-        &mut self,
-        source: TextSource<'_, D::Node>,
-        marks: &[Mark],
-    ) -> Result<()> {
+    fn add_text_node(&mut self, source: TextSource<'_, D::Node>, marks: &[Mark]) -> Result<()> {
         let local = match self.local_preserve_ws {
             true => PreserveWhitespace::Yes,
             false => PreserveWhitespace::No,
@@ -120,14 +116,12 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
         {
             return Ok(true);
         }
-        let text_before = before.text();
-        Ok(text_before
-            .and_then(Text::last_unit)
-            .is_some_and(is_html_space))
+        let last = before.text().and_then(Text::last_unit);
+        Ok(last.is_some_and(is_html_space))
     }
 
     /// Parse an element by the first rule that matches it, or its content when none does.
-    pub(super) fn add_element(
+    fn add_element(
         &mut self,
         node: &D::Node,
         marks: &[Mark],
@@ -235,7 +229,7 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
     }
 
     /// Called for a leaf DOM node, by its name, that would otherwise be ignored.
-    pub(super) fn leaf_fallback(&mut self, name: &str, marks: &[Mark]) -> Result<()> {
+    fn leaf_fallback(&mut self, name: &str, marks: &[Mark]) -> Result<()> {
         if name == "BR"
             && self
                 .top()
@@ -253,7 +247,7 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
     }
 
     /// Called for an ignored node, by its name.
-    pub(super) fn ignore_fallback(&mut self, name: &str, marks: &[Mark]) -> Result<()> {
+    fn ignore_fallback(&mut self, name: &str, marks: &[Mark]) -> Result<()> {
         // An ignored <br> still makes an inline context.
         if name == "BR"
             && !self
@@ -270,11 +264,7 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
 
     /// The marks with those the element's styles add or clear, `None` when a style's rule
     /// ignores the element.
-    pub(super) fn read_styles(
-        &mut self,
-        node: &D::Node,
-        marks: &[Mark],
-    ) -> Result<Option<Vec<Mark>>> {
+    fn read_styles(&mut self, node: &D::Node, marks: &[Mark]) -> Result<Option<Vec<Mark>>> {
         let mut marks = marks.to_vec();
         if self.dom.style_count(node)? == 0 {
             return Ok(Some(marks));

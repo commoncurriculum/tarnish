@@ -33,7 +33,7 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
         )
     }
 
-    pub(super) fn match_parts(
+    fn match_parts(
         &self,
         parts: &[&str],
         mut index: isize,
@@ -83,7 +83,7 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
 }
 
 /// `context.split(/\s*\|\s*/)`: the space around each `|` goes with it.
-pub(super) fn split_alternatives(context: &str) -> Vec<&str> {
+fn split_alternatives(context: &str) -> Vec<&str> {
     let space = |c: char| c.len_utf16() == 1 && is_js_space(c as u16);
     let parts: Vec<&str> = context.split('|').collect();
     let last = parts.len() - 1;
