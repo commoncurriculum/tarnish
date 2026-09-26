@@ -150,7 +150,7 @@ fn documents_nest_as_deeply_as_memory_allows() {
             .expect("add an equal link")
             .remove_mark(TEXT, TEXT + 2, None)
             .expect("remove marks")
-            .split(TEXT + 4, DEPTH + 1, None)
+            .split(TEXT + 4, DEPTH + 1, &[])
             .expect("split every level");
         let split_at = TEXT + 4 + DEPTH + 1;
         tr.join(split_at, DEPTH + 1).expect("join them again");

@@ -30,11 +30,21 @@ impl StepResult {
             StepResult::Failed(_) => None,
         }
     }
+}
 
-    pub fn failed(&self) -> Option<&str> {
+/// Whether a mark step adds its mark or removes it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MarkOp {
+    Add,
+    Remove,
+}
+
+impl MarkOp {
+    /// The op that undoes this one.
+    pub fn invert(self) -> MarkOp {
         match self {
-            StepResult::Ok(_) => None,
-            StepResult::Failed(message) => Some(message),
+            MarkOp::Add => MarkOp::Remove,
+            MarkOp::Remove => MarkOp::Add,
         }
     }
 }
@@ -61,26 +71,15 @@ pub enum Step {
         insert: usize,
         structure: bool,
     },
-    /// Add a mark to the inline content from `from` to `to`.
-    AddMark {
+    /// Add a mark to, or remove it from, the inline content from `from` to `to`.
+    Mark {
+        op: MarkOp,
         from: usize,
         to: usize,
         mark: Mark,
     },
-    RemoveMark {
-        from: usize,
-        to: usize,
-        mark: Mark,
-    },
-    /// Add a mark to the node at `pos`.
-    AddNodeMark {
-        pos: usize,
-        mark: Mark,
-    },
-    RemoveNodeMark {
-        pos: usize,
-        mark: Mark,
-    },
+    /// Add a mark to, or remove it from, the node at `pos`.
+    NodeMark { op: MarkOp, pos: usize, mark: Mark },
     /// Set an attribute of the node at `pos`. A `value` of `None` is `undefined`, which gives
     /// the attribute its default.
     Attr {
@@ -89,11 +88,39 @@ pub enum Step {
         value: Option<Value>,
     },
     /// Set an attribute of the document's top node.
-    DocAttr {
-        attr: String,
-        value: Option<Value>,
-    },
+    DocAttr { attr: String, value: Option<Value> },
 }
+
+/// The kinds of step JSON can hold.
+#[derive(Clone, Copy)]
+enum Kind {
+    Replace,
+    ReplaceAround,
+    Mark(MarkOp),
+    NodeMark(MarkOp),
+    Attr,
+    DocAttr,
+}
+
+/// Each step type's JSON identifier, the class JavaScript names in its errors, and its kind.
+const STEP_TYPES: [(&str, &str, Kind); 8] = [
+    ("replace", "ReplaceStep", Kind::Replace),
+    ("replaceAround", "ReplaceAroundStep", Kind::ReplaceAround),
+    ("addMark", "AddMarkStep", Kind::Mark(MarkOp::Add)),
+    ("removeMark", "RemoveMarkStep", Kind::Mark(MarkOp::Remove)),
+    (
+        "addNodeMark",
+        "AddNodeMarkStep",
+        Kind::NodeMark(MarkOp::Add),
+    ),
+    (
+        "removeNodeMark",
+        "RemoveNodeMarkStep",
+        Kind::NodeMark(MarkOp::Remove),
+    ),
+    ("attr", "AttrStep", Kind::Attr),
+    ("docAttr", "DocAttrStep", Kind::DocAttr),
+];
 
 /// Whether there is content between `from` and `to`, not only closing and opening tokens.
 fn content_between(doc: &Node, from: usize, to: usize) -> Result<bool> {
@@ -202,7 +229,12 @@ impl Step {
                     None => Ok(StepResult::Failed("Content does not fit in gap".into())),
                 }
             }
-            Step::AddMark { from, to, mark } => {
+            Step::Mark {
+                op: MarkOp::Add,
+                from,
+                to,
+                mark,
+            } => {
                 let old = doc.slice(*from, *to, false)?;
                 let resolved = doc.resolve(*from)?;
                 let parent = resolved.node(resolved.shared_depth(*to));
@@ -216,20 +248,25 @@ impl Step {
                 let slice = Slice::new(content, old.open_start(), old.open_end());
                 StepResult::from_replace(doc, *from, *to, &slice)
             }
-            Step::RemoveMark { from, to, mark } => {
+            Step::Mark {
+                op: MarkOp::Remove,
+                from,
+                to,
+                mark,
+            } => {
                 let old = doc.slice(*from, *to, false)?;
                 let remove = |node: &Node, _: &Node| node.mark(mark.remove_from_set(node.marks()));
                 let content = map_fragment(old.content(), &remove, doc);
                 let slice = Slice::new(content, old.open_start(), old.open_end());
                 StepResult::from_replace(doc, *from, *to, &slice)
             }
-            Step::AddNodeMark { pos, mark } | Step::RemoveNodeMark { pos, mark } => {
+            Step::NodeMark { op, pos, mark } => {
                 let Some(node) = doc.node_at(*pos)? else {
                     return Ok(StepResult::Failed("No node at mark step's position".into()));
                 };
-                let marks = match self {
-                    Step::AddNodeMark { .. } => mark.add_to_set(node.marks()),
-                    _ => mark.remove_from_set(node.marks()),
+                let marks = match op {
+                    MarkOp::Add => mark.add_to_set(node.marks()),
+                    MarkOp::Remove => mark.remove_from_set(node.marks()),
                 };
                 let updated =
                     node.node_type()
@@ -279,6 +316,9 @@ impl Step {
                     *insert,
                     *gap_to,
                     to - gap_to,
+                    // An `insert` past the slice's end can't apply, the slice having no such
+                    // position, but its map can still be taken: JavaScript's holds a negative
+                    // size there, which a map here can't.
                     slice.size().saturating_sub(*insert),
                 ],
                 false,
@@ -320,43 +360,48 @@ impl Step {
                     structure: *structure,
                 }
             }
-            Step::AddMark { from, to, mark } => Step::RemoveMark {
+            Step::Mark { op, from, to, mark } => Step::Mark {
+                op: op.invert(),
                 from: *from,
                 to: *to,
                 mark: mark.clone(),
             },
-            Step::RemoveMark { from, to, mark } => Step::AddMark {
-                from: *from,
-                to: *to,
-                mark: mark.clone(),
-            },
-            Step::AddNodeMark { pos, mark } => {
+            Step::NodeMark {
+                op: MarkOp::Add,
+                pos,
+                mark,
+            } => {
                 if let Some(node) = doc.node_at(*pos)? {
                     let new_set = mark.add_to_set(node.marks());
                     if new_set.len() == node.marks().len() {
                         let replaced = node.marks().iter().find(|mark| !mark.is_in_set(&new_set));
-                        return Ok(Step::AddNodeMark {
+                        return Ok(Step::NodeMark {
+                            op: MarkOp::Add,
                             pos: *pos,
                             mark: replaced.unwrap_or(mark).clone(),
                         });
                     }
                 }
-                Step::RemoveNodeMark {
+                Step::NodeMark {
+                    op: MarkOp::Remove,
                     pos: *pos,
                     mark: mark.clone(),
                 }
             }
-            Step::RemoveNodeMark { pos, mark } => match doc.node_at(*pos)? {
-                Some(node) if mark.is_in_set(node.marks()) => Step::AddNodeMark {
+            Step::NodeMark {
+                op: MarkOp::Remove,
+                pos,
+                mark,
+            } => match doc.node_at(*pos)? {
+                Some(node) if mark.is_in_set(node.marks()) => Step::NodeMark {
+                    op: MarkOp::Add,
                     pos: *pos,
                     mark: mark.clone(),
                 },
                 _ => self.clone(),
             },
             Step::Attr { pos, attr, .. } => {
-                let node = doc.node_at(*pos)?.ok_or_else(|| {
-                    Error::Other(format!("No node at {pos} to invert an attribute step on"))
-                })?;
+                let node = js::non_null(doc.node_at(*pos)?, "attrs")?;
                 Step::Attr {
                     pos: *pos,
                     attr: attr.clone(),
@@ -380,6 +425,8 @@ impl Step {
                 structure,
             } => {
                 let to = mapping.map_result(*to, -1);
+                // Upstream's `ReplaceStep.MAP_BIAS` is fixed at its default, 1, here: setting it
+                // to -1 would map an insertion over one at the same position to before it.
                 let from = mapping.map_result(*from, 1);
                 if from.deleted_across() && to.deleted_across() {
                     return None;
@@ -428,27 +475,25 @@ impl Step {
                     structure: *structure,
                 })
             }
-            Step::AddMark { from, to, mark } | Step::RemoveMark { from, to, mark } => {
+            Step::Mark { op, from, to, mark } => {
                 let from = mapping.map_result(*from, 1);
                 let to = mapping.map_result(*to, -1);
                 if (from.deleted() && to.deleted()) || from.pos >= to.pos {
                     return None;
                 }
-                let (from, to, mark) = (from.pos, to.pos, mark.clone());
-                Some(match self {
-                    Step::AddMark { .. } => Step::AddMark { from, to, mark },
-                    _ => Step::RemoveMark { from, to, mark },
+                Some(Step::Mark {
+                    op: *op,
+                    from: from.pos,
+                    to: to.pos,
+                    mark: mark.clone(),
                 })
             }
-            Step::AddNodeMark { pos, mark } | Step::RemoveNodeMark { pos, mark } => {
+            Step::NodeMark { op, pos, mark } => {
                 let mapped = mapping.map_result(*pos, 1);
-                if mapped.deleted_after() {
-                    return None;
-                }
-                let (pos, mark) = (mapped.pos, mark.clone());
-                Some(match self {
-                    Step::AddNodeMark { .. } => Step::AddNodeMark { pos, mark },
-                    _ => Step::RemoveNodeMark { pos, mark },
+                (!mapped.deleted_after()).then(|| Step::NodeMark {
+                    op: *op,
+                    pos: mapped.pos,
+                    mark: mark.clone(),
                 })
             }
             Step::Attr { pos, attr, value } => {
@@ -514,28 +559,16 @@ impl Step {
                 }
             }
             (
-                Step::AddMark { from, to, mark },
-                Step::AddMark {
+                Step::Mark { op, from, to, mark },
+                Step::Mark {
+                    op: other_op,
                     from: other_from,
                     to: other_to,
                     mark: other_mark,
                 },
-            ) if other_mark == mark && from <= other_to && to >= other_from => {
-                Some(Step::AddMark {
-                    from: *from.min(other_from),
-                    to: *to.max(other_to),
-                    mark: mark.clone(),
-                })
-            }
-            (
-                Step::RemoveMark { from, to, mark },
-                Step::RemoveMark {
-                    from: other_from,
-                    to: other_to,
-                    mark: other_mark,
-                },
-            ) if other_mark == mark && from <= other_to && to >= other_from => {
-                Some(Step::RemoveMark {
+            ) if op == other_op && other_mark == mark && from <= other_to && to >= other_from => {
+                Some(Step::Mark {
+                    op: *op,
                     from: *from.min(other_from),
                     to: *to.max(other_to),
                     mark: mark.clone(),
@@ -550,19 +583,43 @@ impl Step {
         match self {
             Step::Replace { .. } => "replace",
             Step::ReplaceAround { .. } => "replaceAround",
-            Step::AddMark { .. } => "addMark",
-            Step::RemoveMark { .. } => "removeMark",
-            Step::AddNodeMark { .. } => "addNodeMark",
-            Step::RemoveNodeMark { .. } => "removeNodeMark",
+            Step::Mark {
+                op: MarkOp::Add, ..
+            } => "addMark",
+            Step::Mark {
+                op: MarkOp::Remove, ..
+            } => "removeMark",
+            Step::NodeMark {
+                op: MarkOp::Add, ..
+            } => "addNodeMark",
+            Step::NodeMark {
+                op: MarkOp::Remove, ..
+            } => "removeNodeMark",
             Step::Attr { .. } => "attr",
             Step::DocAttr { .. } => "docAttr",
         }
     }
 
     pub fn to_json(&self) -> Value {
+        fn push(json: &mut Map, key: &str, value: impl Into<Value>) {
+            json.push(key.into(), value.into());
+        }
+        fn push_slice(json: &mut Map, slice: &Slice, structure: bool) {
+            if slice.size() > 0 {
+                push(json, "slice", slice.to_json());
+            }
+            if structure {
+                push(json, "structure", true);
+            }
+        }
+        fn push_attr(json: &mut Map, attr: &str, value: &Option<Value>) {
+            push(json, "attr", attr);
+            if let Some(value) = value {
+                push(json, "value", value.clone());
+            }
+        }
         let mut json = Map::new();
-        json.push("stepType".into(), Value::String(self.json_id().into()));
-        let number = Value::from;
+        push(&mut json, "stepType", self.json_id());
         match self {
             Step::Replace {
                 from,
@@ -570,14 +627,9 @@ impl Step {
                 slice,
                 structure,
             } => {
-                json.push("from".into(), number(*from));
-                json.push("to".into(), number(*to));
-                if slice.size() > 0 {
-                    json.push("slice".into(), slice.to_json());
-                }
-                if *structure {
-                    json.push("structure".into(), Value::Bool(true));
-                }
+                push(&mut json, "from", *from);
+                push(&mut json, "to", *to);
+                push_slice(&mut json, slice, *structure);
             }
             Step::ReplaceAround {
                 from,
@@ -588,40 +640,27 @@ impl Step {
                 insert,
                 structure,
             } => {
-                json.push("from".into(), number(*from));
-                json.push("to".into(), number(*to));
-                json.push("gapFrom".into(), number(*gap_from));
-                json.push("gapTo".into(), number(*gap_to));
-                json.push("insert".into(), number(*insert));
-                if slice.size() > 0 {
-                    json.push("slice".into(), slice.to_json());
-                }
-                if *structure {
-                    json.push("structure".into(), Value::Bool(true));
-                }
+                push(&mut json, "from", *from);
+                push(&mut json, "to", *to);
+                push(&mut json, "gapFrom", *gap_from);
+                push(&mut json, "gapTo", *gap_to);
+                push(&mut json, "insert", *insert);
+                push_slice(&mut json, slice, *structure);
             }
-            Step::AddMark { from, to, mark } | Step::RemoveMark { from, to, mark } => {
-                json.push("mark".into(), mark.to_json());
-                json.push("from".into(), number(*from));
-                json.push("to".into(), number(*to));
+            Step::Mark { from, to, mark, .. } => {
+                push(&mut json, "mark", mark.to_json());
+                push(&mut json, "from", *from);
+                push(&mut json, "to", *to);
             }
-            Step::AddNodeMark { pos, mark } | Step::RemoveNodeMark { pos, mark } => {
-                json.push("pos".into(), number(*pos));
-                json.push("mark".into(), mark.to_json());
+            Step::NodeMark { pos, mark, .. } => {
+                push(&mut json, "pos", *pos);
+                push(&mut json, "mark", mark.to_json());
             }
             Step::Attr { pos, attr, value } => {
-                json.push("pos".into(), number(*pos));
-                json.push("attr".into(), Value::String(attr.clone()));
-                if let Some(value) = value {
-                    json.push("value".into(), value.clone());
-                }
+                push(&mut json, "pos", *pos);
+                push_attr(&mut json, attr, value);
             }
-            Step::DocAttr { attr, value } => {
-                json.push("attr".into(), Value::String(attr.clone()));
-                if let Some(value) = value {
-                    json.push("value".into(), value.clone());
-                }
-            }
+            Step::DocAttr { attr, value } => push_attr(&mut json, attr, value),
         }
         Value::Object(json)
     }
@@ -631,89 +670,61 @@ impl Step {
             return Err(Error::Range("Invalid input for Step.fromJSON".into()));
         }
         let step_type = js::string(json.get("stepType"));
-        let invalid = |class: &str| Error::Range(format!("Invalid input for {class}.fromJSON"));
-        let position = |key: &str, class: &str| {
+        let Some(&(_, class, kind)) = STEP_TYPES.iter().find(|(id, ..)| *id == step_type) else {
+            return Err(Error::Range(format!("No step type {step_type} defined")));
+        };
+        let invalid = || Error::Range(format!("Invalid input for {class}.fromJSON"));
+        // JavaScript only checks that a position is a number: one that is negative, fractional
+        // or NaN is taken, where here it is invalid input, as a position that isn't a number is.
+        let position = |key: &str| {
             json.get(key)
                 .and_then(Value::as_f64)
                 .filter(|n| *n >= 0.0 && n.fract() == 0.0)
                 .map(|n| n as usize)
-                .ok_or_else(|| invalid(class))
+                .ok_or_else(invalid)
         };
-        let attr = |class: &str| match json.get("attr") {
+        let attr = || match json.get("attr") {
             Some(Value::String(attr)) => Ok(attr.clone()),
-            _ => Err(invalid(class)),
+            _ => Err(invalid()),
         };
         let field = |key: &str| json.get(key).unwrap_or(&NULL);
         let structure = js::truthy(json.get("structure"));
-        Ok(match &*step_type {
-            "replace" => {
-                let (from, to) = (
-                    position("from", "ReplaceStep")?,
-                    position("to", "ReplaceStep")?,
-                );
-                Step::Replace {
-                    from,
-                    to,
-                    slice: Slice::from_json(schema, field("slice"))?,
-                    structure,
-                }
-            }
-            "replaceAround" => {
-                let class = "ReplaceAroundStep";
-                let (from, to) = (position("from", class)?, position("to", class)?);
-                let (gap_from, gap_to) = (position("gapFrom", class)?, position("gapTo", class)?);
-                let insert = position("insert", class)?;
-                Step::ReplaceAround {
-                    from,
-                    to,
-                    gap_from,
-                    gap_to,
-                    slice: Slice::from_json(schema, field("slice"))?,
-                    insert,
-                    structure,
-                }
-            }
-            "addMark" | "removeMark" => {
-                let class = if step_type == "addMark" {
-                    "AddMarkStep"
-                } else {
-                    "RemoveMarkStep"
-                };
-                let (from, to) = (position("from", class)?, position("to", class)?);
-                let mark = Mark::from_json(schema, field("mark"))?;
-                if step_type == "addMark" {
-                    Step::AddMark { from, to, mark }
-                } else {
-                    Step::RemoveMark { from, to, mark }
-                }
-            }
-            "addNodeMark" | "removeNodeMark" => {
-                let class = if step_type == "addNodeMark" {
-                    "AddNodeMarkStep"
-                } else {
-                    "RemoveNodeMarkStep"
-                };
-                let pos = position("pos", class)?;
-                let mark = Mark::from_json(schema, field("mark"))?;
-                if step_type == "addNodeMark" {
-                    Step::AddNodeMark { pos, mark }
-                } else {
-                    Step::RemoveNodeMark { pos, mark }
-                }
-            }
-            "attr" => {
-                let pos = position("pos", "AttrStep")?;
-                Step::Attr {
-                    pos,
-                    attr: attr("AttrStep")?,
-                    value: json.get("value").cloned(),
-                }
-            }
-            "docAttr" => Step::DocAttr {
-                attr: attr("DocAttrStep")?,
+        Ok(match kind {
+            Kind::Replace => Step::Replace {
+                from: position("from")?,
+                to: position("to")?,
+                slice: Slice::from_json(schema, field("slice"))?,
+                structure,
+            },
+            Kind::ReplaceAround => Step::ReplaceAround {
+                from: position("from")?,
+                to: position("to")?,
+                gap_from: position("gapFrom")?,
+                gap_to: position("gapTo")?,
+                insert: position("insert")?,
+                slice: Slice::from_json(schema, field("slice"))?,
+                structure,
+            },
+            Kind::Mark(op) => Step::Mark {
+                op,
+                from: position("from")?,
+                to: position("to")?,
+                mark: Mark::from_json(schema, field("mark"))?,
+            },
+            Kind::NodeMark(op) => Step::NodeMark {
+                op,
+                pos: position("pos")?,
+                mark: Mark::from_json(schema, field("mark"))?,
+            },
+            Kind::Attr => Step::Attr {
+                pos: position("pos")?,
+                attr: attr()?,
                 value: json.get("value").cloned(),
             },
-            _ => return Err(Error::Range(format!("No step type {step_type} defined"))),
+            Kind::DocAttr => Step::DocAttr {
+                attr: attr()?,
+                value: json.get("value").cloned(),
+            },
         })
     }
 }

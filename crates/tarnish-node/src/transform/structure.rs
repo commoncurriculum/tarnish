@@ -78,9 +78,9 @@ pub fn can_split(
     depth: u32,
     types_after: Option<Vec<Option<WrapperArg>>>,
 ) -> Result<bool> {
-    let types = types_after.map(wrappers).transpose()?;
+    let types = wrappers(types_after.unwrap_or_default())?;
     let pos = js::pos(env, pos)?;
-    tarnish::transform::can_split(&doc.node, pos, depth as usize, types.as_deref()).or_throw(env)
+    tarnish::transform::can_split(&doc.node, pos, depth as usize, &types).or_throw(env)
 }
 
 #[napi]

@@ -1,5 +1,5 @@
 //! JavaScript's semantics for the values ProseMirror handles: its numbers, truthiness, `typeof`
-//! and `String()`, and `JSON` in the module.
+//! and `String()`, the `TypeError` of reading a property of nothing, and `JSON` in the module.
 
 pub mod json;
 
@@ -104,6 +104,37 @@ pub fn attrs(value: &Value) -> Given<'_> {
         value if truthy(Some(value)) => Given::Object(Cow::Borrowed(&EMPTY)),
         value => Given::Falsy(value.clone()),
     }
+}
+
+/// JavaScript's two values without properties, which V8 names in the `TypeError` reading one
+/// throws.
+#[derive(Clone, Copy)]
+pub(crate) enum Nullish {
+    Null,
+    Undefined,
+}
+
+/// The `TypeError` V8 throws reading `property` of `value`, as ProseMirror's code does where it
+/// takes a value to be there, often asserting so with `!`, and it isn't.
+pub(crate) fn type_error(value: Nullish, property: &str) -> crate::Error {
+    let value = match value {
+        Nullish::Null => "null",
+        Nullish::Undefined => "undefined",
+    };
+    crate::Error::Type(format!(
+        "Cannot read properties of {value} (reading '{property}')"
+    ))
+}
+
+/// A value ProseMirror reads `property` of, which JavaScript has as `null` where it's missing.
+pub(crate) fn non_null<T>(value: Option<T>, property: &str) -> crate::Result<T> {
+    value.ok_or_else(|| type_error(Nullish::Null, property))
+}
+
+/// A value ProseMirror reads `property` of, which JavaScript has as `undefined` where it's
+/// missing.
+pub(crate) fn defined<T>(value: Option<T>, property: &str) -> crate::Result<T> {
+    value.ok_or_else(|| type_error(Nullish::Undefined, property))
 }
 
 /// A JSON value as JavaScript reads a node, a fragment or a mark from it: a [`Value`], or JSON

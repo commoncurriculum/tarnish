@@ -9,10 +9,12 @@ mod structure;
 #[allow(clippy::module_inception)]
 mod transform;
 
-pub use map::{MapResult, Mappable, Mapping, Recover, StepMap};
+pub use map::{MapResult, Mappable, Mapping, MappingSlice, Recover, StepMap};
+pub use mark::MarkMatch;
 pub use replace::replace_step;
-pub use step::{Step, StepResult};
+pub use step::{MarkOp, Step, StepResult};
 pub use structure::{
-    Wrapper, can_join, can_split, drop_point, find_wrapping, insert_point, join_point, lift_target,
+    BlockAttrs, Wrapper, can_join, can_split, drop_point, find_wrapping, insert_point, join_point,
+    lift_target,
 };
-pub use transform::{BlockAttrs, MarkMatch, Transform};
+pub use transform::Transform;
