@@ -374,7 +374,11 @@ export class Schema {
     instanceSpec.nodes = OrderedMap.from(spec.nodes)
     instanceSpec.marks = OrderedMap.from(spec.marks || {})
 
-    this.h = new native.SchemaHandle(entries(this.spec.nodes), entries(this.spec.marks), spec.topNode)
+    // The bridge reads the spec from its JSON, and takes the functions JSON leaves out from the
+    // node and mark specs themselves.
+    let nodeSpecs = entries(this.spec.nodes), markSpecs = entries(this.spec.marks)
+    let json = JSON.stringify({ topNode: spec.topNode, nodes: nodeSpecs, marks: markSpecs })
+    this.h = new native.SchemaHandle(json, nodeSpecs.map(([, spec]) => spec), markSpecs.map(([, spec]) => spec))
     this.nodeList = []
     this.markList = []
     schemas.set(this.h.id, this)

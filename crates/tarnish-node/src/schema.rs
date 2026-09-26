@@ -3,11 +3,10 @@
 use std::sync::Arc;
 
 use napi::bindgen_prelude::{FnArgs, FromNapiValue, JsObjectValue, Object, Unknown, Utf16String};
-use napi::{Env, JsValue, Result, ValueType};
+use napi::{Env, Error, Result};
 use napi_derive::napi;
 use tarnish::{
-    AttributeSpec, MarkSpec, MarkType, NodeHook, NodeSpec, NodeType, Schema, SchemaSpec, Text,
-    Validate, Whitespace,
+    AttributeSpec, MarkType, NodeHook, NodeType, Schema, SchemaSpec, Text, Validate, Whitespace,
 };
 
 use crate::fragment::FragmentHandle;
@@ -19,98 +18,27 @@ fn node_hook<T: 'static>(hook: Hook, read: fn(Unknown) -> Result<T>) -> NodeHook
     Arc::new(move |node| js::host(|env| read(hook.call(env, node::wrap(env, node)?)?)))
 }
 
-fn flag(spec: &Object, key: &str) -> Result<bool> {
-    js::get(spec, key)?.coerce_to_bool()
-}
-
-fn optional_flag(spec: &Object, key: &str) -> Result<Option<bool>> {
-    let value = js::get(spec, key)?;
-    match value.get_type()? {
-        ValueType::Undefined => Ok(None),
-        _ => value.coerce_to_bool().map(Some),
+/// The functions of attribute specs, and defaults of `undefined`, which JSON leaves out.
+fn attribute_hooks(attrs: &mut [(String, AttributeSpec)], spec: &Object) -> Result<()> {
+    if attrs.is_empty() {
+        return Ok(());
     }
-}
-
-fn attributes(spec: &Object) -> Result<Vec<(String, AttributeSpec)>> {
-    let attrs = js::get(spec, "attrs")?;
-    if attrs.get_type()? != ValueType::Object {
-        return Ok(Vec::new());
+    let specs = Object::from_unknown(js::get(spec, "attrs")?)?;
+    for (name, attr) in attrs {
+        let spec = Object::from_unknown(js::get(&specs, name)?)?;
+        if let Some(validate) = Hook::method(&spec, "validate")? {
+            attr.validate = Some(Validate::Hook(Arc::new(move |value| {
+                js::host(|env| {
+                    validate.call(env, js::optional_to_js(env, value)?)?;
+                    Ok(())
+                })
+            })));
+        }
+        if attr.default.is_none() && spec.has_own_property("default")? {
+            attr.default = Some(None);
+        }
     }
-    let attrs = Object::from_unknown(attrs)?;
-    Object::keys(&attrs)?
-        .into_iter()
-        .map(|name| {
-            let attr = Object::from_unknown(js::get(&attrs, &name)?)?;
-            let default = match attr.has_own_property("default")? {
-                true => Some(js::value_from_js(js::get(&attr, "default")?)?),
-                false => None,
-            };
-            let validate = match js::get_string(&attr, "validate")? {
-                Some(types) => Some(Validate::Types(types)),
-                None => Hook::method(&attr, "validate")?.map(|validate| {
-                    Validate::Hook(Arc::new(move |value| {
-                        js::host(|env| {
-                            validate.call(env, js::optional_to_js(env, value)?)?;
-                            Ok(())
-                        })
-                    }))
-                }),
-            };
-            Ok((name, AttributeSpec { default, validate }))
-        })
-        .collect()
-}
-
-fn node_spec(spec: &Object) -> Result<NodeSpec> {
-    Ok(NodeSpec {
-        content: js::get_string(spec, "content")?,
-        marks: js::get_string(spec, "marks")?,
-        group: js::get_string(spec, "group")?,
-        inline: flag(spec, "inline")?,
-        atom: flag(spec, "atom")?,
-        attrs: attributes(spec)?,
-        selectable: optional_flag(spec, "selectable")?,
-        draggable: flag(spec, "draggable")?,
-        code: flag(spec, "code")?,
-        whitespace: match js::get_string(spec, "whitespace")?.as_deref() {
-            Some("pre") => Some(Whitespace::Pre),
-            Some("normal") => Some(Whitespace::Normal),
-            _ => None,
-        },
-        defining_as_context: flag(spec, "definingAsContext")?,
-        defining_for_content: flag(spec, "definingForContent")?,
-        defining: flag(spec, "defining")?,
-        isolating: flag(spec, "isolating")?,
-        linebreak_replacement: flag(spec, "linebreakReplacement")?,
-        leaf_text: Hook::method(spec, "leafText")?.map(|hook| node_hook(hook, js::text_from_js)),
-        to_debug_string: Hook::method(spec, "toDebugString")?
-            .map(|hook| node_hook(hook, String::from_unknown)),
-    })
-}
-
-fn mark_spec(spec: &Object) -> Result<MarkSpec> {
-    let inclusive = js::get(spec, "inclusive")?;
-    Ok(MarkSpec {
-        attrs: attributes(spec)?,
-        inclusive: match inclusive.get_type()? {
-            ValueType::Boolean => Some(inclusive.coerce_to_bool()?),
-            _ => None,
-        },
-        excludes: js::get_string(spec, "excludes")?,
-        group: js::get_string(spec, "group")?,
-        spanning: optional_flag(spec, "spanning")?,
-        code: flag(spec, "code")?,
-    })
-}
-
-fn entries<T>(
-    entries: Vec<(String, Object)>,
-    read: fn(&Object) -> Result<T>,
-) -> Result<Vec<(String, T)>> {
-    entries
-        .into_iter()
-        .map(|(name, spec)| Ok((name, read(&spec)?)))
-        .collect()
+    Ok(())
 }
 
 #[napi]
@@ -120,19 +48,23 @@ pub struct SchemaHandle {
 
 #[napi]
 impl SchemaHandle {
-    /// A schema from its node and mark specs, each a name and its spec object, in order.
+    /// A schema from its spec's JSON, whose `nodes` and `marks` are `[name, spec]` pairs, and
+    /// the node and mark specs themselves, in the same order, for their functions.
     #[napi(constructor)]
-    pub fn new(
-        env: &Env,
-        nodes: Vec<(String, Object)>,
-        marks: Vec<(String, Object)>,
-        top_node: Option<String>,
-    ) -> Result<Self> {
-        let spec = SchemaSpec {
-            nodes: entries(nodes, node_spec)?,
-            marks: entries(marks, mark_spec)?,
-            top_node,
-        };
+    pub fn new(env: &Env, json: String, nodes: Vec<Object>, marks: Vec<Object>) -> Result<Self> {
+        let json = tarnish::json::from_str(&json)
+            .map_err(|_| Error::from_reason("A schema spec's JSON didn't parse"))?;
+        let mut spec = SchemaSpec::from_json(&json).or_throw(env)?;
+        for ((_, spec), object) in spec.nodes.iter_mut().zip(&nodes) {
+            spec.leaf_text =
+                Hook::method(object, "leafText")?.map(|hook| node_hook(hook, js::text_from_js));
+            spec.to_debug_string = Hook::method(object, "toDebugString")?
+                .map(|hook| node_hook(hook, String::from_unknown));
+            attribute_hooks(&mut spec.attrs, object)?;
+        }
+        for ((_, spec), object) in spec.marks.iter_mut().zip(&marks) {
+            attribute_hooks(&mut spec.attrs, object)?;
+        }
         Ok(SchemaHandle {
             schema: Schema::new(spec).or_throw(env)?,
         })
