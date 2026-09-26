@@ -25,16 +25,22 @@ The proof doesn't depend on anyone reading the Rust. CI checks it:
    files against tarnish: a Node resolve hook swaps `prosemirror-model` and
    `prosemirror-transform` for the bridge. Both must pass every test. Skipped or focused tests
    fail the run.
-2. **The bindings are checked against JavaScript's output.** `npm run fixtures` records each
+2. **The bindings are checked against JavaScript's output.** `npm run test:js` also records each
    transform the upstream suite checks with steps, using the upstream test file's own
    `EMIT_JSON` option: the schema, the starting document, the steps, the resulting document, and
-   mapped positions. CI re-records the fixtures and fails if they differ from the committed file.
+   mapped positions. CI fails if what it records differs from the committed file.
    - The Elixir tests apply every recorded transform and must get the recorded document. They
      also invert the steps and map the positions.
    - The C test does the same, and the JSON the library returns must equal `JSON.stringify`'s
      output byte for byte.
 
 ## Elixir
+
+The package builds its NIF from `crates/`, so depend on the whole repository:
+
+```elixir
+{:tarnish, git: "https://github.com/commoncurriculum/tarnish", subdir: "elixir"}
+```
 
 ```elixir
 {:ok, schema} = Tarnish.schema(%{"nodes" => [{"doc", %{"content" => "paragraph+"}}, ...], "marks" => [...]})
@@ -69,7 +75,7 @@ Elixir package, with schemas and nodes as handles, and JSON strings in and out, 
 ```sh
 git submodule update --init
 npm ci
-npm run test:js      # ProseMirror's suites against ProseMirror
+npm run test:js      # ProseMirror's suites against ProseMirror, recording the fixtures
 npm run test:rust    # ProseMirror's suites against tarnish
 npm run test:c       # the C library against the fixtures
 (cd elixir && mix deps.get && mix test)

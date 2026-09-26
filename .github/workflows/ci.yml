@@ -47,22 +47,10 @@ jobs:
               "$(node -p "require('$package/package.json').version")"
           done
       - run: npm run test:${{ matrix.target }}
-
-  # The Elixir and C tests expect what fixtures/transform.json records, so it must be exactly
-  # what the real prosemirror-transform writes today.
-  fixtures:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      - run: npm run fixtures
+      # The run against the real packages records fixtures/transform.json again. The Elixir and
+      # C tests expect what it records, so it must be exactly what JavaScript writes today.
       - run: git diff --exit-code fixtures
+        if: matrix.target == 'js'
 
   elixir:
     runs-on: ubuntu-latest

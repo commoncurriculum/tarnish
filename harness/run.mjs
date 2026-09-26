@@ -1,5 +1,9 @@
 // Runs ProseMirror's own test files, unedited, from the pinned submodules, against the target
 // TARNISH_TARGET names: `js` for the real packages, `rust` for tarnish.
+//
+// Against the real packages, prosemirror-transform's test file also records every transform it
+// checks with steps to fixtures/transform.json, through its own EMIT_JSON option. The Elixir and
+// C tests read that file, so their expected outputs all come from JavaScript.
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 
@@ -13,6 +17,7 @@ const suites = (process.argv[2] ? process.argv.slice(2) : ["prosemirror-model", 
 let failed = false
 for (const suite of suites) {
   console.log(`\n== ${suite} (${target})`)
+  const records = target === "js" && suite === "prosemirror-transform"
   const result = spawnSync(
     "npx",
     // A skipped or focused test fails the run, so a pass means every test ran.
@@ -20,7 +25,11 @@ for (const suite of suites) {
     {
       cwd: root,
       stdio: "inherit",
-      env: { ...process.env, NODE_OPTIONS: "--import tsx --import ./harness/register.mjs" },
+      env: {
+        ...process.env,
+        ...(records ? { EMIT_JSON: `${root}fixtures/transform.json` } : {}),
+        NODE_OPTIONS: "--import tsx --import ./harness/register.mjs",
+      },
     },
   )
   failed ||= result.status !== 0
