@@ -531,6 +531,7 @@ native.register({
   markNone: () => Mark.none,
   RangeError,
   SyntaxError,
+  TypeError,
   Error,
   ReplaceError,
 })

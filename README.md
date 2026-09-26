@@ -14,6 +14,7 @@ JavaScript. For example, an Elixir backend can apply the steps an editor sends.
 | `crates/tarnish-c`      | A shared and static library for any other language: JSON strings in and out, declared in `include/tarnish.h`                                   |
 | `crates/tarnish-node`   | A Node bridge, used only to run ProseMirror's own tests against the Rust code. It isn't published                                              |
 | `upstream/`             | ProseMirror's repositories, pinned as submodules, for their test suites                                                                         |
+| `test/`                 | tarnish's own tests, in the upstream suites' style, of inputs those suites don't give                                                           |
 | `fixtures/`             | What the real packages do: the transforms `prosemirror-transform`'s tests check, and `prosemirror-model` on inputs its tests don't give it     |
 
 ## How it's proven
@@ -24,7 +25,8 @@ The proof doesn't depend on anyone reading the Rust. CI checks it:
    packages, which shows the suites and the harness are sound. `npm run test:rust` runs the same
    files against tarnish: a Node resolve hook swaps `prosemirror-model` and
    `prosemirror-transform` for the bridge. Both must pass every test. Skipped or focused tests
-   fail the run.
+   fail the run. The tests in `test/` run the same way against both, so each is proven against
+   JavaScript before it checks tarnish.
 2. **The bindings are checked against JavaScript's output.** `npm run test:js` also records each
    transform the upstream suite checks with steps, using the upstream test file's own
    `EMIT_JSON` option: the schema, the starting document, the steps, the resulting document, and

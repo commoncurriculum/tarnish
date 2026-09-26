@@ -407,11 +407,15 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
         };
         loop {
             let Some(current) = child else {
-                // JavaScript reads on past the last child, and throws.
-                if let (Some(end), Some(_)) = (end, &end_child) {
-                    return Err(Error::Range(format!(
-                        "Child {end} of the parsed DOM node doesn't come after child {}",
-                        start.unwrap_or(0)
+                // With an end it hasn't met, ProseMirror parses on past the last child: the
+                // `undefined` of an index past it, or the `null` after it.
+                if end_child.is_some() {
+                    let missing = match start {
+                        Some(start) if start > 0 && index == start => "undefined",
+                        _ => "null",
+                    };
+                    return Err(Error::Type(format!(
+                        "Cannot read properties of {missing} (reading 'nodeType')"
                     )));
                 }
                 break;

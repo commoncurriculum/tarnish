@@ -9,9 +9,6 @@ use crate::json::{Map, Value};
 use crate::model::{Fragment, Mark, Node};
 use crate::stack;
 
-#[cfg(test)]
-mod tests;
-
 /// What a node's or mark's `toDOM` gives: ProseMirror's `DOMOutputSpec`.
 #[derive(Clone)]
 pub enum DomSpec<N> {

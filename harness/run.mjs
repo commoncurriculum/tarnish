@@ -1,5 +1,6 @@
 // Runs ProseMirror's own test files, unedited, from the pinned submodules, against the target
-// TARNISH_TARGET names: `js` for the real packages, `rust` for tarnish.
+// TARNISH_TARGET names: `js` for the real packages, `rust` for tarnish. Then it runs tarnish's
+// own tests in test/, of inputs those suites don't give, the same way against the same target.
 //
 // Against the real packages, prosemirror-transform's test file also records every transform it
 // checks with steps to fixtures/transform.json, through its own EMIT_JSON option. The Elixir and
@@ -13,7 +14,12 @@ if (target !== "js" && target !== "rust") {
   process.exit(2)
 }
 const root = fileURLToPath(new URL("../", import.meta.url))
-const suites = (process.argv[2] ? process.argv.slice(2) : ["prosemirror-model", "prosemirror-transform"])
+const directories = {
+  "prosemirror-model": "upstream/prosemirror-model/test",
+  "prosemirror-transform": "upstream/prosemirror-transform/test",
+  tarnish: "test",
+}
+const suites = process.argv[2] ? process.argv.slice(2) : Object.keys(directories)
 let failed = false
 for (const suite of suites) {
   console.log(`\n== ${suite} (${target})`)
@@ -21,7 +27,7 @@ for (const suite of suites) {
   const result = spawnSync(
     "npx",
     // A skipped or focused test fails the run, so a pass means every test ran.
-    ["mocha", "--reporter", "dot", "--forbid-only", "--forbid-pending", `upstream/${suite}/test/test-*.ts`],
+    ["mocha", "--reporter", "dot", "--forbid-only", "--forbid-pending", `${directories[suite]}/test-*.ts`],
     {
       cwd: root,
       stdio: "inherit",
