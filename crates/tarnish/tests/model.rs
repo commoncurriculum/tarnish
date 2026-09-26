@@ -1,9 +1,8 @@
 //! What the real ProseMirror packages do with inputs their own tests don't give them, recorded
-//! by `harness/record-model.mjs`: tarnish must do the same, from JSON and from Erlang's external
-//! term format.
+//! by `harness/record-model.mjs`: tarnish must do the same.
 
 use tarnish::json::{self, Value};
-use tarnish::{Fragment, Node, Result, Schema, api, etf};
+use tarnish::{Fragment, Node, Result, Schema, api};
 
 fn fixtures() -> (Vec<Schema>, Value) {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/model.json");
@@ -42,12 +41,6 @@ fn nodes_from_json_are_prosemirrors() {
         expect(
             case,
             Node::from_json(schema, json).map(|node| node.to_json()),
-        );
-        let bytes = etf::write(json);
-        let document = etf::Document::new(&bytes).expect("a term");
-        expect(
-            case,
-            Node::from_json(schema, document.root()).map(|node| node.to_json()),
         );
     }
 }

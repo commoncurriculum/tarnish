@@ -9,7 +9,7 @@ use crate::stack;
 use crate::text::Text;
 
 #[derive(Clone, Copy)]
-pub(crate) enum Field<'a> {
+pub enum Field<'a> {
     Type(&'a str),
     Attrs(&'a Map),
     Content(&'a [Node]),
@@ -30,7 +30,7 @@ impl Field<'_> {
 }
 
 /// A node or mark, as the fields of its JSON.
-pub(crate) trait Fields {
+pub trait Fields {
     /// Each field `toJSON` writes, in its order.
     fn fields<'a>(&'a self, field: impl FnMut(Field<'a>));
 

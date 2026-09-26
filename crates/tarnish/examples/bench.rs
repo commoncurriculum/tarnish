@@ -3,7 +3,7 @@
 
 use std::time::Instant;
 
-use tarnish::{Node, api, etf, json};
+use tarnish::{Node, api, json};
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -33,21 +33,17 @@ fn main() {
     let document = read("target/bench/document.json");
     let (doc, steps) = (&document["doc"], &document["steps"]);
     let node = Node::from_json(&schema, doc).unwrap();
-    let term = etf::write(doc);
     let time = |name: &str, run: &mut dyn FnMut()| println!("{name:20} {:.0} µs", median(run));
-    time("fromJSON", &mut || {
+    let mut kept = Vec::new();
+    time("fromJSON, kept", &mut || {
+        kept.push(Node::from_json(&schema, doc).unwrap())
+    });
+    drop(kept);
+    time("fromJSON, dropped", &mut || {
         drop(Node::from_json(&schema, doc).unwrap())
-    });
-    time("fromJSON of a term", &mut || {
-        let document = etf::Document::new(&term).unwrap();
-        drop(Node::from_json(&schema, document.root()).unwrap())
-    });
-    time("index a term", &mut || {
-        drop(etf::Document::new(&term).unwrap())
     });
     time("toJSON", &mut || drop(node.to_json()));
     time("JSON text of a node", &mut || drop(node.to_json_string()));
-    time("term of a node", &mut || drop(etf::write_node(&node)));
     time("check", &mut || node.check().unwrap());
     time("apply 10 steps", &mut || {
         drop(api::apply_steps(&node, steps).unwrap())

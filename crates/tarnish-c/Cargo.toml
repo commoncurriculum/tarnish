@@ -17,7 +17,7 @@ doctest = false
 headers = ["safer-ffi/headers"]
 
 [dependencies]
-mimalloc = { version = "0.1", default-features = false }
+mimalloc = { version = "0.1", default-features = false, features = ["v2"] }
 safer-ffi = "0.1"
 tarnish = { path = "../tarnish" }
 

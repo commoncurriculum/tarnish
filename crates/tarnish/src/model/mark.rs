@@ -5,10 +5,10 @@ use std::sync::{Arc, LazyLock};
 
 use super::attrs::Attrs;
 use super::compare_deep::objects_equal;
+use super::read::Reader;
 use super::schema::{MarkType, Schema};
-use crate::error::{Error, Result};
-use crate::js::{Given, Json};
-use crate::json::Value;
+use crate::error::Result;
+use crate::js::Json;
 
 /// A set of marks, sorted by their types' rank.
 pub type Marks = Arc<[Mark]>;
@@ -115,19 +115,17 @@ impl Mark {
         copy.into()
     }
 
-    pub fn from_json<'a>(schema: &Schema, json: impl Json<'a>) -> Result<Mark> {
-        if !json.truthy() {
-            return Err(Error::Range("Invalid input for Mark.fromJSON".into()));
+    /// [`set_from`](Self::set_from), taking the marks out of `marks`.
+    pub(crate) fn set_from_vec(marks: &mut Vec<Mark>) -> Marks {
+        if marks.is_empty() {
+            return Mark::none();
         }
-        let [name, attrs] = json.fields(["type", "attrs"]);
-        let name = name.map_or("undefined".into(), Json::string);
-        let mark_type = schema
-            .mark_type(&name)
-            .ok_or_else(|| Error::Range(format!("There is no mark type {name} in this schema")))?;
-        let attrs = attrs.map_or(Given::Falsy(Value::Null), Json::attrs);
-        let mark = mark_type.create_given(&attrs)?;
-        mark_type.check_attrs(mark.attrs())?;
-        Ok(mark)
+        marks.sort_by_key(|mark| mark.mark_type().rank());
+        marks.drain(..).collect()
+    }
+
+    pub fn from_json<'a>(schema: &Schema, json: impl Json<'a>) -> Result<Mark> {
+        Reader::new(schema).mark(json)
     }
 }
 

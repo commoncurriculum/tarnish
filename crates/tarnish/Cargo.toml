@@ -16,4 +16,4 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 stacker = "0.1"
 
 [dev-dependencies]
-mimalloc = { version = "0.1", default-features = false }
+mimalloc = { version = "0.1", default-features = false, features = ["v2"] }

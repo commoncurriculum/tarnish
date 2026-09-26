@@ -25,6 +25,33 @@ pub fn number_to_string(double: f64) -> String {
     ryu_js::Buffer::new().format(double).to_string()
 }
 
+/// A number as `JSON.stringify` writes it.
+pub enum WrittenNumber {
+    /// Digits, which JavaScript writes for an integer below 10^21.
+    Integer(i128),
+    /// A fraction or an exponent.
+    Float(f64),
+    /// `null`, for a number that isn't finite.
+    Null,
+}
+
+pub fn written_number(number: &Number) -> WrittenNumber {
+    if let Some(integer) = number
+        .as_i64()
+        .filter(|integer| integer.unsigned_abs() as f64 <= MAX_SAFE_INTEGER)
+    {
+        return WrittenNumber::Integer(integer.into());
+    }
+    let double = number.as_f64().unwrap_or(f64::NAN);
+    if !double.is_finite() {
+        return WrittenNumber::Null;
+    }
+    match number_to_string(double).parse() {
+        Ok(integer) => WrittenNumber::Integer(integer),
+        Err(_) => WrittenNumber::Float(double),
+    }
+}
+
 /// JavaScript truthiness, `None` being `undefined`.
 pub fn truthy(value: Option<&Value>) -> bool {
     match value {
@@ -138,21 +165,19 @@ pub(crate) fn defined<T>(value: Option<T>, property: &str) -> crate::Result<T> {
 }
 
 /// A JSON value as JavaScript reads a node, a fragment or a mark from it: a [`Value`], or JSON
-/// read in place from another form, as [`crate::etf::Term`] reads Erlang's external term format.
+/// read in place from another form, as the Elixir binding reads a term.
 pub trait Json<'a>: Copy {
     fn truthy(self) -> bool;
 
-    /// An object's property; `None` for a value that isn't an object, or has no such property.
-    fn get(self, key: &str) -> Option<Self>;
-
-    /// [`get`](Self::get) of each key, found in one pass over the object.
-    fn fields<const N: usize>(self, keys: [&str; N]) -> [Option<Self>; N];
+    /// An object's properties of these names; `None` for one it doesn't have, and all of them
+    /// for a value that isn't an object.
+    fn fields<const N: usize>(self, keys: [&'static str; N]) -> [Option<Self>; N];
 
     /// `String(value)`.
     fn string(self) -> Cow<'a, str>;
 
     /// A string's text; `None` for a value that isn't a string.
-    fn text(self) -> Option<&'a str>;
+    fn text(self) -> Option<Cow<'a, str>>;
 
     /// An array's items; `None` for a value that isn't an array.
     fn items(self) -> Option<impl Iterator<Item = Self>>;
@@ -166,11 +191,7 @@ impl<'a> Json<'a> for &'a Value {
         truthy(Some(self))
     }
 
-    fn get(self, key: &str) -> Option<Self> {
-        self.as_object()?.get(key)
-    }
-
-    fn fields<const N: usize>(self, keys: [&str; N]) -> [Option<Self>; N] {
+    fn fields<const N: usize>(self, keys: [&'static str; N]) -> [Option<Self>; N] {
         let mut fields = [None; N];
         for (name, value) in self.as_object().into_iter().flatten() {
             if let Some(index) = keys.iter().position(|&key| key == name.as_str()) {
@@ -184,8 +205,8 @@ impl<'a> Json<'a> for &'a Value {
         string(Some(self))
     }
 
-    fn text(self) -> Option<&'a str> {
-        self.as_str()
+    fn text(self) -> Option<Cow<'a, str>> {
+        self.as_str().map(Cow::Borrowed)
     }
 
     fn items(self) -> Option<impl Iterator<Item = Self>> {

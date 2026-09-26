@@ -4,6 +4,7 @@ use std::fmt;
 use std::sync::{Arc, LazyLock};
 
 use super::node::Node;
+use super::read::Reader;
 use super::schema::Schema;
 use crate::error::{Error, Result};
 use crate::js::Json;
@@ -48,6 +49,18 @@ impl Fragment {
     pub(crate) fn new(children: Vec<Node>) -> Fragment {
         let size = children.iter().map(Node::node_size).sum();
         Fragment::with_size(children, size)
+    }
+
+    /// [`new`](Self::new), moving the children straight into the fragment's one allocation.
+    pub(crate) fn from_drain(children: std::vec::Drain<'_, Node>) -> Fragment {
+        if children.len() == 0 {
+            return Fragment::empty();
+        }
+        let children: Arc<[Node]> = children.collect();
+        Fragment {
+            size: children.iter().map(Node::node_size).sum(),
+            children,
+        }
     }
 
     /// A fragment of these nodes, joining adjacent text nodes with the same marks.
@@ -374,15 +387,7 @@ impl Fragment {
     }
 
     pub fn from_json<'a>(schema: &Schema, json: impl Json<'a>) -> Result<Fragment> {
-        if !json.truthy() {
-            return Ok(Fragment::empty());
-        }
-        let nodes = json
-            .items()
-            .ok_or_else(|| Error::Range("Invalid input for Fragment.fromJSON".into()))?
-            .map(|node| stack::grow(|| Node::from_json(schema, node)))
-            .collect::<Result<Vec<_>>>()?;
-        Ok(Fragment::from_array(nodes))
+        Reader::new(schema).fragment(json)
     }
 }
 

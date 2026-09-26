@@ -141,6 +141,42 @@ defmodule TarnishTest do
 
     test "a term that isn't JSON", %{schema: schema} do
       assert_raise ArgumentError, fn -> Tarnish.node_from_json(schema, {:not, :json}) end
+      text = %{"type" => "text", "text" => {:not, :json}}
+      json = %{"type" => "doc", "content" => [%{"type" => "paragraph", "content" => [text]}]}
+      assert_raise ArgumentError, fn -> Tarnish.node_from_json(schema, json) end
+    end
+  end
+
+  describe "calls with more work than a normal scheduler takes" do
+    setup %{schemas: [schema | _]}, do: %{schema: schema}
+
+    defp paragraphs(count, text) do
+      paragraph = %{"type" => "paragraph", "content" => [%{"type" => "text", "text" => text}]}
+      %{"type" => "doc", "content" => List.duplicate(paragraph, count)}
+    end
+
+    test "go to a dirty scheduler, with the same answers", %{schema: schema} do
+      for json <- [paragraphs(10_000, "many"), paragraphs(1, String.duplicate("long ", 200_000))] do
+        assert Tarnish.Native.node_from_json(schema, json) == :dirty
+        doc = doc(schema, json)
+        assert Tarnish.Native.to_json(doc) == :dirty
+        assert Tarnish.to_json(doc) == json
+        assert Tarnish.check(doc) == :ok
+      end
+    end
+
+    test "apply many steps on a dirty scheduler", %{schema: schema} do
+      doc = doc(schema, paragraphs(200, "text"))
+      slice = %{"content" => [%{"type" => "text", "text" => "x"}]}
+
+      steps =
+        List.duplicate(%{"stepType" => "replace", "from" => 2, "to" => 2, "slice" => slice}, 200)
+
+      assert Tarnish.Native.apply_steps(doc, steps) == :dirty
+      {:ok, applied} = Tarnish.apply_steps(doc, steps)
+      %{"content" => [first | _]} = Tarnish.to_json(applied)
+      text = "t" <> String.duplicate("x", 200) <> "ext"
+      assert first == %{"type" => "paragraph", "content" => [%{"type" => "text", "text" => text}]}
     end
   end
 

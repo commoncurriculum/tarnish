@@ -73,11 +73,17 @@ json = Tarnish.to_json(doc)
 
 A schema is built once, and a document is read once and kept in Rust, so applying steps to it
 doesn't convert it again. Specs, steps and JSON are maps as Jason decodes ProseMirror's JSON, or
-`Jason.OrderedObject`s. Terms cross in Erlang's external term format, which the VM reads and
-makes in one call each. Errors come back as `{:error, {kind, message}}`, where the kind names the
-class ProseMirror throws; a term Jason couldn't encode, such as a tuple, raises `ArgumentError`.
-Give a schema's `"nodes"` and `"marks"` as lists of `{name, spec}` pairs, or as
-`Jason.OrderedObject`s, because their order matters and a map doesn't keep it.
+`Jason.OrderedObject`s. Rust reads the terms it's given in place, and makes the terms it answers
+from Erlang's external term format, which the VM makes a whole term from in one call. Errors come
+back as `{:error, {kind, message}}`, where the kind names the class ProseMirror throws. A part of
+a term that ProseMirror reads and Jason couldn't encode, such as a tuple, raises
+`ArgumentError`; a part it ignores, such as a key a node doesn't have, isn't read. Give a
+schema's `"nodes"` and `"marks"` as lists of `{name, spec}` pairs, or as `Jason.OrderedObject`s,
+because their order matters and a map doesn't keep it.
+
+A call runs on a normal scheduler when it has no more than about a millisecond's work, and on a
+dirty one otherwise. A dirty scheduler takes a few microseconds to hand a call to, which is most
+of the time a small document takes.
 
 Documents nest as deeply as memory allows: a recursion that runs low on a dirty scheduler's
 small stack carries on in a new stack segment, so no document takes the VM down.

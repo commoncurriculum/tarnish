@@ -75,6 +75,31 @@ impl Automaton {
             .first()
             .is_some_and(|&(node, _)| nodes[node].is_inline())
     }
+
+    /// The state that a node of `node_type` leads to from `state`, in an automaton over
+    /// `schema`'s node types.
+    fn step(&self, schema: &Schema, state: usize, node_type: &NodeType) -> Option<usize> {
+        if node_type.schema != *schema {
+            return None;
+        }
+        self.states[state]
+            .next
+            .iter()
+            .find(|&&(node, _)| node == node_type.index)
+            .map(|&(_, next)| next)
+    }
+
+    /// Whether the nodes, in order, are content the expression matches in full.
+    pub fn accepts(&self, schema: &Schema, nodes: &[Node]) -> bool {
+        let mut state = 0;
+        for node in nodes {
+            match self.step(schema, state, node.node_type()) {
+                Some(next) => state = next,
+                None => return false,
+            }
+        }
+        self.states[state].valid_end
+    }
 }
 
 /// A state of a node type's content expression: what may come next, and whether content may end
@@ -153,16 +178,8 @@ impl ContentMatch {
         self.step(self.state, node_type).map(|next| self.at(next))
     }
 
-    /// The state that a node of `node_type` leads to from `state`.
     fn step(&self, state: usize, node_type: &NodeType) -> Option<usize> {
-        if node_type.schema != self.schema {
-            return None;
-        }
-        self.automaton.states[state]
-            .next
-            .iter()
-            .find(|&&(node, _)| node == node_type.index)
-            .map(|&(_, next)| next)
+        self.automaton.step(&self.schema, state, node_type)
     }
 
     /// The match after all of `fragment`'s children, `None` where they don't fit.

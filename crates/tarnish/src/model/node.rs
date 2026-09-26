@@ -8,12 +8,13 @@ use super::compare_deep::objects_equal;
 use super::content::ContentMatch;
 use super::fragment::{Fragment, LeafTextHook, NodeVisitor};
 use super::mark::{Mark, Marks};
+use super::read::Reader;
 use super::replace::{self, Slice};
 use super::resolved_pos::ResolvedPos;
 use super::schema::{MarkType, NodeType, Schema};
 use crate::error::{Error, Result};
-use crate::js::{Given, Json};
-use crate::json::{self, Map, Value};
+use crate::js::Json;
+use crate::json::{self, Map};
 use crate::stack;
 use crate::text::Text;
 
@@ -595,36 +596,7 @@ impl Node {
     }
 
     pub fn from_json<'a>(schema: &Schema, json: impl Json<'a>) -> Result<Node> {
-        if !json.truthy() {
-            return Err(Error::Range("Invalid input for Node.fromJSON".into()));
-        }
-        let [marks, name, text, content, attrs] =
-            json.fields(["marks", "type", "text", "content", "attrs"]);
-        let marks = match marks.filter(|marks| marks.truthy()) {
-            None => Vec::new(),
-            Some(marks) => marks
-                .items()
-                .ok_or_else(|| Error::Range("Invalid mark data for Node.fromJSON".into()))?
-                .map(|mark| Mark::from_json(schema, mark))
-                .collect::<Result<_>>()?,
-        };
-        let name = name.map_or("undefined".into(), Json::string);
-        if name == "text" {
-            let text = text
-                .and_then(Json::text)
-                .ok_or_else(|| Error::Range("Invalid text node in JSON".into()))?;
-            return schema.text(text, &marks);
-        }
-        let content = match content {
-            Some(content) => Fragment::from_json(schema, content)?,
-            None => Fragment::empty(),
-        };
-        let node_type = schema.expect_node_type(&name)?;
-        let attrs = attrs.map_or(Given::Falsy(Value::Null), Json::attrs);
-        let attrs = node_type.attrs_given(&attrs)?;
-        let node = Node::new(node_type, attrs, content, Mark::set_from(&marks));
-        node.node_type().check_attrs(node.attrs())?;
-        Ok(node)
+        Reader::new(schema).node(json)
     }
 }
 

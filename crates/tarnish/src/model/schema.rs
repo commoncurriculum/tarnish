@@ -572,14 +572,13 @@ impl NodeType {
     }
 
     pub fn valid_content(&self, content: &Fragment) -> bool {
-        let result = self.content_match().match_fragment(content);
-        if !result.is_some_and(|result| result.valid_end()) {
-            return false;
-        }
-        content
-            .children()
-            .iter()
-            .all(|child| self.allows_marks(child.marks()))
+        self.data()
+            .content
+            .accepts(&self.schema, content.children())
+            && content
+                .children()
+                .iter()
+                .all(|child| self.allows_marks(child.marks()))
     }
 
     pub fn check_content(&self, content: &Fragment) -> Result<()> {

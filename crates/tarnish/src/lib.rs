@@ -9,7 +9,6 @@
 pub mod api;
 pub mod dom;
 pub mod error;
-pub mod etf;
 pub mod js;
 pub mod json;
 pub mod model;

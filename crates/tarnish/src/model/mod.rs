@@ -8,6 +8,7 @@ mod fields;
 mod fragment;
 mod mark;
 mod node;
+mod read;
 mod replace;
 mod resolved_pos;
 mod schema;
@@ -15,7 +16,7 @@ mod schema_json;
 
 pub use attrs::{AttributeSpec, Attrs, Validate, ValidateHook};
 pub use content::ContentMatch;
-pub(crate) use fields::{Field, Fields};
+pub use fields::{Field, Fields};
 pub use fragment::{Fragment, LeafTextHook, NodeVisitor};
 pub use mark::{Mark, Marks};
 pub use node::{ChildAt, Node};
