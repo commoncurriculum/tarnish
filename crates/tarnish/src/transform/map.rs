@@ -31,6 +31,15 @@ impl Recover {
     pub fn to_number(self) -> f64 {
         self.index as f64 + self.offset as f64 * 65536.0
     }
+
+    /// The recovery JavaScript's number encodes.
+    pub fn from_number(value: f64) -> Recover {
+        let value = value as u64;
+        Recover {
+            index: (value & 0xffff) as usize,
+            offset: (value >> 16) as usize,
+        }
+    }
 }
 
 /// A mapped position, with what the mapping deleted around it.
@@ -111,40 +120,57 @@ impl StepMap {
         self.ranges.is_empty()
     }
 
-    fn sizes(&self) -> (usize, usize) {
-        if self.inverted { (2, 1) } else { (1, 2) }
+    /// The changed ranges, each where it was before the change and where it is after.
+    fn spans(&self) -> impl Iterator<Item = Span> + '_ {
+        let (old_index, new_index) = if self.inverted { (2, 1) } else { (1, 2) };
+        let mut diff = 0;
+        self.ranges
+            .chunks_exact(3)
+            .enumerate()
+            .map(move |(index, range)| {
+                let start = range[0] as isize;
+                let (old_size, new_size) = (range[old_index] as isize, range[new_index] as isize);
+                let (old_start, new_start) = if self.inverted {
+                    (start - diff, start)
+                } else {
+                    (start, start + diff)
+                };
+                diff += new_size - old_size;
+                Span {
+                    index,
+                    old_start,
+                    old_size,
+                    new_start,
+                    new_size,
+                }
+            })
     }
 
     /// The position a recovery points at in this map's output.
+    ///
+    /// # Panics
+    ///
+    /// When the map has no range at the recovery's index, as for a recovery from a map this one
+    /// doesn't mirror.
     pub fn recover(&self, recover: Recover) -> usize {
-        let mut diff: isize = 0;
-        if !self.inverted {
-            for index in 0..recover.index {
-                diff += self.ranges[index * 3 + 2] as isize - self.ranges[index * 3 + 1] as isize;
-            }
-        }
-        (self.ranges[recover.index * 3] as isize + diff) as usize + recover.offset
+        let span = self
+            .spans()
+            .nth(recover.index)
+            .expect("a recovery of one of the map's ranges");
+        position(span.new_start + recover.offset as isize)
     }
 
-    /// Map a position that may lie outside any document: the transform's changed range starts
-    /// out beyond both ends.
-    pub(crate) fn map_signed(&self, pos: i64, assoc: i32) -> i64 {
-        self.map_inner(pos, assoc).0
-    }
-
-    fn map_inner(&self, pos: i64, assoc: i32) -> (i64, u8, Option<Recover>) {
-        let (old_index, new_index) = self.sizes();
-        let mut diff: i64 = 0;
-        for i in (0..self.ranges.len()).step_by(3) {
-            let start = self.ranges[i] as i64 - if self.inverted { diff } else { 0 };
+    fn map_inner(&self, pos: usize, assoc: i32) -> MapResult {
+        let pos = pos as isize;
+        // How far the ranges before `pos` moved it.
+        let mut moved = 0;
+        for span in self.spans() {
+            let (start, end) = (span.old_start, span.old_start + span.old_size);
             if start > pos {
                 break;
             }
-            let old_size = self.ranges[i + old_index] as i64;
-            let new_size = self.ranges[i + new_index] as i64;
-            let end = start + old_size;
             if pos <= end {
-                let side = if old_size == 0 {
+                let side = if span.old_size == 0 {
                     assoc
                 } else if pos == start {
                     -1
@@ -153,16 +179,12 @@ impl StepMap {
                 } else {
                     assoc
                 };
-                let result = start + diff + if side < 0 { 0 } else { new_size };
-                let recover = if pos == if assoc < 0 { start } else { end } {
-                    None
-                } else {
-                    Some(Recover {
-                        index: i / 3,
-                        offset: (pos - start) as usize,
-                    })
-                };
-                let mut del = if pos == start {
+                let result = span.new_start + if side < 0 { 0 } else { span.new_size };
+                let recover = (pos != if assoc < 0 { start } else { end }).then(|| Recover {
+                    index: span.index,
+                    offset: (pos - start) as usize,
+                });
+                let mut del_info = if pos == start {
                     DEL_AFTER
                 } else if pos == end {
                     DEL_BEFORE
@@ -170,57 +192,41 @@ impl StepMap {
                     DEL_ACROSS
                 };
                 if if assoc < 0 { pos != start } else { pos != end } {
-                    del |= DEL_SIDE;
+                    del_info |= DEL_SIDE;
                 }
-                return (result, del, recover);
+                return MapResult {
+                    pos: position(result),
+                    del_info,
+                    recover,
+                };
             }
-            diff += new_size - old_size;
+            moved = span.new_start + span.new_size - end;
         }
-        (pos + diff, 0, None)
+        MapResult {
+            pos: position(pos + moved),
+            del_info: 0,
+            recover: None,
+        }
     }
 
     /// Whether the position is in the range the recovery points at.
     pub fn touches(&self, pos: usize, recover: Recover) -> bool {
-        let (old_index, new_index) = self.sizes();
-        let pos = pos as i64;
-        let mut diff: i64 = 0;
-        for i in (0..self.ranges.len()).step_by(3) {
-            let start = self.ranges[i] as i64 - if self.inverted { diff } else { 0 };
-            if start > pos {
-                break;
-            }
-            let old_size = self.ranges[i + old_index] as i64;
-            let end = start + old_size;
-            if pos <= end && i == recover.index * 3 {
-                return true;
-            }
-            diff += self.ranges[i + new_index] as i64 - old_size;
-        }
-        false
+        let pos = pos as isize;
+        self.spans()
+            .take_while(|span| span.old_start <= pos)
+            .any(|span| span.index == recover.index && pos <= span.old_start + span.old_size)
     }
 
     /// The changed ranges: each one's start and end before the change, and after.
-    pub fn changes(&self) -> Vec<(usize, usize, usize, usize)> {
-        let (old_index, new_index) = self.sizes();
-        let mut result = Vec::with_capacity(self.ranges.len() / 3);
-        let mut diff: isize = 0;
-        for i in (0..self.ranges.len()).step_by(3) {
-            let start = self.ranges[i] as isize;
-            let old_start = start - if self.inverted { diff } else { 0 };
-            let new_start = start + if self.inverted { 0 } else { diff };
-            let (old_size, new_size) = (
-                self.ranges[i + old_index] as isize,
-                self.ranges[i + new_index] as isize,
-            );
-            result.push((
-                old_start as usize,
-                (old_start + old_size) as usize,
-                new_start as usize,
-                (new_start + new_size) as usize,
-            ));
-            diff += new_size - old_size;
-        }
-        result
+    pub fn changes(&self) -> impl Iterator<Item = (usize, usize, usize, usize)> + '_ {
+        self.spans().map(|span| {
+            (
+                position(span.old_start),
+                position(span.old_start + span.old_size),
+                position(span.new_start),
+                position(span.new_start + span.new_size),
+            )
+        })
     }
 
     /// The map of the change undone: from positions after it to positions before.
@@ -234,17 +240,27 @@ impl StepMap {
 
 impl Mappable for StepMap {
     fn map(&self, pos: usize, assoc: i32) -> usize {
-        self.map_inner(pos as i64, assoc).0.max(0) as usize
+        self.map_inner(pos, assoc).pos
     }
 
     fn map_result(&self, pos: usize, assoc: i32) -> MapResult {
-        let (pos, del_info, recover) = self.map_inner(pos as i64, assoc);
-        MapResult {
-            pos: pos.max(0) as usize,
-            del_info,
-            recover,
-        }
+        self.map_inner(pos, assoc)
     }
+}
+
+/// One of a step map's changed ranges: its start and size before the change, and after.
+struct Span {
+    index: usize,
+    old_start: isize,
+    old_size: isize,
+    new_start: isize,
+    new_size: isize,
+}
+
+/// A position from a map's arithmetic, which only a map with its ranges out of order takes
+/// below zero, where JavaScript's would give a negative position.
+fn position(n: isize) -> usize {
+    n.max(0) as usize
 }
 
 impl fmt::Display for StepMap {
@@ -340,13 +356,12 @@ impl Mapping {
     /// The map that mirrors map `n`.
     pub fn get_mirror(&self, n: usize) -> Option<usize> {
         let position = self.mirror.iter().position(|&index| index == n)?;
-        Some(
-            self.mirror[if position % 2 == 1 {
-                position - 1
-            } else {
-                position + 1
-            }],
-        )
+        let other = if position % 2 == 1 {
+            position - 1
+        } else {
+            position + 1
+        };
+        self.mirror.get(other).copied()
     }
 
     /// Record that maps `n` and `m` mirror each other.
@@ -377,6 +392,8 @@ impl Mapping {
     fn map_inner(&self, mut pos: usize, assoc: i32) -> (usize, u8) {
         let mut del_info = 0;
         let mut index = self.from;
+        // JavaScript throws a TypeError reading a map past the last; mapping can't fail, so it
+        // stops there.
         let to = self.to.min(self.maps.len());
         while index < to {
             let map = &self.maps[index];
@@ -400,13 +417,7 @@ impl Mapping {
 
 impl Mappable for Mapping {
     fn map(&self, pos: usize, assoc: i32) -> usize {
-        if !self.mirror.is_empty() {
-            return self.map_inner(pos, assoc).0;
-        }
-        let to = self.to.min(self.maps.len());
-        self.maps[self.from.min(to)..to]
-            .iter()
-            .fold(pos, |pos, map| map.map(pos, assoc))
+        self.map_inner(pos, assoc).0
     }
 
     fn map_result(&self, pos: usize, assoc: i32) -> MapResult {

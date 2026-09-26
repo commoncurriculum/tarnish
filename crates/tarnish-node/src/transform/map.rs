@@ -27,15 +27,6 @@ fn wrap_map_result<'env>(env: &'env Env, result: MapResult) -> Result<Unknown<'e
     js::call_registered(env, "wrapMapResult", FnArgs::from(args))
 }
 
-/// The recovery JavaScript encodes as one number, its index in the low 16 bits.
-fn recover_of(value: f64) -> Recover {
-    let value = value as u64;
-    Recover {
-        index: (value & 0xffff) as usize,
-        offset: (value >> 16) as usize,
-    }
-}
-
 /// Call `f` with what one of JavaScript's step maps or mappings maps by.
 pub fn with_mappable<R>(
     mappable: Either<&StepMapHandle, &MappingHandle>,
@@ -87,12 +78,13 @@ impl StepMapHandle {
 
     #[napi]
     pub fn recover(&self, value: f64) -> f64 {
-        self.map.recover(recover_of(value)) as f64
+        self.map.recover(Recover::from_number(value)) as f64
     }
 
     #[napi]
     pub fn touches(&self, env: &Env, pos: f64, recover: f64) -> Result<bool> {
-        Ok(self.map.touches(js::pos(env, pos)?, recover_of(recover)))
+        let recover = Recover::from_number(recover);
+        Ok(self.map.touches(js::pos(env, pos)?, recover))
     }
 
     #[napi]

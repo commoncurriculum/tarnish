@@ -101,18 +101,19 @@ impl Transform {
     /// The range, in the current document, that covers everything the steps replaced. `None`
     /// when they replaced nothing: marks added or removed don't count.
     pub fn changed_range(&self) -> Option<(usize, usize)> {
-        let (mut from, mut to): (i64, i64) = (1_000_000_000, -1_000_000_000);
-        for (index, map) in self.mapping.maps().iter().enumerate() {
-            if index > 0 {
-                from = map.map_signed(from, 1);
-                to = map.map_signed(to, -1);
+        let mut range: Option<(usize, usize)> = None;
+        for map in self.mapping.maps() {
+            if let Some((from, to)) = &mut range {
+                *from = map.map(*from, 1);
+                *to = map.map(*to, -1);
             }
             for (_, _, new_from, new_to) in map.changes() {
-                from = from.min(new_from as i64);
-                to = to.max(new_to as i64);
+                let (from, to) = range.get_or_insert((new_from, new_to));
+                *from = (*from).min(new_from);
+                *to = (*to).max(new_to);
             }
         }
-        (from != 1_000_000_000).then(|| (from.max(0) as usize, to.max(0) as usize))
+        range
     }
 
     /// Replace `from` to `to` with a slice, fitting it in as it can.
