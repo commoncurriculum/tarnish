@@ -12,6 +12,7 @@ use super::fragment::Fragment;
 use super::node::Node;
 use super::schema::{NodeType, NodeTypeData, Schema};
 use crate::error::{Error, Result};
+use crate::text::is_js_space;
 
 /// The compiled form of one content expression.
 pub(crate) struct Automaton {
@@ -482,23 +483,6 @@ fn split_tokens(string: &str) -> Vec<String> {
 
 fn is_word(unit: u16) -> bool {
     matches!(unit, 0x30..=0x39 | 0x41..=0x5A | 0x5F | 0x61..=0x7A)
-}
-
-fn is_js_space(unit: u16) -> bool {
-    matches!(
-        unit,
-        0x09..=0x0D
-            | 0x20
-            | 0xA0
-            | 0x1680
-            | 0x2000..=0x200A
-            | 0x2028
-            | 0x2029
-            | 0x202F
-            | 0x205F
-            | 0x3000
-            | 0xFEFF
-    )
 }
 
 fn has_non_word(token: &str) -> bool {

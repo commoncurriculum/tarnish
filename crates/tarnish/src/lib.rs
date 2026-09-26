@@ -3,6 +3,7 @@
 //!
 //! Positions count UTF-16 units, as they do in the browser, so a step lands where it did there.
 
+pub mod dom;
 pub mod error;
 pub mod model;
 pub mod text;

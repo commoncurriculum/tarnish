@@ -267,6 +267,41 @@ pub fn property_names(env: sys::napi_env, object: sys::napi_value) -> Result<Vec
     Ok(result)
 }
 
+/// Keep the tarnish array a JavaScript array was made from on it, so that a DOM spec that is
+/// an attribute's array can be told from one that equals it, as ProseMirror tells them apart.
+fn mark_origin(env: sys::napi_env, array: sys::napi_value, items: &Arc<[Value]>) -> Result<()> {
+    unsafe extern "C" fn release(
+        _env: sys::napi_env,
+        data: *mut std::ffi::c_void,
+        _hint: *mut std::ffi::c_void,
+    ) {
+        drop(unsafe { Box::from_raw(data as *mut Arc<[Value]>) });
+    }
+    let data = Box::into_raw(Box::new(items.clone()));
+    let status = unsafe {
+        sys::napi_wrap(
+            env,
+            array,
+            data.cast(),
+            Some(release),
+            ptr::null_mut(),
+            ptr::null_mut(),
+        )
+    };
+    if status != sys::Status::napi_ok {
+        drop(unsafe { Box::from_raw(data) });
+    }
+    check(status)
+}
+
+/// The identity of the tarnish array a JavaScript array was made from, if it was.
+pub fn array_origin(env: sys::napi_env, array: sys::napi_value) -> Option<usize> {
+    let mut data = ptr::null_mut();
+    let status = unsafe { sys::napi_unwrap(env, array, &mut data) };
+    (status == sys::Status::napi_ok && !data.is_null())
+        .then(|| unsafe { (*(data as *const Arc<[Value]>)).as_ptr() } as usize)
+}
+
 pub fn value_to_js(env: sys::napi_env, value: &Value) -> Result<sys::napi_value> {
     let mut result = ptr::null_mut();
     match value {
@@ -281,6 +316,7 @@ pub fn value_to_js(env: sys::napi_env, value: &Value) -> Result<sys::napi_value>
                 let item = value_to_js(env, item)?;
                 check(unsafe { sys::napi_set_element(env, result, index as u32, item) })?;
             }
+            mark_origin(env, result, items)?;
         }
         Value::Object(object) => {
             check(unsafe { sys::napi_create_object(env, &mut result) })?;
@@ -325,6 +361,59 @@ impl JsRef {
 impl Drop for JsRef {
     fn drop(&mut self) {
         unsafe { sys::napi_delete_reference(self.env, self.raw) };
+    }
+}
+
+/// A JavaScript function kept to be called later, as a method of `this` when there is one.
+pub struct Hook {
+    this: Option<JsRef>,
+    function: JsRef,
+}
+
+impl Hook {
+    /// The object's function `key`, if it has one, as its method.
+    pub fn method(
+        env: sys::napi_env,
+        object: sys::napi_value,
+        key: &str,
+    ) -> Result<Option<Arc<Hook>>> {
+        let function = get(env, object, key)?;
+        if type_of(env, function)? != sys::ValueType::napi_function {
+            return Ok(None);
+        }
+        Ok(Some(Arc::new(Hook {
+            this: Some(JsRef::new(env, object)?),
+            function: JsRef::new(env, function)?,
+        })))
+    }
+
+    /// A function to call with no `this`.
+    pub fn function(env: sys::napi_env, function: sys::napi_value) -> Result<Arc<Hook>> {
+        Ok(Arc::new(Hook {
+            this: None,
+            function: JsRef::new(env, function)?,
+        }))
+    }
+
+    /// Call the function with the arguments `args` makes, a failure being the host's error.
+    pub fn call(
+        &self,
+        args: impl FnOnce(sys::napi_env) -> Result<Vec<sys::napi_value>>,
+    ) -> tarnish::Result<sys::napi_value> {
+        self.read(|env| {
+            let args = args(env)?;
+            let this = match &self.this {
+                Some(this) => this.value()?,
+                None => undefined(env)?,
+            };
+            call(env, this, self.function.value()?, &args)
+        })
+    }
+
+    /// Read a value in the function's environment, a failure being the host's error.
+    pub fn read<T>(&self, read: impl FnOnce(sys::napi_env) -> Result<T>) -> tarnish::Result<T> {
+        let env = self.function.env();
+        read(env).map_err(|error| host_error(env, error))
     }
 }
 

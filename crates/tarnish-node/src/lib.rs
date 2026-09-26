@@ -9,6 +9,7 @@
 #![cfg_attr(test, allow(dead_code))]
 
 mod content;
+mod dom;
 mod fragment;
 mod js;
 mod mark;
@@ -27,7 +28,8 @@ pub fn register(env: Env, functions: js::Js) -> Result<()> {
 }
 
 /// `FromNapiValue` for an argument that is one of `js/`'s wrappers, read through the handle
-/// in its `h` property.
+/// in its `h` property. The handle is read as a class instance, not a borrow, which napi only
+/// hands out while it converts a call's own arguments.
 #[macro_export]
 macro_rules! handle_arg {
     ($arg:ident, $handle:ty, |$h:ident| $extract:expr) => {
@@ -37,9 +39,10 @@ macro_rules! handle_arg {
                 value: napi::sys::napi_value,
             ) -> napi::Result<Self> {
                 let handle = $crate::js::get(env, value, "h")?;
-                let $h = unsafe {
-                    <&$handle as napi::bindgen_prelude::FromNapiValue>::from_napi_value(env, handle)
+                let instance = unsafe {
+                    <napi::bindgen_prelude::ClassInstance<$handle> as napi::bindgen_prelude::FromNapiValue>::from_napi_value(env, handle)
                 }?;
+                let $h: &$handle = &instance;
                 Ok($arg($extract))
             }
         }

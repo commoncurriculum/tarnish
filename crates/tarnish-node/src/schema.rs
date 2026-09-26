@@ -10,40 +10,12 @@ use tarnish::{
 };
 
 use crate::fragment::FragmentArg;
-use crate::js::{self, Data, Js, JsRef, OrThrow};
+use crate::js::{self, Data, Hook, Js, OrThrow};
 use crate::mark::{self, MarkArg, MarkSetArg};
 use crate::node;
 
-/// A function of a spec, called as a method of it.
-struct Hook {
-    this: JsRef,
-    function: JsRef,
-}
-
-impl Hook {
-    fn call(
-        &self,
-        arg: impl FnOnce(sys::napi_env) -> Result<sys::napi_value>,
-    ) -> tarnish::Result<sys::napi_value> {
-        let env = self.function.env();
-        let result = (|| {
-            let arg = arg(env)?;
-            js::call(env, self.this.value()?, self.function.value()?, &[arg])
-        })();
-        result.map_err(|error| js::host_error(env, error))
-    }
-}
-
-/// The spec's function `key`, if it has one.
 fn hook(env: sys::napi_env, spec: sys::napi_value, key: &str) -> Result<Option<Arc<Hook>>> {
-    let function = js::get(env, spec, key)?;
-    if js::type_of(env, function)? != sys::ValueType::napi_function {
-        return Ok(None);
-    }
-    Ok(Some(Arc::new(Hook {
-        this: JsRef::new(env, spec)?,
-        function: JsRef::new(env, function)?,
-    })))
+    Hook::method(env, spec, key)
 }
 
 fn node_hook<T: 'static>(
@@ -52,9 +24,8 @@ fn node_hook<T: 'static>(
 ) -> Option<NodeHook<T>> {
     let hook = hook?;
     Some(Arc::new(move |node| {
-        let result = hook.call(|env| node::wrap(env, node))?;
-        let env = hook.function.env();
-        convert(env, result).map_err(|error| js::host_error(env, error))
+        let result = hook.call(|env| Ok(vec![node::wrap(env, node)?]))?;
+        hook.read(|env| convert(env, result))
     }))
 }
 
@@ -87,7 +58,8 @@ fn attributes(env: sys::napi_env, spec: sys::napi_value) -> Result<Vec<(String, 
                 Some(types) => Some(Validate::Types(types)),
                 None => hook(env, attr, "validate")?.map(|hook| {
                     Validate::Hook(Arc::new(move |value: &tarnish::Value| {
-                        hook.call(|env| js::value_to_js(env, value)).map(|_| ())
+                        hook.call(|env| Ok(vec![js::value_to_js(env, value)?]))
+                            .map(|_| ())
                     }))
                 }),
             };

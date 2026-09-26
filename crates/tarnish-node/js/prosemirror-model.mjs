@@ -412,6 +412,79 @@ export class Schema {
   nodeType(name) { return this.nodeList[this.h.expectNodeType(name)] }
 }
 
+function copy(obj) {
+  let copy = {}
+  for (let prop in obj) copy[prop] = obj[prop]
+  return copy
+}
+
+export class DOMParser {
+  constructor(schema, rules) {
+    this.schema = schema
+    this.rules = rules
+    this.h = new native.DomParserHandle(schema.h, rules)
+  }
+
+  parse(dom, options = {}) { return this.h.parse(dom, options) }
+  parseSlice(dom, options = {}) { return this.h.parseSlice(dom, options) }
+
+  static schemaRules(schema) {
+    let rulesOf = type => type.spec.parseDOM || []
+    let order = native.schemaRules(schema.h, schema.markList.map(rulesOf), schema.nodeList.map(rulesOf))
+    return order.map(([ofMark, typeIndex, ruleIndex, named]) => {
+      let type = (ofMark ? schema.markList : schema.nodeList)[typeIndex]
+      let rule = copy(rulesOf(type)[ruleIndex])
+      if (named) rule[ofMark ? "mark" : "node"] = type.name
+      return rule
+    })
+  }
+
+  static fromSchema(schema) {
+    return schema.cached.domParser ||
+      (schema.cached.domParser = new DOMParser(schema, DOMParser.schemaRules(schema)))
+  }
+}
+
+function doc(options) {
+  return options.document || window.document
+}
+
+function gatherToDOM(obj) {
+  let result = {}
+  for (let name in obj) {
+    let toDOM = obj[name].spec.toDOM
+    if (toDOM) result[name] = toDOM
+  }
+  return result
+}
+
+export class DOMSerializer {
+  constructor(nodes, marks) {
+    this.nodes = nodes
+    this.marks = marks
+    this.h = new native.DomSerializerHandle(nodes, marks)
+  }
+
+  serializeFragment(fragment, options = {}, target) { return this.h.serializeFragment(fragment, doc(options), target) }
+  serializeNode(node, options = {}) { return this.h.serializeNode(node, doc(options)) }
+  /// @internal
+  serializeMark(mark, inline, options = {}) { return this.h.serializeMark(mark, inline, doc(options)) }
+  static renderSpec(doc, structure, xmlNS = null) { return native.renderSpec(doc, structure, xmlNS) }
+
+  static fromSchema(schema) {
+    return schema.cached.domSerializer ||
+      (schema.cached.domSerializer = new DOMSerializer(this.nodesFromSchema(schema), this.marksFromSchema(schema)))
+  }
+
+  static nodesFromSchema(schema) {
+    let result = gatherToDOM(schema.nodes)
+    if (!result.text) result.text = node => node.text
+    return result
+  }
+
+  static marksFromSchema(schema) { return gatherToDOM(schema.marks) }
+}
+
 native.register({
   wrapNode: (h, id) => cached(nodes, id, () => h.isText ? new TextNode(h) : new Node(h)),
   wrapFragment: (h, id) => cached(fragments, id, () => new Fragment(h)),
@@ -419,6 +492,7 @@ native.register({
   wrapContentMatch: (h, key) => cached(matches, key, () => new ContentMatch(h)),
   wrapNodeType: (schema, index) => schemas.get(schema).nodeList[index],
   wrapMarkType: (schema, index) => schemas.get(schema).markList[index],
+  wrapSchema: schema => schemas.get(schema),
   wrapResolvedPos: h => new ResolvedPos(h),
   wrapNodeRange: ($from, $to, depth) => new NodeRange($from, $to, depth),
   wrapSlice: (content, openStart, openEnd) => new Slice(content, openStart, openEnd),
