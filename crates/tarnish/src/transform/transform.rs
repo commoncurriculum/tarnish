@@ -1,6 +1,6 @@
 //! Transforms: a document, and the steps that changed it.
 
-use super::map::{Mappable, Mapping};
+use super::map::{Mappable, Mapping, MappingSlice};
 use super::step::{Step, StepResult};
 use super::structure::{self, Wrapper};
 use super::{mark, replace};
@@ -296,11 +296,7 @@ impl Transform {
     }
 
     /// The mapping of the steps from `from` on.
-    pub(crate) fn mapping_from(&self, from: usize) -> Mapping {
+    pub(crate) fn mapping_from(&self, from: usize) -> MappingSlice<'_> {
         self.mapping.slice(from, self.mapping.maps().len())
-    }
-
-    pub(crate) fn map_from(&self, from: usize, pos: usize, assoc: i32) -> usize {
-        self.mapping_from(from).map(pos, assoc)
     }
 }

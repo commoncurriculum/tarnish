@@ -194,7 +194,7 @@ impl MappingHandle {
 
     #[napi]
     pub fn slice<'env>(&self, env: &'env Env, from: u32, to: u32) -> Result<Unknown<'env>> {
-        let sliced = self.with(|mapping| mapping.slice(from as usize, to as usize));
+        let sliced = self.with(|mapping| mapping.slice(from as usize, to as usize).to_mapping());
         wrap_own_mapping(env, sliced)
     }
 

@@ -9,7 +9,7 @@ mod structure;
 #[allow(clippy::module_inception)]
 mod transform;
 
-pub use map::{MapResult, Mappable, Mapping, Recover, StepMap};
+pub use map::{MapResult, Mappable, Mapping, MappingSlice, Recover, StepMap};
 pub use replace::replace_step;
 pub use step::{Step, StepResult};
 pub use structure::{

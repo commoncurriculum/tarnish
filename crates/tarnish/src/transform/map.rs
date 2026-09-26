@@ -325,10 +325,9 @@ impl Mapping {
     }
 
     /// The part of the mapping from map `from` to map `to`.
-    pub fn slice(&self, from: usize, to: usize) -> Mapping {
-        Mapping {
-            maps: self.maps.clone(),
-            mirror: self.mirror.clone(),
+    pub fn slice(&self, from: usize, to: usize) -> MappingSlice<'_> {
+        MappingSlice {
+            mapping: self,
             from,
             to,
         }
@@ -388,23 +387,53 @@ impl Mapping {
         inverse.append_mapping_inverted(self);
         inverse
     }
+}
 
-    fn map_inner(&self, mut pos: usize, assoc: i32) -> (usize, u8) {
+impl Mappable for Mapping {
+    fn map(&self, pos: usize, assoc: i32) -> usize {
+        self.slice(self.from, self.to).map(pos, assoc)
+    }
+
+    fn map_result(&self, pos: usize, assoc: i32) -> MapResult {
+        self.slice(self.from, self.to).map_result(pos, assoc)
+    }
+}
+
+/// A part of a mapping, from map `from` to map `to`, which borrows the mapping's maps.
+#[derive(Clone, Copy, Debug)]
+pub struct MappingSlice<'a> {
+    mapping: &'a Mapping,
+    from: usize,
+    to: usize,
+}
+
+impl MappingSlice<'_> {
+    /// The part as a mapping of its own, which shares the maps until either one adds to them.
+    pub fn to_mapping(self) -> Mapping {
+        Mapping {
+            maps: self.mapping.maps.clone(),
+            mirror: self.mapping.mirror.clone(),
+            from: self.from,
+            to: self.to,
+        }
+    }
+
+    fn map_inner(self, mut pos: usize, assoc: i32) -> (usize, u8) {
+        let maps = self.mapping.maps();
         let mut del_info = 0;
         let mut index = self.from;
         // JavaScript throws a TypeError reading a map past the last; mapping can't fail, so it
         // stops there.
-        let to = self.to.min(self.maps.len());
+        let to = self.to.min(maps.len());
         while index < to {
-            let map = &self.maps[index];
-            let result = map.map_result(pos, assoc);
+            let result = maps[index].map_result(pos, assoc);
             if let Some(recover) = result.recover
-                && let Some(mirror) = self.get_mirror(index)
+                && let Some(mirror) = self.mapping.get_mirror(index)
                 && mirror > index
                 && mirror < to
             {
                 index = mirror + 1;
-                pos = self.maps[mirror].recover(recover);
+                pos = maps[mirror].recover(recover);
                 continue;
             }
             del_info |= result.del_info;
@@ -415,7 +444,7 @@ impl Mapping {
     }
 }
 
-impl Mappable for Mapping {
+impl Mappable for MappingSlice<'_> {
     fn map(&self, pos: usize, assoc: i32) -> usize {
         self.map_inner(pos, assoc).0
     }

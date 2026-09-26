@@ -213,7 +213,7 @@ pub(crate) fn set_block_type(
             };
             if !(node.is_textblock()
                 && !node.has_markup(node_type, attrs_here.as_deref(), None)
-                && can_change_type(tr.doc(), tr.map_from(map_from, pos, 1), node_type)?)
+                && can_change_type(tr.doc(), tr.mapping_from(map_from).map(pos, 1), node_type)?)
             {
                 return Ok(true);
             }
@@ -231,7 +231,7 @@ pub(crate) fn set_block_type(
             if convert_newlines == Some(false) {
                 replace_linebreaks(tr, node, pos, map_from)?;
             }
-            let at = tr.map_from(map_from, pos, 1);
+            let at = tr.mapping_from(map_from).map(pos, 1);
             clear_incompatible(tr, at, node_type, None, convert_newlines.is_none())?;
             let mapping = tr.mapping_from(map_from);
             let start = mapping.map(pos, 1);
@@ -261,7 +261,7 @@ fn replace_newlines(tr: &mut Transform, node: &Node, pos: usize, map_from: usize
     for (offset, child) in node.content().children_with_offsets() {
         let Some(text) = child.text() else { continue };
         for (index, _) in line_breaks(&text.units()) {
-            let start = tr.map_from(map_from, pos + 1 + offset + index, 1);
+            let start = tr.mapping_from(map_from).map(pos + 1 + offset + index, 1);
             let linebreak = schema
                 .linebreak_replacement()
                 .expect("a linebreak replacement")
@@ -277,7 +277,7 @@ fn replace_linebreaks(tr: &mut Transform, node: &Node, pos: usize, map_from: usi
     let schema = node.node_type().schema().clone();
     for (offset, child) in node.content().children_with_offsets() {
         if Some(child.node_type().clone()) == schema.linebreak_replacement() {
-            let start = tr.map_from(map_from, pos + 1 + offset, 1);
+            let start = tr.mapping_from(map_from).map(pos + 1 + offset, 1);
             let newline = schema.text("\n", &[])?;
             tr.replace_with(start, start + 1, Fragment::from_node(newline))?;
         }
