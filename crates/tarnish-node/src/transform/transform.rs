@@ -291,8 +291,8 @@ impl TransformHandle {
         types_after: Option<Vec<Option<WrapperArg>>>,
     ) -> Result<()> {
         let pos = js::pos(env, pos)?;
-        let types = types_after.map(structure::wrappers).transpose()?;
-        self.run(env, |tr| tr.split(pos, depth as usize, types.as_deref()))
+        let types = structure::wrappers(types_after.unwrap_or_default())?;
+        self.run(env, |tr| tr.split(pos, depth as usize, &types))
     }
 
     #[napi]

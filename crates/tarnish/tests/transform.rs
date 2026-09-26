@@ -3,7 +3,7 @@
 
 use tarnish::js::json::stringify;
 use tarnish::json;
-use tarnish::transform::{Wrapper, can_split, replace_step};
+use tarnish::transform::{Transform, Wrapper, can_split, replace_step};
 use tarnish::{Node, Schema, Slice, api};
 
 /// A figure's title can't be made up, having an attribute with no default, so nothing fills
@@ -49,11 +49,30 @@ fn a_fit_opens_a_node_nothing_fills_empty() {
 fn splitting_no_levels_reads_the_type_of_a_node_that_isnt_there() {
     let schema = schema();
     let doc = doc(&schema);
-    let error = can_split(&doc, 2, 0, None).expect_err("a TypeError");
+    let error = can_split(&doc, 2, 0, &[]).expect_err("a TypeError");
     assert_eq!(error.class(), "Error");
     let paragraph = Wrapper {
         node_type: schema.node_type("paragraph").expect("paragraph"),
         attrs: None,
     };
-    assert!(!can_split(&doc, 2, 0, Some(&[Some(paragraph)])).expect("an answer"));
+    assert!(!can_split(&doc, 2, 0, &[Some(paragraph)]).expect("an answer"));
+}
+
+#[test]
+fn joining_before_the_start_is_out_of_range() {
+    let error = Transform::new(doc(&schema()))
+        .join(0, 1)
+        .expect_err("a RangeError");
+    assert_eq!(error.to_string(), "RangeError: Position -1 out of range");
+}
+
+#[test]
+fn splitting_past_the_top_fails_the_step() {
+    let error = Transform::new(doc(&schema()))
+        .split(2, 2, &[])
+        .expect_err("a TransformError");
+    assert_eq!(
+        error.to_string(),
+        "TransformError: Inserted content deeper than insertion position"
+    );
 }
