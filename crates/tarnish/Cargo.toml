@@ -13,6 +13,7 @@ json-event-parser = "0.2"
 serde = "1"
 # JSON.parse rounds every number correctly; serde_json does only with float_roundtrip.
 serde_json = { version = "1", features = ["float_roundtrip"] }
-libc = "0.2"
-libmimalloc-sys = { version = "0.1", default-features = false }
-psm = "0.1"
+stacker = "0.1"
+
+[dev-dependencies]
+mimalloc = { version = "0.1", default-features = false }

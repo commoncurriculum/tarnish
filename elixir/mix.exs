@@ -19,7 +19,7 @@ defmodule Tarnish.MixProject do
   defp deps do
     [
       {:rustler, "~> 0.38.0", runtime: false},
-      # Rustler's compiler needs Jason too; the tests read the fixtures with it.
+      # The tests read the fixtures with it.
       {:jason, "~> 1.4", runtime: false}
     ]
   end

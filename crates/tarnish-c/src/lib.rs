@@ -1,162 +1,177 @@
-//! tarnish as a C library, whose interface `include/tarnish.h` declares: ProseMirror's JSON in
-//! and out, as UTF-8 strings.
-//!
-//! # Safety
-//!
-//! Every function takes pointers from C, each of which must be NULL or valid: strings
-//! NUL-terminated, a schema one `tarnish_schema_new` made and nothing has freed, `error` and
-//! `mapped` writable, and a string passed to `tarnish_free` one the library returned.
+//! tarnish as a C library: schemas and documents as handles, and ProseMirror's JSON in and out
+//! as UTF-8 strings. `include/tarnish.h`, which the `header` example writes, declares it.
 
-use std::ffi::{CStr, CString, c_char, c_int};
+#![forbid(unsafe_code)]
+
+use std::ffi::c_int;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::ptr;
 
+use safer_ffi::prelude::*;
 use tarnish::js::json::stringify;
-use tarnish::{Error, Result, Schema, Value, api, stack};
+use tarnish::{Error, Node, Result, Schema, Value, api};
 
 #[global_allocator]
-static GLOBAL: tarnish::allocator::MiMalloc = tarnish::allocator::MiMalloc;
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+/// A schema, built once from its spec.
+#[derive_ReprC]
+#[repr(opaque)]
 pub struct TarnishSchema(Schema);
 
+/// A document, or any node, read once from its JSON.
+#[derive_ReprC]
+#[repr(opaque)]
+pub struct TarnishNode(Node);
+
+/// Where a function that can fail puts its error: "Class: message", the class naming the error
+/// ProseMirror throws (RangeError, SyntaxError, ReplaceError, TransformError or Error).
+type ErrorOut<'a> = Option<Out<'a, Option<char_p::Box>>>;
+
 /// `JSON.parse` of the string.
-fn parse(json: *const c_char) -> Result<Value> {
-    if json.is_null() {
-        return Err(Error::Other("A JSON string was NULL".into()));
-    }
-    let text = unsafe { CStr::from_ptr(json) }
-        .to_str()
+fn parse(json: Option<char_p::Ref<'_>>) -> Result<Value> {
+    let json = json.ok_or_else(|| Error::Other("A JSON string was NULL".into()))?;
+    let text = std::str::from_utf8(json.to_bytes())
         .map_err(|_| Error::Other("A JSON string wasn't UTF-8".into()))?;
     tarnish::json::from_str(text).map_err(|_| Error::Syntax("Invalid JSON".into()))
 }
 
-fn string(text: String) -> *mut c_char {
-    CString::new(text).map_or(ptr::null_mut(), CString::into_raw)
+/// The text as a C string. JSON never holds a raw NUL, but an error's message may.
+fn string(text: String) -> char_p::Box {
+    char_p::Box::try_from(text.replace('\0', "\\u0000")).expect("text without NUL")
 }
 
-/// Run `f` on a stack of its own, catching panics, and report an error through `error`.
-fn run<T>(error: *mut *mut c_char, failed: T, f: impl FnOnce() -> Result<T>) -> T {
-    let outcome = catch_unwind(AssertUnwindSafe(|| stack::run(f))).unwrap_or_else(|_| {
+fn given<'a, T>(pointer: Option<&'a T>, what: &str) -> Result<&'a T> {
+    pointer.ok_or_else(|| Error::Other(format!("The {what} was NULL")))
+}
+
+/// What `f` gives, or `None`, having put the error, or a panic's, in `error`.
+fn run<T>(error: ErrorOut<'_>, f: impl FnOnce() -> Result<T>) -> Option<T> {
+    let outcome = catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| {
         Err(Error::Other(
             "tarnish panicked; this is a bug in tarnish".into(),
         ))
     });
     match outcome {
-        Ok(result) => result,
+        Ok(result) => Some(result),
         Err(failure) => {
-            if !error.is_null() {
-                unsafe { *error = string(failure.to_string()) };
+            if let Some(error) = error {
+                error.write(Some(string(failure.to_string())));
             }
-            failed
+            None
         }
     }
 }
 
-fn schema<'a>(schema: *const TarnishSchema) -> Result<&'a Schema> {
-    unsafe { schema.as_ref() }
-        .map(|schema| &schema.0)
-        .ok_or_else(|| Error::Other("The schema was NULL".into()))
-}
-
-/// # Safety
-///
-/// See the [crate's](crate) contract for pointers.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn tarnish_schema_new(
-    spec_json: *const c_char,
-    error: *mut *mut c_char,
-) -> *mut TarnishSchema {
-    run(error, ptr::null_mut(), || {
+/// A schema from its spec: an object of "nodes" and "marks", each an object of the types' specs
+/// in order or an array of `[name, spec]` pairs, and "topNode". Free it with
+/// `tarnish_schema_free`.
+#[ffi_export]
+fn tarnish_schema_new(
+    spec_json: Option<char_p::Ref<'_>>,
+    error: ErrorOut<'_>,
+) -> Option<repr_c::Box<TarnishSchema>> {
+    run(error, || {
         let schema = api::schema(&parse(spec_json)?)?;
-        Ok(Box::into_raw(Box::new(TarnishSchema(schema))))
+        Ok(Box::new(TarnishSchema(schema)).into())
     })
 }
 
-/// # Safety
-///
-/// See the [crate's](crate) contract for pointers.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn tarnish_schema_free(schema: *mut TarnishSchema) {
-    if !schema.is_null() {
-        drop(unsafe { Box::from_raw(schema) });
-    }
+/// Frees a schema. A node read with it keeps what it needs of it.
+#[ffi_export]
+fn tarnish_schema_free(schema: Option<repr_c::Box<TarnishSchema>>) {
+    drop(schema);
 }
 
-/// # Safety
-///
-/// See the [crate's](crate) contract for pointers.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn tarnish_check(
-    schema_ptr: *const TarnishSchema,
-    doc_json: *const c_char,
-    error: *mut *mut c_char,
-) -> bool {
-    run(error, false, || {
-        api::check(schema(schema_ptr)?, &parse(doc_json)?)?;
-        Ok(true)
+/// A node read from its JSON, as `Node.fromJSON` reads it. Free it with `tarnish_node_free`.
+#[ffi_export]
+fn tarnish_node_from_json(
+    schema: Option<&TarnishSchema>,
+    json: Option<char_p::Ref<'_>>,
+    error: ErrorOut<'_>,
+) -> Option<repr_c::Box<TarnishNode>> {
+    run(error, || {
+        let node = Node::from_json(&given(schema, "schema")?.0, &parse(json)?)?;
+        Ok(Box::new(TarnishNode(node)).into())
     })
 }
 
-/// # Safety
-///
-/// See the [crate's](crate) contract for pointers.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn tarnish_apply_steps(
-    schema_ptr: *const TarnishSchema,
-    doc_json: *const c_char,
-    steps_json: *const c_char,
-    error: *mut *mut c_char,
-) -> *mut c_char {
-    run(error, ptr::null_mut(), || {
-        let doc = api::apply_steps(schema(schema_ptr)?, &parse(doc_json)?, &parse(steps_json)?)?;
-        Ok(string(stringify(&doc)))
+/// The node's JSON, which is what `JSON.stringify` writes for it, byte for byte.
+#[ffi_export]
+fn tarnish_node_to_json(node: &TarnishNode) -> char_p::Box {
+    string(stringify(&node.0.to_json()))
+}
+
+/// Frees a node.
+#[ffi_export]
+fn tarnish_node_free(node: Option<repr_c::Box<TarnishNode>>) {
+    drop(node);
+}
+
+/// Whether the node and its descendants conform to the schema.
+#[ffi_export]
+fn tarnish_check(node: Option<&TarnishNode>, error: ErrorOut<'_>) -> bool {
+    run(error, || given(node, "node")?.0.check()).is_some()
+}
+
+/// The document with the steps, a JSON array, applied in order. Free it with
+/// `tarnish_node_free`.
+#[ffi_export]
+fn tarnish_apply_steps(
+    node: Option<&TarnishNode>,
+    steps_json: Option<char_p::Ref<'_>>,
+    error: ErrorOut<'_>,
+) -> Option<repr_c::Box<TarnishNode>> {
+    run(error, || {
+        let applied = api::apply_steps(&given(node, "node")?.0, &parse(steps_json)?)?;
+        Ok(Box::new(TarnishNode(applied)).into())
     })
 }
 
-/// # Safety
-///
-/// See the [crate's](crate) contract for pointers.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn tarnish_invert_steps(
-    schema_ptr: *const TarnishSchema,
-    doc_json: *const c_char,
-    steps_json: *const c_char,
-    error: *mut *mut c_char,
-) -> *mut c_char {
-    run(error, ptr::null_mut(), || {
-        let steps = api::invert_steps(schema(schema_ptr)?, &parse(doc_json)?, &parse(steps_json)?)?;
-        Ok(string(stringify(&steps)))
+/// The steps, as a JSON array, that undo the steps applied to the document, last first.
+#[ffi_export]
+fn tarnish_invert_steps(
+    node: Option<&TarnishNode>,
+    steps_json: Option<char_p::Ref<'_>>,
+    error: ErrorOut<'_>,
+) -> Option<char_p::Box> {
+    run(error, || {
+        let inverted = api::invert_steps(&given(node, "node")?.0, &parse(steps_json)?)?;
+        Ok(string(stringify(&inverted)))
     })
 }
 
-/// # Safety
-///
-/// See the [crate's](crate) contract for pointers.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn tarnish_map_position(
-    schema_ptr: *const TarnishSchema,
-    steps_json: *const c_char,
+/// Maps a position through the changes the steps make, into `mapped`. With `assoc` below zero,
+/// a position where content is inserted stays before it; otherwise it moves after it.
+#[ffi_export]
+fn tarnish_map_position(
+    schema: Option<&TarnishSchema>,
+    steps_json: Option<char_p::Ref<'_>>,
     pos: usize,
     assoc: c_int,
-    mapped: *mut usize,
-    error: *mut *mut c_char,
+    mapped: Option<Out<'_, usize>>,
+    error: ErrorOut<'_>,
 ) -> bool {
-    run(error, false, || {
-        if mapped.is_null() {
-            return Err(Error::Other("The pointer to map into was NULL".into()));
-        }
-        let pos = api::map_position(schema(schema_ptr)?, &parse(steps_json)?, pos, assoc)?;
-        unsafe { *mapped = pos };
-        Ok(true)
+    run(error, || {
+        let mapped = mapped.ok_or_else(|| Error::Other("The place to map into was NULL".into()))?;
+        let pos = api::map_position(&given(schema, "schema")?.0, &parse(steps_json)?, pos, assoc)?;
+        mapped.write(pos);
+        Ok(())
     })
+    .is_some()
 }
 
-/// # Safety
-///
-/// See the [crate's](crate) contract for pointers.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn tarnish_free(string: *mut c_char) {
-    if !string.is_null() {
-        drop(unsafe { CString::from_raw(string) });
-    }
+/// Frees a string the library returned.
+#[ffi_export]
+fn tarnish_free(string: Option<char_p::Box>) {
+    drop(string);
+}
+
+/// Writes `include/tarnish.h`.
+#[cfg(feature = "headers")]
+pub fn write_header(path: &str) -> std::io::Result<()> {
+    safer_ffi::headers::builder()
+        .with_guard("TARNISH_H")
+        .with_banner(include_str!("../include/banner.h"))
+        .to_file(path)?
+        .generate()
 }

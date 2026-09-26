@@ -12,6 +12,6 @@ crate-type = ["cdylib"]
 doctest = false
 
 [dependencies]
+mimalloc = { version = "0.1", default-features = false }
 rustler = { version = "0.38", features = ["big_integer"] }
-ryu-js = "1"
 tarnish = { path = "../tarnish" }

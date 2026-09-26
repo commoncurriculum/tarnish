@@ -7,6 +7,7 @@ use super::schema::Schema;
 use crate::error::{Error, Result};
 use crate::js;
 use crate::json::{Map, NULL, Value};
+use crate::stack;
 
 /// A piece cut out of a document: its content, and how deep it is cut open at each end.
 #[derive(Clone, Debug, PartialEq)]
@@ -171,7 +172,7 @@ fn remove_range(content: &Fragment, from: usize, to: usize) -> Result<Fragment> 
         return Err(Error::Range("Removing non-flat range".into()));
     }
     let child = child.expect("a child around the position");
-    let inner = remove_range(child.content(), from - offset - 1, to - offset - 1)?;
+    let inner = stack::grow(|| remove_range(child.content(), from - offset - 1, to - offset - 1))?;
     Ok(content.replace_child(index, child.copy(inner)))
 }
 
@@ -201,18 +202,20 @@ fn insert_into(
         ));
     }
     let child = child.expect("a child around the position");
-    let inner = insert_into(
-        child.content(),
-        dist - offset - 1,
-        insert,
-        if index == 0 { open_start - 1 } else { 0 },
-        if index + 1 == content.child_count() {
-            open_end - 1
-        } else {
-            0
-        },
-        Some(child),
-    )?;
+    let inner = stack::grow(|| {
+        insert_into(
+            child.content(),
+            dist - offset - 1,
+            insert,
+            if index == 0 { open_start - 1 } else { 0 },
+            if index + 1 == content.child_count() {
+                open_end - 1
+            } else {
+                0
+            },
+            Some(child),
+        )
+    })?;
     Ok(inner.map(|inner| content.replace_child(index, child.copy(inner))))
 }
 
@@ -237,11 +240,10 @@ fn replace_outer(
     slice: &Slice,
     depth: usize,
 ) -> Result<Node> {
-    crate::stack::check()?;
     let index = from.index(depth);
     let node = from.node(depth);
     if index == to.index(depth) && depth < from.depth() - slice.open_start {
-        let inner = replace_outer(from, to, slice, depth + 1)?;
+        let inner = stack::grow(|| replace_outer(from, to, slice, depth + 1))?;
         Ok(node.copy(node.content().replace_child(index, inner)))
     } else if slice.content.size() == 0 {
         close(node, replace_two_way(from, to, depth)?)
@@ -358,20 +360,26 @@ fn replace_three_way(
     match (open_start, open_end) {
         (Some(open_start), Some(open_end)) if start.index(depth) == end.index(depth) => {
             check_join(open_start, open_end)?;
-            let inner = replace_three_way(from, start, end, to, depth + 1)?;
+            let inner = stack::grow(|| replace_three_way(from, start, end, to, depth + 1))?;
             add_node(close(open_start, inner)?, &mut content);
         }
         _ => {
             if let Some(open_start) = open_start {
                 add_node(
-                    close(open_start, replace_two_way(from, start, depth + 1)?)?,
+                    close(
+                        open_start,
+                        stack::grow(|| replace_two_way(from, start, depth + 1))?,
+                    )?,
                     &mut content,
                 );
             }
             add_range(Some(start), Some(end), depth, &mut content);
             if let Some(open_end) = open_end {
                 add_node(
-                    close(open_end, replace_two_way(end, to, depth + 1)?)?,
+                    close(
+                        open_end,
+                        stack::grow(|| replace_two_way(end, to, depth + 1))?,
+                    )?,
                     &mut content,
                 );
             }
@@ -382,13 +390,12 @@ fn replace_three_way(
 }
 
 fn replace_two_way(from: &ResolvedPos, to: &ResolvedPos, depth: usize) -> Result<Fragment> {
-    crate::stack::check()?;
     let mut content = Vec::new();
     add_range(None, Some(from), depth, &mut content);
     if from.depth() > depth {
         let node = joinable(from, to, depth + 1)?;
         add_node(
-            close(node, replace_two_way(from, to, depth + 1)?)?,
+            close(node, stack::grow(|| replace_two_way(from, to, depth + 1))?)?,
             &mut content,
         );
     }

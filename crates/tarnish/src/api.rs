@@ -1,5 +1,5 @@
-//! The operations the bindings expose, on ProseMirror's JSON: each binding only turns its own
-//! values into [`Value`]s and back.
+//! The operations the bindings expose. Specs and steps are ProseMirror's JSON; documents are
+//! nodes, which a binding reads from JSON once and keeps.
 
 use crate::error::{Error, Result};
 use crate::json::Value;
@@ -12,19 +12,14 @@ pub fn schema(spec: &Value) -> Result<Schema> {
     Schema::new(SchemaSpec::from_json(spec)?)
 }
 
-/// Checks that the document conforms to the schema.
-pub fn check(schema: &Schema, doc: &Value) -> Result<()> {
-    Node::from_json(schema, doc)?.check()
-}
-
 /// The document with the steps applied in order.
-pub fn apply_steps(schema: &Schema, doc: &Value, steps: &Value) -> Result<Value> {
-    Ok(transform(schema, doc, steps)?.doc().to_json())
+pub fn apply_steps(doc: &Node, steps: &Value) -> Result<Node> {
+    Ok(transform(doc, steps)?.doc().clone())
 }
 
 /// The steps that undo the steps applied to the document, last first.
-pub fn invert_steps(schema: &Schema, doc: &Value, steps: &Value) -> Result<Value> {
-    let tr = transform(schema, doc, steps)?;
+pub fn invert_steps(doc: &Node, steps: &Value) -> Result<Value> {
+    let tr = transform(doc, steps)?;
     let inverted = tr
         .steps()
         .iter()
@@ -55,9 +50,9 @@ fn step_list(schema: &Schema, json: &Value) -> Result<Vec<Step>> {
     }
 }
 
-fn transform(schema: &Schema, doc: &Value, steps: &Value) -> Result<Transform> {
-    let mut tr = Transform::new(Node::from_json(schema, doc)?);
-    for step in step_list(schema, steps)? {
+fn transform(doc: &Node, steps: &Value) -> Result<Transform> {
+    let mut tr = Transform::new(doc.clone());
+    for step in step_list(doc.node_type().schema(), steps)? {
         tr.step(step)?;
     }
     Ok(tr)

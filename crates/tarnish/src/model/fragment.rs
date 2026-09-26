@@ -9,6 +9,7 @@ use super::schema::Schema;
 use crate::error::{Error, Result};
 use crate::js;
 use crate::json::Value;
+use crate::stack;
 use crate::text::Text;
 
 /// What [`Fragment::nodes_between`] calls for each node: the node, its position, its parent,
@@ -140,7 +141,6 @@ impl Fragment {
         node_start: usize,
         parent: Option<&Node>,
     ) -> Result<()> {
-        crate::stack::check()?;
         let mut pos = 0;
         for (index, child) in self.children.iter().enumerate() {
             if pos >= to {
@@ -152,12 +152,14 @@ impl Fragment {
                 && child.content().size() > 0
             {
                 let start = pos + 1;
-                child.nodes_between(
-                    from.saturating_sub(start),
-                    child.content().size().min(to - start),
-                    f,
-                    node_start + start,
-                )?;
+                stack::grow(|| {
+                    child.nodes_between(
+                        from.saturating_sub(start),
+                        child.content().size().min(to - start),
+                        f,
+                        node_start + start,
+                    )
+                })?;
             }
             pos = end;
         }
@@ -257,10 +259,12 @@ impl Fragment {
                             Some(text) => child.with_nonempty_text(
                                 text.slice(from.saturating_sub(pos), text.len().min(to - pos)),
                             ),
-                            None => child.cut_content(
-                                from.saturating_sub(pos + 1),
-                                child.content().size().min(to - pos - 1),
-                            ),
+                            None => stack::grow(|| {
+                                child.cut_content(
+                                    from.saturating_sub(pos + 1),
+                                    child.content().size().min(to - pos - 1),
+                                )
+                            }),
                         }
                     } else {
                         child.clone()
@@ -362,17 +366,27 @@ impl Fragment {
 
     /// `toString`: the children, described, in angle brackets.
     pub fn to_debug_string(&self) -> Result<String> {
-        Ok(format!("<{}>", self.to_string_inner()?))
+        let mut out = String::from("<");
+        self.write_debug(&mut out)?;
+        out.push('>');
+        Ok(out)
     }
 
-    /// The children described, without the angle brackets.
+    /// `toStringInner`: the children described, without the angle brackets.
     pub fn to_string_inner(&self) -> Result<String> {
-        let described = self
-            .children
-            .iter()
-            .map(Node::to_debug_string)
-            .collect::<Result<Vec<_>>>()?;
-        Ok(described.join(", "))
+        let mut out = String::new();
+        self.write_debug(&mut out)?;
+        Ok(out)
+    }
+
+    pub(crate) fn write_debug(&self, out: &mut String) -> Result<()> {
+        for (index, child) in self.children.iter().enumerate() {
+            if index > 0 {
+                out.push_str(", ");
+            }
+            stack::grow(|| child.write_debug(out))?;
+        }
+        Ok(())
     }
 
     /// The children as JSON, or `null` when there are none.
@@ -380,7 +394,12 @@ impl Fragment {
         if self.children.is_empty() {
             return Value::Null;
         }
-        Value::Array(self.children.iter().map(Node::to_json).collect())
+        Value::Array(
+            self.children
+                .iter()
+                .map(|child| stack::grow(|| child.to_json()))
+                .collect(),
+        )
     }
 
     pub fn from_json(schema: &Schema, json: &Value) -> Result<Fragment> {
@@ -392,7 +411,7 @@ impl Fragment {
         };
         let nodes = nodes
             .iter()
-            .map(|node| Node::from_json(schema, node))
+            .map(|node| stack::grow(|| Node::from_json(schema, node)))
             .collect::<Result<Vec<_>>>()?;
         Ok(Fragment::from_array(nodes))
     }
@@ -405,7 +424,7 @@ impl PartialEq for Fragment {
                 .children
                 .iter()
                 .zip(other.children.iter())
-                .all(|(a, b)| a == b)
+                .all(|(a, b)| stack::grow(|| a == b))
     }
 }
 

@@ -7,6 +7,7 @@ use super::{Dom, NodeKind};
 use crate::error::{Error, Result};
 use crate::json::{Map, Value};
 use crate::model::{Fragment, Mark, Node};
+use crate::stack;
 
 /// What a node's or mark's `toDOM` gives: ProseMirror's `DOMOutputSpec`.
 #[derive(Clone)]
@@ -117,7 +118,7 @@ impl<N: Clone> DomSerializer<N> {
                     "Content hole not allowed in a leaf node spec".into(),
                 ));
             }
-            self.serialize_fragment(dom, node.content(), Some(content_dom))?;
+            stack::grow(|| self.serialize_fragment(dom, node.content(), Some(content_dom)))?;
         }
         Ok(rendered.dom)
     }
@@ -264,7 +265,7 @@ fn render<D: Dom>(
                 dom.append_child(&element, &text)?;
             }
             _ => {
-                let inner = render(dom, &child.spec(), namespace, block_arrays_in)?;
+                let inner = stack::grow(|| render(dom, &child.spec(), namespace, block_arrays_in))?;
                 dom.append_child(&element, &inner.dom)?;
                 if let Some(inner_content) = inner.content_dom {
                     if content_dom.is_some() {

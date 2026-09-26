@@ -64,7 +64,7 @@ pub fn to_string(value: &Value) -> String {
             .iter()
             .map(|item| match item {
                 Value::Null => String::new(),
-                other => to_string(other),
+                other => crate::stack::grow(|| to_string(other)),
             })
             .collect::<Vec<_>>()
             .join(","),

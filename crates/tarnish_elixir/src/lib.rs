@@ -1,11 +1,12 @@
-//! The Elixir binding of tarnish: documents, steps and specs in and out as terms, the way Jason
-//! reads them from ProseMirror's JSON, and schemas as resources built once. Each call runs on a
-//! stack of its own, since a dirty scheduler's is too small for a deeply nested document.
+//! The Elixir binding of tarnish: specs, steps and JSON in and out as terms, the way Jason reads
+//! them from ProseMirror's JSON, and schemas and documents as resources, built once.
+
+#![forbid(unsafe_code)]
 
 mod term;
 
 use rustler::{Encoder, Env, NifResult, Resource, ResourceArc, Term};
-use tarnish::{Error, Schema, api, stack};
+use tarnish::{Error, Node, Schema, api, etf};
 
 rustler::atoms! {
     ok,
@@ -18,15 +19,20 @@ rustler::atoms! {
 }
 
 #[global_allocator]
-static GLOBAL: tarnish::allocator::MiMalloc = tarnish::allocator::MiMalloc;
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 pub struct SchemaResource(Schema);
 
 #[rustler::resource_impl]
 impl Resource for SchemaResource {}
 
+pub struct NodeResource(Node);
+
+#[rustler::resource_impl]
+impl Resource for NodeResource {}
+
 /// `{:error, {kind, message}}`, the kind naming the class ProseMirror throws.
-fn failure<'a>(env: Env<'a>, failed: Error) -> Term<'a> {
+fn failure(env: Env, failed: Error) -> Term {
     let kind = match &failed {
         Error::Range(_) => range_error(),
         Error::Syntax(_) => syntax_error(),
@@ -49,54 +55,61 @@ fn respond<'a, T>(
     }
 }
 
-#[rustler::nif(schedule = "DirtyCpu")]
-fn schema<'a>(env: Env<'a>, spec: Term<'a>) -> NifResult<Term<'a>> {
-    stack::run(|| {
-        let schema = api::schema(&term::read(spec)?);
-        Ok(respond(env, schema, |schema| {
-            ResourceArc::new(SchemaResource(schema)).encode(env)
-        }))
-    })
+fn node(env: Env, node: Node) -> Term {
+    ResourceArc::new(NodeResource(node)).encode(env)
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
-fn check<'a>(
+fn schema<'a>(env: Env<'a>, spec: Term<'a>) -> NifResult<Term<'a>> {
+    let schema = api::schema(&term::read(spec)?);
+    Ok(respond(env, schema, |schema| {
+        ResourceArc::new(SchemaResource(schema)).encode(env)
+    }))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn node_from_json<'a>(
     env: Env<'a>,
     schema: ResourceArc<SchemaResource>,
-    doc: Term<'a>,
+    json: Term<'a>,
 ) -> NifResult<Term<'a>> {
-    stack::run(|| {
-        Ok(match api::check(&schema.0, &term::read(doc)?) {
-            Ok(()) => ok().encode(env),
-            Err(failed) => failure(env, failed),
-        })
-    })
+    let doc = Node::from_json(&schema.0, &term::read(json)?);
+    Ok(respond(env, doc, |doc| node(env, doc)))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn to_json(env: Env, doc: ResourceArc<NodeResource>) -> Term {
+    term::make(env, &etf::write_node(&doc.0))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn check(env: Env, doc: ResourceArc<NodeResource>) -> Term {
+    match doc.0.check() {
+        Ok(()) => ok().encode(env),
+        Err(failed) => failure(env, failed),
+    }
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
 fn apply_steps<'a>(
     env: Env<'a>,
-    schema: ResourceArc<SchemaResource>,
-    doc: Term<'a>,
+    doc: ResourceArc<NodeResource>,
     steps: Term<'a>,
 ) -> NifResult<Term<'a>> {
-    stack::run(|| {
-        let applied = api::apply_steps(&schema.0, &term::read(doc)?, &term::read(steps)?);
-        Ok(respond(env, applied, |doc| term::write(env, &doc)))
-    })
+    let applied = api::apply_steps(&doc.0, &term::read(steps)?);
+    Ok(respond(env, applied, |doc| node(env, doc)))
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
 fn invert_steps<'a>(
     env: Env<'a>,
-    schema: ResourceArc<SchemaResource>,
-    doc: Term<'a>,
+    doc: ResourceArc<NodeResource>,
     steps: Term<'a>,
 ) -> NifResult<Term<'a>> {
-    stack::run(|| {
-        let inverted = api::invert_steps(&schema.0, &term::read(doc)?, &term::read(steps)?);
-        Ok(respond(env, inverted, |steps| term::write(env, &steps)))
-    })
+    let inverted = api::invert_steps(&doc.0, &term::read(steps)?);
+    Ok(respond(env, inverted, |steps| {
+        term::make(env, &etf::write(&steps))
+    }))
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
@@ -107,10 +120,8 @@ fn map_position<'a>(
     pos: usize,
     assoc: i32,
 ) -> NifResult<Term<'a>> {
-    stack::run(|| {
-        let mapped = api::map_position(&schema.0, &term::read(steps)?, pos, assoc);
-        Ok(respond(env, mapped, |pos| pos.encode(env)))
-    })
+    let mapped = api::map_position(&schema.0, &term::read(steps)?, pos, assoc);
+    Ok(respond(env, mapped, |pos| pos.encode(env)))
 }
 
 rustler::init!("Elixir.Tarnish.Native");

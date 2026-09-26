@@ -8,6 +8,7 @@ use crate::model::{
     Attrs, ContentMatch, Fragment, Mark, MarkType, Node, NodeType, ResolvedPos, Schema, Slice,
     Whitespace,
 };
+use crate::stack;
 use crate::text::{Text, is_js_space};
 
 /// What a rule's `getAttrs` gives: `false` to not match, or the attributes, where `None` is
@@ -1048,7 +1049,7 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
             }
             let current = child.expect("a child before the end");
             self.find_at_point(parent, index)?;
-            self.add_dom(&current, marks)?;
+            stack::grow(|| self.add_dom(&current, marks))?;
             child = dom.next_sibling(&current)?;
             index += 1;
         }

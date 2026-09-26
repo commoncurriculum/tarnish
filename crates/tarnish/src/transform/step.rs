@@ -5,6 +5,7 @@ use crate::error::{Error, Result};
 use crate::js;
 use crate::json::{Map, NULL, Value};
 use crate::model::{Fragment, Mark, Node, Schema, Slice};
+use crate::stack;
 
 /// A step's outcome: the changed document, or why the step can't apply to the document.
 #[derive(Clone, Debug)]
@@ -128,7 +129,7 @@ fn map_fragment(fragment: &Fragment, f: &dyn Fn(&Node, &Node) -> Node, parent: &
         .map(|child| {
             let mut mapped = child.clone();
             if child.content().size() > 0 {
-                mapped = mapped.copy(map_fragment(child.content(), f, child));
+                mapped = mapped.copy(stack::grow(|| map_fragment(child.content(), f, child)));
             }
             if mapped.is_inline() {
                 mapped = f(&mapped, parent);

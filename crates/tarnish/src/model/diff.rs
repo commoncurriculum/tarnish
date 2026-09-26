@@ -1,6 +1,7 @@
 //! Where two fragments start and stop differing.
 
 use super::fragment::Fragment;
+use crate::stack;
 
 pub(crate) fn find_diff_start(a: &Fragment, b: &Fragment, mut pos: usize) -> Option<usize> {
     for index in 0.. {
@@ -37,7 +38,8 @@ pub(crate) fn find_diff_start(a: &Fragment, b: &Fragment, mut pos: usize) -> Opt
             return Some(pos);
         }
         if (child_a.content().size() > 0 || child_b.content().size() > 0)
-            && let Some(inner) = find_diff_start(child_a.content(), child_b.content(), pos + 1)
+            && let Some(inner) =
+                stack::grow(|| find_diff_start(child_a.content(), child_b.content(), pos + 1))
         {
             return Some(inner);
         }
@@ -95,8 +97,9 @@ pub(crate) fn find_diff_end(
             return Some((pos_a, pos_b));
         }
         if (child_a.content().size() > 0 || child_b.content().size() > 0)
-            && let Some(inner) =
+            && let Some(inner) = stack::grow(|| {
                 find_diff_end(child_a.content(), child_b.content(), pos_a - 1, pos_b - 1)
+            })
         {
             return Some(inner);
         }

@@ -6,7 +6,7 @@ use std::time::Instant;
 use tarnish::{Node, api, json};
 
 #[global_allocator]
-static GLOBAL: tarnish::allocator::MiMalloc = tarnish::allocator::MiMalloc;
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn median(run: &mut dyn FnMut()) -> f64 {
     for _ in 0..300 {
@@ -39,7 +39,20 @@ fn main() {
     });
     time("toJSON", &mut || drop(node.to_json()));
     time("check", &mut || node.check().unwrap());
+    let written = tarnish::etf::write(doc);
+    time("etf::write", &mut || drop(tarnish::etf::write(doc)));
+    time("etf::write_node", &mut || {
+        drop(tarnish::etf::write_node(&node))
+    });
+    time("etf::read", &mut || {
+        drop(tarnish::etf::read(&written).unwrap())
+    });
+    let text = tarnish::js::json::stringify(doc);
+    time("json::from_str", &mut || {
+        drop(json::from_str(&text).unwrap())
+    });
+    time("Value::clone", &mut || drop(doc.clone()));
     time("apply 10 steps", &mut || {
-        drop(api::apply_steps(&schema, doc, steps).unwrap())
+        drop(api::apply_steps(&node, steps).unwrap())
     });
 }

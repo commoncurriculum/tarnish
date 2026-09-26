@@ -2,11 +2,14 @@
 //! schema, and apply the steps an editor sends, without running JavaScript.
 //!
 //! Positions count UTF-16 units, as they do in the browser, so a step lands where it did there.
+//! Documents may nest as deeply as memory allows.
 
-pub mod allocator;
+#![forbid(unsafe_code)]
+
 pub mod api;
 pub mod dom;
 pub mod error;
+pub mod etf;
 pub mod js;
 pub mod json;
 pub mod model;

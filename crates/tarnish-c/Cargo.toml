@@ -9,9 +9,18 @@ description = "tarnish as a C library: ProseMirror's JSON in and out, for any la
 
 [lib]
 name = "tarnish_c"
-crate-type = ["cdylib", "staticlib"]
+crate-type = ["cdylib", "staticlib", "rlib"]
 test = false
 doctest = false
 
+[features]
+headers = ["safer-ffi/headers"]
+
 [dependencies]
+mimalloc = { version = "0.1", default-features = false }
+safer-ffi = "0.1"
 tarnish = { path = "../tarnish" }
+
+[[example]]
+name = "header"
+required-features = ["headers"]

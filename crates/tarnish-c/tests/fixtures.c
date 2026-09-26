@@ -40,16 +40,6 @@ static void fail(const char *test, const char *what, const char *expected, const
     fprintf(stderr, "%s: %s\n  expected: %s\n  actual:   %s\n", test, what, expected, actual ? actual : "(NULL)");
 }
 
-/* Compares the library's result, or its error, with the text expected, and frees both. */
-static void expect(const char *test, const char *what, const char *expected, char *actual, char *error) {
-    if (!actual)
-        fail(test, what, expected, error);
-    else if (strcmp(actual, expected) != 0)
-        fail(test, what, expected, actual);
-    tarnish_free(actual);
-    tarnish_free(error);
-}
-
 /* Checks that a call failed with an error starting with `prefix`, and frees the error. */
 static void expect_error(const char *test, bool failed, char *error, const char *prefix) {
     if (!failed || !error || strncmp(error, prefix, strlen(prefix)) != 0)
@@ -57,22 +47,50 @@ static void expect_error(const char *test, bool failed, char *error, const char 
     tarnish_free(error);
 }
 
-static void run_transform(const char *test, const TarnishSchema *schema, const char *start, const char *steps,
-                          const char *result, char *mapping) {
+/* A node read from its JSON, or NULL, having failed the test, when it can't be. */
+static TarnishNode_t *read_node(const char *test, const TarnishSchema_t *schema, const char *json) {
     char *error = NULL;
-    expect(test, "the document", result, tarnish_apply_steps(schema, start, steps, &error), error);
+    TarnishNode_t *node = tarnish_node_from_json(schema, json, &error);
+    if (!node) {
+        fail(test, "the node", json, error);
+        tarnish_free(error);
+    }
+    return node;
+}
 
-    error = NULL;
-    char *inverted = tarnish_invert_steps(schema, start, steps, &error);
-    if (!inverted) {
-        fail(test, "the inverted steps", "steps", error);
+/* Compares a node's JSON with the text expected. */
+static void expect_json(const char *test, const char *what, const char *expected, const TarnishNode_t *node) {
+    char *json = tarnish_node_to_json(node);
+    if (strcmp(json, expected) != 0)
+        fail(test, what, expected, json);
+    tarnish_free(json);
+}
+
+static void run_transform(const char *test, const TarnishSchema_t *schema, const char *start, const char *steps,
+                          const char *result, char *mapping) {
+    TarnishNode_t *doc = read_node(test, schema, start);
+    if (!doc)
+        return;
+    char *error = NULL;
+    TarnishNode_t *changed = tarnish_apply_steps(doc, steps, &error);
+    char *inverted = changed ? tarnish_invert_steps(doc, steps, &error) : NULL;
+    if (!changed || !inverted) {
+        fail(test, changed ? "the inverted steps" : "the document", "no error", error);
         tarnish_free(error);
     } else {
-        error = NULL;
-        expect(test, "the document the inverted steps give", start,
-               tarnish_apply_steps(schema, result, inverted, &error), error);
-        tarnish_free(inverted);
+        expect_json(test, "the document", result, changed);
+        TarnishNode_t *undone = tarnish_apply_steps(changed, inverted, &error);
+        if (!undone) {
+            fail(test, "the document the inverted steps give", start, error);
+            tarnish_free(error);
+        } else {
+            expect_json(test, "the document the inverted steps give", start, undone);
+        }
+        tarnish_node_free(undone);
     }
+    tarnish_free(inverted);
+    tarnish_node_free(changed);
+    tarnish_node_free(doc);
 
     for (char *cursor = mapping, *end; *cursor; cursor = end) {
         size_t from = strtoul(cursor, &end, 10);
@@ -91,37 +109,72 @@ static void run_transform(const char *test, const TarnishSchema *schema, const c
     }
 }
 
-static void run_errors(const TarnishSchema *schema) {
+static void run_errors(const TarnishSchema_t *schema) {
     char *error = NULL;
-    TarnishSchema *missing = tarnish_schema_new("{\"nodes\":{\"text\":{}}}", &error);
+    TarnishSchema_t *missing = tarnish_schema_new("{\"nodes\":{\"text\":{}}}", &error);
     expect_error("a schema without its top node", missing == NULL, error,
                  "RangeError: Schema is missing its top node type ('doc')");
 
     error = NULL;
-    TarnishSchema *unparsed =
+    TarnishSchema_t *unparsed =
         tarnish_schema_new("{\"nodes\":{\"doc\":{\"content\":\"paragraph+\"},\"text\":{}}}", &error);
     expect_error("a content expression that doesn't parse", unparsed == NULL, error,
                  "SyntaxError: No node type or group 'paragraph' found (in content expression 'paragraph+')");
 
     error = NULL;
-    bool valid = tarnish_check(schema, "{\"type\":\"doc\",\"content\":[{\"type\":\"text\",\"text\":\"loose\"}]}", &error);
-    expect_error("a document that doesn't fit the schema", !valid, error, "RangeError: Invalid content for node doc");
+    TarnishSchema_t *nul = tarnish_schema_new("{\"nodes\":{\"doc\":{\"content\":\"para\\u0000graph+\"},\"text\":{}}}", &error);
+    expect_error("an error whose message holds a NUL", nul == NULL, error,
+                 "SyntaxError: No node type or group 'para' found (in content expression 'para\\u0000graph+')");
 
     error = NULL;
-    char *applied = tarnish_apply_steps(schema, "{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\"}]}",
-                                        "[{\"stepType\":\"replace\",\"from\":0,\"to\":1}]", &error);
+    TarnishNode_t *loose =
+        tarnish_node_from_json(schema, "{\"type\":\"doc\",\"content\":[{\"type\":\"text\",\"text\":\"loose\"}]}", &error);
+    bool valid = loose && tarnish_check(loose, &error);
+    expect_error("a document that doesn't fit the schema", !valid, error, "RangeError: Invalid content for node doc");
+    tarnish_node_free(loose);
+
+    error = NULL;
+    TarnishNode_t *doc = tarnish_node_from_json(schema, "{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\"}]}", &error);
+    TarnishNode_t *applied = tarnish_apply_steps(doc, "[{\"stepType\":\"replace\",\"from\":0,\"to\":1}]", &error);
     expect_error("a step that doesn't apply", applied == NULL, error, "TransformError: ");
 
     error = NULL;
-    valid = tarnish_check(schema, "{\"type\":", &error);
-    expect_error("text that isn't JSON", !valid, error, "SyntaxError: Invalid JSON");
+    TarnishNode_t *unread = tarnish_node_from_json(schema, "{\"type\":", &error);
+    expect_error("text that isn't JSON", unread == NULL, error, "SyntaxError: Invalid JSON");
 
     error = NULL;
     valid = tarnish_map_position(schema, "[]", 0, 1, NULL, &error);
     expect_error("nowhere to map into", !valid, error, "Error: ");
 
-    if (tarnish_apply_steps(schema, "null", "[]", NULL) != NULL)
+    if (tarnish_apply_steps(doc, "null", NULL) != NULL)
         fail("an error with nowhere to report it", "the result", "(NULL)", "a document");
+    tarnish_node_free(doc);
+}
+
+/* A document whose attribute nests far deeper than a thread's stack could recurse through. */
+static void run_deep(void) {
+    enum { DEPTH = 200000 };
+    char *error = NULL;
+    TarnishSchema_t *schema =
+        tarnish_schema_new("{\"nodes\":[[\"doc\",{\"attrs\":{\"data\":{\"default\":null}}}],[\"text\",{}]]}", &error);
+    if (!schema) {
+        fail("a deep attribute", "the schema", "a schema", error);
+        tarnish_free(error);
+        return;
+    }
+    const char *head = "{\"type\":\"doc\",\"attrs\":{\"data\":", *tail = "}}";
+    size_t length = strlen(head) + 2 * DEPTH + strlen(tail);
+    char *json = malloc(length + 1);
+    strcpy(json, head);
+    memset(json + strlen(head), '[', DEPTH);
+    memset(json + strlen(head) + DEPTH, ']', DEPTH);
+    strcpy(json + strlen(head) + 2 * DEPTH, tail);
+    TarnishNode_t *doc = read_node("a deep attribute", schema, json);
+    if (doc)
+        expect_json("a deep attribute", "the document", json, doc);
+    tarnish_node_free(doc);
+    free(json);
+    tarnish_schema_free(schema);
 }
 
 int main(int argc, char **argv) {
@@ -131,7 +184,7 @@ int main(int argc, char **argv) {
     }
 
     size_t schema_count = read_count();
-    TarnishSchema **schemas = calloc(schema_count, sizeof *schemas);
+    TarnishSchema_t **schemas = calloc(schema_count, sizeof *schemas);
     for (size_t index = 0; index < schema_count; index++) {
         char *spec = read_line(), *error = NULL;
         if (!(schemas[index] = tarnish_schema_new(spec, &error))) {
@@ -155,6 +208,7 @@ int main(int argc, char **argv) {
     }
 
     run_errors(schemas[0]);
+    run_deep();
 
     for (size_t index = 0; index < schema_count; index++)
         tarnish_schema_free(schemas[index]);
@@ -165,6 +219,6 @@ int main(int argc, char **argv) {
         fprintf(stderr, "%d failed\n", failures);
         return 1;
     }
-    printf("%zu transforms and the errors: all passed\n", test_count);
+    printf("%zu transforms, the errors and a deep document: all passed\n", test_count);
     return 0;
 }

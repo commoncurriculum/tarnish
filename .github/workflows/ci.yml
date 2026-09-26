@@ -39,6 +39,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         if: matrix.target == 'rust'
       - run: npm ci
+      # The suites are the submodules' own tests, so they must be of the versions installed.
+      - name: Check the suites are the installed packages' own
+        run: |
+          for package in prosemirror-model prosemirror-transform; do
+            test "$(git -C upstream/$package describe --tags)" = \
+              "$(node -p "require('$package/package.json').version")"
+          done
       - run: npm run test:${{ matrix.target }}
 
   # The Elixir and C tests expect what fixtures/transform.json records, so it must be exactly
@@ -85,4 +92,8 @@ jobs:
           node-version: 22
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Check the header declares the library as it is
+        run: |
+          cargo run -p tarnish-c --example header --features headers
+          git diff --exit-code crates/tarnish-c/include
       - run: npm run test:c

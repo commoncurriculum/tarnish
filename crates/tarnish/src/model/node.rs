@@ -13,6 +13,7 @@ use super::schema::{Attrs, MarkType, NodeType, Schema};
 use crate::error::{Error, Result};
 use crate::js;
 use crate::json::{Map, NULL, Value};
+use crate::stack;
 use crate::text::Text;
 
 /// A node of a document. Nodes are persistent: changing one makes a new one, sharing what it
@@ -27,6 +28,16 @@ struct NodeData {
     marks: Marks,
     /// A text node's text, which is never empty. Other nodes have none.
     text: Option<Text>,
+}
+
+impl Drop for NodeData {
+    /// Dropping a node drops its children, and theirs, as deep as the document nests.
+    fn drop(&mut self) {
+        if self.content.child_count() > 0 {
+            let content = std::mem::replace(&mut self.content, Fragment::empty());
+            stack::grow(|| drop(content));
+        }
+    }
 }
 
 /// A child found by [`Node::child_after`] or [`Node::child_before`]: the child, if there is one,
@@ -436,21 +447,32 @@ impl Node {
     /// `toString`: the node described for debugging, by its spec's `to_debug_string` when it
     /// has one.
     pub fn to_debug_string(&self) -> Result<String> {
-        crate::stack::check()?;
+        let mut out = String::new();
+        self.write_debug(&mut out)?;
+        Ok(out)
+    }
+
+    pub(crate) fn write_debug(&self, out: &mut String) -> Result<()> {
         if let Some(hook) = &self.node_type().spec().to_debug_string {
-            return hook(self);
+            out.push_str(&hook(self)?);
+            return Ok(());
         }
-        let mut described = match &self.0.text {
-            Some(text) => text.to_json_string(),
-            None => self.node_type().name().to_owned(),
-        };
+        // Each mark wraps what the marks after it wrap.
+        for mark in self.0.marks.iter() {
+            out.push_str(mark.mark_type().name());
+            out.push('(');
+        }
+        match &self.0.text {
+            Some(text) => out.push_str(&text.to_json_string()),
+            None => out.push_str(self.node_type().name()),
+        }
         if self.0.content.size() > 0 {
-            described = format!("{described}({})", self.0.content.to_string_inner()?);
+            out.push('(');
+            self.0.content.write_debug(out)?;
+            out.push(')');
         }
-        for mark in self.0.marks.iter().rev() {
-            described = format!("{}({described})", mark.mark_type().name());
-        }
-        Ok(described)
+        out.extend(self.0.marks.iter().map(|_| ')'));
+        Ok(())
     }
 
     /// The content match after the child at `index`.
@@ -524,7 +546,6 @@ impl Node {
 
     /// Raise an error if this node or a descendant doesn't fit the schema.
     pub fn check(&self) -> Result<()> {
-        crate::stack::check()?;
         self.node_type().check_content(self.content())?;
         self.node_type().check_attrs(self.attrs())?;
         for mark in self.marks().iter() {
@@ -551,7 +572,9 @@ impl Node {
                 names.join(",")
             )));
         }
-        self.children().iter().try_for_each(Node::check)
+        self.children()
+            .iter()
+            .try_for_each(|child| stack::grow(|| child.check()))
     }
 
     pub fn to_json(&self) -> Value {
@@ -579,7 +602,6 @@ impl Node {
     }
 
     pub fn from_json(schema: &Schema, json: &Value) -> Result<Node> {
-        crate::stack::check()?;
         if !js::truthy(Some(json)) {
             return Err(Error::Range("Invalid input for Node.fromJSON".into()));
         }

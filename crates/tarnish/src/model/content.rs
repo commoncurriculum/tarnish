@@ -12,6 +12,7 @@ use super::fragment::Fragment;
 use super::node::Node;
 use super::schema::{NodeType, NodeTypeData, Schema};
 use crate::error::{Error, Result};
+use crate::stack;
 use crate::text::is_js_space;
 
 /// The compiled form of one content expression.
@@ -247,8 +248,9 @@ impl ContentMatch {
             if !(data.is_text || data.has_required_attrs() || seen.contains(&next)) {
                 seen.push(next);
                 types.push(node);
-                let found =
-                    self.search_fill(&current.at(next), after, to_end, start_index, types, seen)?;
+                let found = stack::grow(|| {
+                    self.search_fill(&current.at(next), after, to_end, start_index, types, seen)
+                })?;
                 types.pop();
                 if found.is_some() {
                     return Ok(found);
@@ -379,7 +381,7 @@ fn depth_first(automaton: &Automaton, start: usize) -> Vec<usize> {
         seen.push(state);
         for &(_, next) in &automaton.states[state].next {
             if !seen.contains(&next) {
-                scan(automaton, next, seen);
+                stack::grow(|| scan(automaton, next, seen));
             }
         }
     }
@@ -500,6 +502,20 @@ enum Expr {
     Name(usize),
 }
 
+impl Drop for Expr {
+    /// An expression nests as deeply as its parentheses and repeats do.
+    fn drop(&mut self) {
+        let inner = match self {
+            Expr::Choice(exprs) | Expr::Seq(exprs) => std::mem::take(exprs),
+            Expr::Plus(expr) | Expr::Star(expr) | Expr::Opt(expr) | Expr::Range(_, _, expr) => {
+                vec![std::mem::replace(&mut **expr, Expr::Name(0))]
+            }
+            Expr::Name(_) => return,
+        };
+        stack::grow(|| drop(inner));
+    }
+}
+
 fn parse_expr(stream: &mut TokenStream) -> Result<Expr> {
     let mut exprs = Vec::new();
     loop {
@@ -593,7 +609,7 @@ fn resolve_name(stream: &TokenStream, name: &str) -> Result<Vec<usize>> {
 
 fn parse_expr_atom(stream: &mut TokenStream) -> Result<Expr> {
     if stream.eat("(") {
-        let expr = parse_expr(stream)?;
+        let expr = stack::grow(|| parse_expr(stream))?;
         if !stream.eat(")") {
             return Err(stream.err("Missing closing paren"));
         }
@@ -654,7 +670,7 @@ impl Nfa {
     }
 
     fn compile(&mut self, expr: &Expr, from: usize) -> Vec<EdgeRef> {
-        match expr {
+        stack::grow(|| match expr {
             Expr::Choice(exprs) => {
                 let mut out = Vec::new();
                 for expr in exprs {
@@ -720,7 +736,7 @@ impl Nfa {
                 vec![self.edge(current, None, None)]
             }
             Expr::Name(node) => vec![self.edge(from, None, Some(*node))],
-        }
+        })
     }
 }
 

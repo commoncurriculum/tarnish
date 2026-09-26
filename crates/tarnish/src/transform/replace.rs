@@ -5,6 +5,7 @@ use super::structure::insert_point;
 use super::transform::Transform;
 use crate::error::{Error, Result};
 use crate::model::{Attrs, ContentMatch, Fragment, Node, NodeType, ResolvedPos, Slice};
+use crate::stack;
 
 /// A step that fits `slice` in between `from` and `to`, or `None` when there's no meaningful
 /// way to, or the step would change nothing.
@@ -533,7 +534,9 @@ fn drop_from_fragment(fragment: &Fragment, depth: usize, count: usize) -> Fragme
     let first = fragment.first_child().expect("an open node");
     fragment.replace_child(
         0,
-        first.copy(drop_from_fragment(first.content(), depth - 1, count)),
+        first.copy(stack::grow(|| {
+            drop_from_fragment(first.content(), depth - 1, count)
+        })),
     )
 }
 
@@ -544,7 +547,9 @@ fn add_to_fragment(fragment: &Fragment, depth: usize, content: &Fragment) -> Fra
     let last = fragment.last_child().expect("an open node");
     fragment.replace_child(
         fragment.child_count() - 1,
-        last.copy(add_to_fragment(last.content(), depth - 1, content)),
+        last.copy(stack::grow(|| {
+            add_to_fragment(last.content(), depth - 1, content)
+        })),
     )
 }
 
@@ -572,7 +577,10 @@ fn close_node_start(node: &Node, open_start: isize, open_end: isize) -> Result<N
         } else {
             0
         };
-        fragment = fragment.replace_child(0, close_node_start(first, open_start - 1, inner_end)?);
+        fragment = fragment.replace_child(
+            0,
+            stack::grow(|| close_node_start(first, open_start - 1, inner_end))?,
+        );
     }
     let start = node.node_type().content_match();
     fragment = must(start.fill_before(&fragment, false, 0)?)?.append(&fragment);
@@ -761,7 +769,9 @@ fn close_fragment(
     let mut fragment = fragment.clone();
     if depth < old_open {
         let first = fragment.first_child().expect("an open node").clone();
-        let closed = close_fragment(first.content(), depth + 1, old_open, new_open, Some(&first))?;
+        let closed = stack::grow(|| {
+            close_fragment(first.content(), depth + 1, old_open, new_open, Some(&first))
+        })?;
         fragment = fragment.replace_child(0, first.copy(closed));
     }
     if depth > new_open {
