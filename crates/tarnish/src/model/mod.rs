@@ -8,6 +8,7 @@ mod node;
 mod replace;
 mod resolved_pos;
 mod schema;
+mod schema_json;
 
 pub use content::ContentMatch;
 pub use fragment::{Fragment, LeafTextHook, NodeVisitor};

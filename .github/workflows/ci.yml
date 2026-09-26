@@ -40,3 +40,49 @@ jobs:
         if: matrix.target == 'rust'
       - run: npm ci
       - run: npm run test:${{ matrix.target }}
+
+  # The Elixir and C tests expect what fixtures/transform.json records, so it must be exactly
+  # what the real prosemirror-transform writes today.
+  fixtures:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run fixtures
+      - run: git diff --exit-code fixtures
+
+  elixir:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: elixir
+    env:
+      MIX_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "25.3.2.21"
+          elixir-version: "1.17.3"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: mix deps.get
+      - run: mix format --check-formatted
+      - run: mix test
+
+  c:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: npm run test:c

@@ -199,3 +199,70 @@ pub fn number_to_string(number: f64) -> String {
     let mut buffer = ryu_js::Buffer::new();
     buffer.format(number).to_owned()
 }
+
+impl Value {
+    /// `JSON.stringify(value)`, byte for byte: a property that is `undefined` is left out, and
+    /// in an array is `null`, as are numbers that aren't finite.
+    pub fn to_json_string(&self) -> String {
+        let mut out = String::new();
+        write_json(self, &mut out);
+        out
+    }
+}
+
+fn write_json(value: &Value, out: &mut String) {
+    match value {
+        Value::Undefined | Value::Null => out.push_str("null"),
+        Value::Bool(value) => out.push_str(if *value { "true" } else { "false" }),
+        Value::Number(number) if number.is_finite() => out.push_str(&number_to_string(*number)),
+        Value::Number(_) => out.push_str("null"),
+        Value::String(text) => write_json_string(text, out),
+        Value::Array(items) => {
+            out.push('[');
+            for (index, item) in items.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                write_json(item, out);
+            }
+            out.push(']');
+        }
+        Value::Object(object) => {
+            out.push('{');
+            let mut first = true;
+            for (key, item) in object.iter() {
+                if matches!(item, Value::Undefined) {
+                    continue;
+                }
+                if !first {
+                    out.push(',');
+                }
+                first = false;
+                write_json_string(key, out);
+                out.push(':');
+                write_json(item, out);
+            }
+            out.push('}');
+        }
+    }
+}
+
+fn write_json_string(text: &str, out: &mut String) {
+    out.push('"');
+    for character in text.chars() {
+        match character {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\u{8}' => out.push_str("\\b"),
+            '\u{c}' => out.push_str("\\f"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            control if (control as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", control as u32))
+            }
+            character => out.push(character),
+        }
+    }
+    out.push('"');
+}

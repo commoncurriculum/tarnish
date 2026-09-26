@@ -5,6 +5,7 @@
 
 pub mod dom;
 pub mod error;
+pub mod json;
 pub mod model;
 pub mod text;
 pub mod transform;

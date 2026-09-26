@@ -1,0 +1,18 @@
+[package]
+name = "tarnish_elixir"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "The Elixir binding of tarnish: a Rustler NIF that takes and returns Erlang terms."
+
+[lib]
+crate-type = ["cdylib"]
+# The binding's tests are the Elixir package's; Rustler registers nothing in a Rust test build.
+test = false
+doctest = false
+
+[dependencies]
+rustler = "0.38"
+tarnish = { path = "../tarnish" }
