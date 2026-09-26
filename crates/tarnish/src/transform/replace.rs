@@ -178,7 +178,7 @@ impl Fitter {
             }
             cur = node.content().clone();
         }
-        // Only try wrapping nodes, in pass 2, after placing them without failed.
+        // Only try wrapping nodes, in pass 2, after placing without wrapping failed.
         for pass in 1..=2 {
             let top = if pass == 1 {
                 start_depth
@@ -337,7 +337,6 @@ impl Fitter {
         // below 0, none are.
         let mut open_end_count = (fragment.size() + slice_depth) as isize
             - (slice.content().size() as isize - slice.open_end() as isize);
-        // Fit as many children as fit.
         while taken < fragment.child_count() {
             let next = &fragment.children()[taken];
             let Some(matches) = matched.match_type(next.node_type()) else {
@@ -623,6 +622,22 @@ fn invalid_marks(node_type: &NodeType, fragment: &Fragment, start: usize) -> boo
         .any(|child| !node_type.allows_marks(child.marks()))
 }
 
+/// Where `replace_range` may put a slice: over the whole node at a depth, or from before it to
+/// the range's end.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Target {
+    Covering(usize),
+    Before(usize),
+}
+
+impl Target {
+    fn depth(self) -> usize {
+        match self {
+            Target::Covering(depth) | Target::Before(depth) => depth,
+        }
+    }
+}
+
 fn defines_content(node_type: &NodeType) -> bool {
     let spec = node_type.spec();
     spec.defining || spec.defining_for_content
@@ -631,11 +646,15 @@ fn defines_content(node_type: &NodeType) -> bool {
 impl Transform {
     /// Replace a range with a slice, taking `from`, `to` and the slice's open start as hints
     /// rather than fixed points, as for a paste.
-    pub fn replace_range(&mut self, from: usize, to: usize, slice: &Slice) -> Result<&mut Self> {
+    pub fn replace_range(
+        &mut self,
+        mut from: usize,
+        mut to: usize,
+        slice: &Slice,
+    ) -> Result<&mut Self> {
         if slice.size() == 0 {
             return self.delete_range(from, to);
         }
-        let (mut from, mut to) = (from, to);
         let resolved_from = self.doc().resolve(from)?;
         let resolved_to = self.doc().resolve(to)?;
         if fits_trivially(&resolved_from, &resolved_to, slice)? {
@@ -647,38 +666,35 @@ impl Transform {
             });
         }
 
-        let mut target_depths: Vec<isize> = covered_depths(&resolved_from, &resolved_to)
+        let mut targets: Vec<Target> = covered_depths(&resolved_from, &resolved_to)
             .into_iter()
-            .map(|depth| depth as isize)
+            .map(Target::Covering)
             .collect();
         // The whole document can't be replaced.
-        if target_depths.last() == Some(&0) {
-            target_depths.pop();
+        if targets.last() == Some(&Target::Covering(0)) {
+            targets.pop();
         }
-        // A negative depth -D stands for replacing from before the node at D to `to`, rather than
-        // over the whole node.
-        let mut preferred_target = -(resolved_from.depth() as isize + 1);
-        target_depths.insert(0, preferred_target);
-        // Pick a preferred target depth among the covering ones not outside a defining node, and
-        // add negative depths for those `from` is at the start of, up to a defining node.
-        let mut pos = resolved_from.pos() as isize - 1;
+        let mut preferred_target = Target::Before(resolved_from.depth() + 1);
+        targets.insert(0, preferred_target);
+        // Pick a preferred target among the covering ones not outside a defining node, and add
+        // targets before the nodes `from` is at the start of, up to a defining node.
         for d in (1..=resolved_from.depth()).rev() {
             let spec = resolved_from.node(d).node_type().spec();
             if spec.defining || spec.defining_as_context || spec.isolating {
                 break;
             }
-            if target_depths.contains(&(d as isize)) {
-                preferred_target = d as isize;
-            } else if resolved_from.before(d)? as isize == pos {
-                target_depths.insert(1, -(d as isize));
+            if targets.contains(&Target::Covering(d)) {
+                preferred_target = Target::Covering(d);
+            } else if resolved_from.before(d)? + resolved_from.depth() - d + 1
+                == resolved_from.pos()
+            {
+                targets.insert(1, Target::Before(d));
             }
-            pos -= 1;
         }
-        // Try each depth of the slice in each target depth, the preferred ones first.
-        let preferred_target_index = target_depths
+        let preferred_target_index = targets
             .iter()
-            .position(|&depth| depth == preferred_target)
-            .unwrap_or(0);
+            .position(|&target| target == preferred_target)
+            .expect("the preferred target is one of the targets");
 
         // The nodes down the slice's start: each open one, then the innermost one's first child
         // if it has one.
@@ -694,8 +710,7 @@ impl Transform {
         // Back up the preferred depth to cover defining textblocks right above it, maybe skipping
         // one textblock that isn't defining.
         let mut preferred_depth = slice.open_start();
-        let preferred_parent =
-            resolved_from.node((preferred_target.unsigned_abs()).saturating_sub(1));
+        let preferred_parent = resolved_from.node(preferred_target.depth() - 1);
         for d in (0..preferred_depth).rev() {
             let left_node = &left_nodes[d];
             let defines = defines_content(left_node.node_type());
@@ -706,22 +721,17 @@ impl Transform {
             }
         }
 
+        // Try each depth of the slice at each target, the preferred ones first.
         for j in (0..=slice.open_start()).rev() {
             let open_depth = (j + preferred_depth + 1) % (slice.open_start() + 1);
             let Some(insert) = left_nodes.get(open_depth) else {
                 continue;
             };
-            for i in 0..target_depths.len() {
-                let mut target_depth =
-                    target_depths[(i + preferred_target_index) % target_depths.len()];
-                let mut expand = true;
-                if target_depth < 0 {
-                    expand = false;
-                    target_depth = -target_depth;
-                }
-                let target_depth = target_depth as usize;
-                let parent = resolved_from.node(target_depth - 1);
-                let index = resolved_from.index(target_depth - 1);
+            for i in 0..targets.len() {
+                let target = targets[(i + preferred_target_index) % targets.len()];
+                let depth = target.depth();
+                let parent = resolved_from.node(depth - 1);
+                let index = resolved_from.index(depth - 1);
                 if parent.can_replace_with(
                     index,
                     index,
@@ -730,13 +740,12 @@ impl Transform {
                 )? {
                     let closed =
                         close_fragment(slice.content(), 0, slice.open_start(), open_depth, None)?;
-                    let end = if expand {
-                        resolved_to.after(target_depth)?
-                    } else {
-                        to
+                    let end = match target {
+                        Target::Covering(depth) => resolved_to.after(depth)?,
+                        Target::Before(_) => to,
                     };
                     return self.replace(
-                        resolved_from.before(target_depth)?,
+                        resolved_from.before(depth)?,
                         end,
                         &Slice::new(closed, open_depth, slice.open_end()),
                     );
@@ -745,24 +754,26 @@ impl Transform {
         }
 
         let start_steps = self.steps().len();
-        for i in (0..target_depths.len()).rev() {
+        for &target in targets.iter().rev() {
             self.replace(from, to, slice)?;
             if self.steps().len() > start_steps {
                 break;
             }
-            let depth = target_depths[i];
-            if depth < 0 {
-                continue;
+            if let Target::Covering(depth) = target {
+                from = resolved_from.before(depth)?;
+                to = resolved_to.after(depth)?;
             }
-            from = resolved_from.before(depth as usize)?;
-            to = resolved_to.after(depth as usize)?;
         }
         Ok(self)
     }
 
     /// Replace a range with a node, moving the range out of a parent where the node doesn't fit.
-    pub fn replace_range_with(&mut self, from: usize, to: usize, node: Node) -> Result<&mut Self> {
-        let (mut from, mut to) = (from, to);
+    pub fn replace_range_with(
+        &mut self,
+        mut from: usize,
+        mut to: usize,
+        node: Node,
+    ) -> Result<&mut Self> {
         if !node.is_inline()
             && from == to
             && self.doc().resolve(from)?.parent().content().size() > 0
@@ -775,8 +786,7 @@ impl Transform {
     }
 
     /// Delete a range, growing it over whole parents until the deletion is valid.
-    pub fn delete_range(&mut self, from: usize, to: usize) -> Result<&mut Self> {
-        let (mut from, mut to) = (from, to);
+    pub fn delete_range(&mut self, mut from: usize, mut to: usize) -> Result<&mut Self> {
         let mut resolved_from = self.doc().resolve(from)?;
         let mut resolved_to = self.doc().resolve(to)?;
 
