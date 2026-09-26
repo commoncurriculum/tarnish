@@ -91,3 +91,50 @@ pub fn attrs(value: Option<&Value>) -> Option<&Map> {
         Some(_) => Some(&EMPTY),
     }
 }
+
+/// A JSON value as JavaScript reads a node, a fragment or a mark from it: a [`Value`], or JSON
+/// read in place from another form, as [`crate::etf::Term`] reads Erlang's external term format.
+pub trait Json<'a>: Copy {
+    fn truthy(self) -> bool;
+
+    /// An object's property; `None` for a value that isn't an object, or has no such property.
+    fn get(self, key: &str) -> Option<Self>;
+
+    /// `String(value)`.
+    fn string(self) -> Cow<'a, str>;
+
+    /// A string's text; `None` for a value that isn't a string.
+    fn text(self) -> Option<&'a str>;
+
+    /// An array's items; `None` for a value that isn't an array.
+    fn items(self) -> Option<impl Iterator<Item = Self>>;
+
+    /// The value as attributes, as [`attrs`] reads them.
+    fn attrs(self) -> Option<Cow<'a, Map>>;
+}
+
+impl<'a> Json<'a> for &'a Value {
+    fn truthy(self) -> bool {
+        truthy(Some(self))
+    }
+
+    fn get(self, key: &str) -> Option<Self> {
+        self.as_object()?.get(key)
+    }
+
+    fn string(self) -> Cow<'a, str> {
+        string(Some(self))
+    }
+
+    fn text(self) -> Option<&'a str> {
+        self.as_str()
+    }
+
+    fn items(self) -> Option<impl Iterator<Item = Self>> {
+        Some(self.as_array()?.iter())
+    }
+
+    fn attrs(self) -> Option<Cow<'a, Map>> {
+        attrs(Some(self)).map(Cow::Borrowed)
+    }
+}

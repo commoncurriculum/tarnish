@@ -73,7 +73,10 @@ fn node_from_json<'a>(
     schema: ResourceArc<SchemaResource>,
     json: Term<'a>,
 ) -> NifResult<Term<'a>> {
-    let doc = Node::from_json(&schema.0, &term::read(json)?);
+    let bytes = json.to_binary();
+    let term =
+        etf::Document::new(bytes.as_slice()).map_err(|etf::NotJson| rustler::Error::BadArg)?;
+    let doc = Node::from_json(&schema.0, term.root());
     Ok(respond(env, doc, |doc| node(env, doc)))
 }
 

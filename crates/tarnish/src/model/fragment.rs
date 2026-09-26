@@ -7,7 +7,7 @@ use super::diff;
 use super::node::Node;
 use super::schema::Schema;
 use crate::error::{Error, Result};
-use crate::js;
+use crate::js::Json;
 use crate::json::Value;
 use crate::stack;
 use crate::text::Text;
@@ -402,15 +402,13 @@ impl Fragment {
         )
     }
 
-    pub fn from_json(schema: &Schema, json: &Value) -> Result<Fragment> {
-        if !js::truthy(Some(json)) {
+    pub fn from_json<'a>(schema: &Schema, json: impl Json<'a>) -> Result<Fragment> {
+        if !json.truthy() {
             return Ok(Fragment::empty());
         }
-        let Value::Array(nodes) = json else {
-            return Err(Error::Range("Invalid input for Fragment.fromJSON".into()));
-        };
-        let nodes = nodes
-            .iter()
+        let nodes = json
+            .items()
+            .ok_or_else(|| Error::Range("Invalid input for Fragment.fromJSON".into()))?
             .map(|node| stack::grow(|| Node::from_json(schema, node)))
             .collect::<Result<Vec<_>>>()?;
         Ok(Fragment::from_array(nodes))

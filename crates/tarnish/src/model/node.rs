@@ -11,8 +11,8 @@ use super::replace::{self, Slice};
 use super::resolved_pos::ResolvedPos;
 use super::schema::{Attrs, MarkType, NodeType, Schema};
 use crate::error::{Error, Result};
-use crate::js;
-use crate::json::{Map, NULL, Value};
+use crate::js::Json;
+use crate::json::{Map, Value};
 use crate::stack;
 use crate::text::Text;
 
@@ -601,33 +601,37 @@ impl Node {
         Value::Object(json)
     }
 
-    pub fn from_json(schema: &Schema, json: &Value) -> Result<Node> {
-        if !js::truthy(Some(json)) {
+    pub fn from_json<'a>(schema: &Schema, json: impl Json<'a>) -> Result<Node> {
+        if !json.truthy() {
             return Err(Error::Range("Invalid input for Node.fromJSON".into()));
         }
-        let marks = match json.get("marks") {
-            marks if !js::truthy(marks) => None,
-            Some(Value::Array(marks)) => Some(
+        let marks = match json.get("marks").filter(|marks| marks.truthy()) {
+            None => None,
+            Some(marks) => Some(
                 marks
-                    .iter()
+                    .items()
+                    .ok_or_else(|| Error::Range("Invalid mark data for Node.fromJSON".into()))?
                     .map(|mark| Mark::from_json(schema, mark))
                     .collect::<Result<Vec<_>>>()?,
             ),
-            _ => return Err(Error::Range("Invalid mark data for Node.fromJSON".into())),
         };
         let marks = marks.as_deref().unwrap_or(&[]);
-        let name = js::string(json.get("type"));
+        let name = json.get("type").map_or("undefined".into(), Json::string);
         if name == "text" {
-            let Some(Value::String(text)) = json.get("text") else {
-                return Err(Error::Range("Invalid text node in JSON".into()));
-            };
-            return schema.text(text.as_str(), marks);
+            let text = json
+                .get("text")
+                .and_then(Json::text)
+                .ok_or_else(|| Error::Range("Invalid text node in JSON".into()))?;
+            return schema.text(text, marks);
         }
-        let content = Fragment::from_json(schema, json.get("content").unwrap_or(&NULL))?;
-        let node =
-            schema
-                .expect_node_type(&name)?
-                .create(js::attrs(json.get("attrs")), content, marks)?;
+        let content = match json.get("content") {
+            Some(content) => Fragment::from_json(schema, content)?,
+            None => Fragment::empty(),
+        };
+        let attrs = json.get("attrs").and_then(Json::attrs);
+        let node = schema
+            .expect_node_type(&name)?
+            .create(attrs.as_deref(), content, marks)?;
         node.node_type().check_attrs(node.attrs())?;
         Ok(node)
     }

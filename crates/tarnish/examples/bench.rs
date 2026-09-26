@@ -3,7 +3,7 @@
 
 use std::time::Instant;
 
-use tarnish::{Node, api, json};
+use tarnish::{Node, api, etf, json};
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -33,25 +33,21 @@ fn main() {
     let document = read("target/bench/document.json");
     let (doc, steps) = (&document["doc"], &document["steps"]);
     let node = Node::from_json(&schema, doc).unwrap();
-    let time = |name: &str, run: &mut dyn FnMut()| println!("{name:16} {:.0} µs", median(run));
+    let term = etf::write(doc);
+    let time = |name: &str, run: &mut dyn FnMut()| println!("{name:20} {:.0} µs", median(run));
     time("fromJSON", &mut || {
         drop(Node::from_json(&schema, doc).unwrap())
     });
+    time("fromJSON of a term", &mut || {
+        let document = etf::Document::new(&term).unwrap();
+        drop(Node::from_json(&schema, document.root()).unwrap())
+    });
+    time("index a term", &mut || {
+        drop(etf::Document::new(&term).unwrap())
+    });
     time("toJSON", &mut || drop(node.to_json()));
+    time("term of a node", &mut || drop(etf::write_node(&node)));
     time("check", &mut || node.check().unwrap());
-    let written = tarnish::etf::write(doc);
-    time("etf::write", &mut || drop(tarnish::etf::write(doc)));
-    time("etf::write_node", &mut || {
-        drop(tarnish::etf::write_node(&node))
-    });
-    time("etf::read", &mut || {
-        drop(tarnish::etf::read(&written).unwrap())
-    });
-    let text = tarnish::js::json::stringify(doc);
-    time("json::from_str", &mut || {
-        drop(json::from_str(&text).unwrap())
-    });
-    time("Value::clone", &mut || drop(doc.clone()));
     time("apply 10 steps", &mut || {
         drop(api::apply_steps(&node, steps).unwrap())
     });

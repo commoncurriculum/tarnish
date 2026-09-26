@@ -6,7 +6,7 @@ use std::sync::{Arc, LazyLock};
 use super::compare_deep::objects_equal;
 use super::schema::{Attrs, MarkType, Schema};
 use crate::error::{Error, Result};
-use crate::js;
+use crate::js::Json;
 use crate::json::{Map, Value};
 
 /// A set of marks, sorted by their types' rank.
@@ -123,15 +123,16 @@ impl Mark {
         Value::Object(json)
     }
 
-    pub fn from_json(schema: &Schema, json: &Value) -> Result<Mark> {
-        if !js::truthy(Some(json)) {
+    pub fn from_json<'a>(schema: &Schema, json: impl Json<'a>) -> Result<Mark> {
+        if !json.truthy() {
             return Err(Error::Range("Invalid input for Mark.fromJSON".into()));
         }
-        let name = js::string(json.get("type"));
+        let name = json.get("type").map_or("undefined".into(), Json::string);
         let mark_type = schema
             .mark_type(&name)
             .ok_or_else(|| Error::Range(format!("There is no mark type {name} in this schema")))?;
-        let mark = mark_type.create(js::attrs(json.get("attrs")))?;
+        let attrs = json.get("attrs").and_then(Json::attrs);
+        let mark = mark_type.create(attrs.as_deref())?;
         mark_type.check_attrs(mark.attrs())?;
         Ok(mark)
     }

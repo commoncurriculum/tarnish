@@ -2,6 +2,9 @@
 //! call: values as the terms Jason decodes from their JSON, and terms as the JSON Jason encodes
 //! them as.
 
+use std::borrow::Cow;
+
+use crate::js::{self, Json};
 use crate::json::{Key, Map, Number, Value};
 use crate::model::Node;
 use crate::stack;
@@ -30,15 +33,7 @@ pub struct NotJson;
 /// The value of the term `term_to_binary` wrote: maps with string, atom or integer keys,
 /// `Jason.OrderedObject`s, lists, strings, atoms and numbers, as Jason encodes them.
 pub fn read(bytes: &[u8]) -> Result<Value, NotJson> {
-    let mut reader = Reader { bytes, at: 0 };
-    if reader.byte()? != VERSION {
-        return Err(NotJson);
-    }
-    let value = reader.value()?;
-    match reader.at == bytes.len() {
-        true => Ok(value),
-        false => Err(NotJson),
-    }
+    Ok(Document::new(bytes)?.root().value())
 }
 
 /// The term Jason decodes from the JSON `JSON.stringify` writes for the value.
@@ -55,20 +50,222 @@ pub fn write_node(node: &Node) -> Vec<u8> {
     out
 }
 
-struct Reader<'a> {
-    bytes: &'a [u8],
-    at: usize,
+/// A term `term_to_binary` wrote, read in place: its values are found once, so that a map's
+/// fields and a list's items can be looked up without reading what lies between them, and a
+/// node can be read from it without making its JSON first.
+pub struct Document<'a> {
+    slots: Vec<Slot<'a>>,
+    /// The keys that are integers, as Jason writes them.
+    keys: Vec<Key>,
 }
 
-/// A map's key: its text, and whether no other key of the map can have that text, which only a
-/// string key is sure of.
+/// A value found in a document.
+#[derive(Clone, Copy)]
+struct Slot<'a> {
+    kind: Kind<'a>,
+    /// The slot after the value and all it holds.
+    next: usize,
+}
+
+#[derive(Clone, Copy)]
+enum Kind<'a> {
+    Null,
+    Bool(bool),
+    Number(Numeral),
+    /// A string, or an atom Jason writes as one.
+    String(&'a str),
+    /// A key that was an integer: its text in the document's keys.
+    Key(usize),
+    /// An array, whose items follow.
+    Array,
+    /// An object, whose keys and values follow in turn. `unique` when no two of its keys can
+    /// have the same text, which only string keys are sure of.
+    Object {
+        unique: bool,
+    },
+}
+
+impl<'a> Document<'a> {
+    pub fn new(bytes: &'a [u8]) -> Result<Document<'a>, NotJson> {
+        let mut indexer = Indexer {
+            bytes,
+            at: 0,
+            // A value takes at least two bytes.
+            slots: Vec::with_capacity(bytes.len() / 2),
+            keys: Vec::new(),
+        };
+        if indexer.byte()? != VERSION {
+            return Err(NotJson);
+        }
+        indexer.value()?;
+        if indexer.at != bytes.len() {
+            return Err(NotJson);
+        }
+        Ok(Document {
+            slots: indexer.slots,
+            keys: indexer.keys,
+        })
+    }
+
+    pub fn root(&self) -> Term<'_> {
+        Term {
+            document: self,
+            slot: 0,
+        }
+    }
+}
+
+/// A value in a [`Document`].
+#[derive(Clone, Copy)]
+pub struct Term<'a> {
+    document: &'a Document<'a>,
+    slot: usize,
+}
+
+impl<'a> Term<'a> {
+    fn kind(self) -> Kind<'a> {
+        self.document.slots[self.slot].kind
+    }
+
+    fn at(self, slot: usize) -> Term<'a> {
+        Term {
+            document: self.document,
+            slot,
+        }
+    }
+
+    /// The terms directly inside an array or object: its items, or its keys and values in turn.
+    fn children(self) -> impl Iterator<Item = Term<'a>> {
+        let slots = &self.document.slots;
+        let end = slots[self.slot].next;
+        let first = Some(self.slot + 1).filter(|&slot| slot < end);
+        std::iter::successors(first, move |&slot| {
+            Some(slots[slot].next).filter(|&next| next < end)
+        })
+        .map(move |slot| self.at(slot))
+    }
+
+    /// An object's keys and values.
+    fn entries(self) -> impl Iterator<Item = (&'a str, Term<'a>)> {
+        let mut children = self.children();
+        std::iter::from_fn(move || {
+            let key = match children.next()?.kind() {
+                Kind::String(text) => text,
+                Kind::Key(index) => &self.document.keys[index],
+                _ => unreachable!("a key is a string"),
+            };
+            Some((key, children.next()?))
+        })
+    }
+
+    /// The term's value.
+    pub fn value(self) -> Value {
+        match self.kind() {
+            Kind::Null => Value::Null,
+            Kind::Bool(boolean) => Value::Bool(boolean),
+            Kind::Number(number) => Value::Number(number.into()),
+            Kind::String(text) => Value::String(text.to_owned()),
+            Kind::Key(index) => Value::String(self.document.keys[index].to_string()),
+            Kind::Array => Value::Array(
+                self.children()
+                    .map(|item| stack::grow(|| item.value()))
+                    .collect(),
+            ),
+            Kind::Object { unique } => Value::Object(self.object(unique)),
+        }
+    }
+
+    fn object(self, unique: bool) -> Map {
+        let mut object = Map::new();
+        for (key, value) in self.entries() {
+            let value = stack::grow(|| value.value());
+            // A key written twice keeps its first place and its last value, as parsing the JSON
+            // Jason writes for it does.
+            if unique {
+                object.push(key.into(), value);
+            } else {
+                object.insert(key.into(), value);
+            }
+        }
+        object
+    }
+}
+
+impl<'a> Json<'a> for Term<'a> {
+    fn truthy(self) -> bool {
+        match self.kind() {
+            Kind::Null => false,
+            Kind::Bool(boolean) => boolean,
+            Kind::Number(number) => number.truthy(),
+            Kind::String(text) => !text.is_empty(),
+            Kind::Key(_) | Kind::Array | Kind::Object { .. } => true,
+        }
+    }
+
+    fn get(self, key: &str) -> Option<Self> {
+        let Kind::Object { unique } = self.kind() else {
+            return None;
+        };
+        let mut found = self
+            .entries()
+            .filter(|&(name, _)| name == key)
+            .map(|(_, value)| value);
+        // Of keys that write the same, the last written is the one that counts.
+        match unique {
+            true => found.next(),
+            false => found.last(),
+        }
+    }
+
+    fn string(self) -> Cow<'a, str> {
+        match self.kind() {
+            Kind::String(text) => Cow::Borrowed(text),
+            _ => Cow::Owned(js::to_string(&self.value())),
+        }
+    }
+
+    fn text(self) -> Option<&'a str> {
+        match self.kind() {
+            Kind::String(text) => Some(text),
+            _ => None,
+        }
+    }
+
+    fn items(self) -> Option<impl Iterator<Item = Self>> {
+        match self.kind() {
+            Kind::Array => Some(self.children()),
+            _ => None,
+        }
+    }
+
+    fn attrs(self) -> Option<Cow<'a, Map>> {
+        match self.kind() {
+            Kind::Null => None,
+            Kind::Object { unique } => Some(Cow::Owned(self.object(unique))),
+            _ => Some(Cow::Owned(Map::new())),
+        }
+    }
+}
+
+/// Finds the values of a document, one after another.
+struct Indexer<'a> {
+    bytes: &'a [u8],
+    at: usize,
+    slots: Vec<Slot<'a>>,
+    keys: Vec<Key>,
+}
+
+/// A map's key, read.
 enum ReadKey {
-    Text(Key, bool),
+    /// A string, which no other key of the map can be.
+    String,
+    /// An atom or integer, which may write as the same text as another of the map's keys.
+    Other,
     /// A struct's `__struct__` key.
     Struct,
 }
 
-impl<'a> Reader<'a> {
+impl<'a> Indexer<'a> {
     fn take(&mut self, count: usize) -> Result<&'a [u8], NotJson> {
         let taken = self.bytes.get(self.at..self.at + count).ok_or(NotJson)?;
         self.at += count;
@@ -87,128 +284,144 @@ impl<'a> Reader<'a> {
         Ok(u32::from_be_bytes(self.take(4)?.try_into().expect("four bytes")) as usize)
     }
 
-    fn value(&mut self) -> Result<Value, NotJson> {
-        Ok(match self.byte()? {
+    fn leaf(&mut self, kind: Kind<'a>) {
+        self.slots.push(Slot {
+            kind,
+            next: self.slots.len() + 1,
+        });
+    }
+
+    /// A binary that holds UTF-8, which is all Jason encodes.
+    fn text(&mut self, length: usize) -> Result<&'a str, NotJson> {
+        std::str::from_utf8(self.take(length)?).map_err(|_| NotJson)
+    }
+
+    fn value(&mut self) -> Result<(), NotJson> {
+        let slot = self.slots.len();
+        self.leaf(Kind::Null);
+        let kind = match self.byte()? {
             tag @ (SMALL_INTEGER | INTEGER | SMALL_BIG | LARGE_BIG) => {
-                Value::Number(self.integer(tag)?.number()?)
+                Kind::Number(self.integer(tag)?.number()?)
             }
             NEW_FLOAT => {
                 let bits = u64::from_be_bytes(self.take(8)?.try_into().expect("eight bytes"));
-                Value::Number(Number::from_f64(f64::from_bits(bits)).ok_or(NotJson)?)
+                Kind::Number(Numeral::double(f64::from_bits(bits))?)
             }
             BINARY => {
                 let length = self.u32()?;
-                Value::String(text(self.take(length)?)?.to_owned())
+                Kind::String(self.text(length)?)
             }
             tag @ (ATOM | SMALL_ATOM | ATOM_UTF8 | SMALL_ATOM_UTF8) => match self.atom(tag)? {
-                "nil" => Value::Null,
-                "true" => Value::Bool(true),
-                "false" => Value::Bool(false),
-                name => Value::String(name.to_owned()),
+                "nil" => Kind::Null,
+                "true" => Kind::Bool(true),
+                "false" => Kind::Bool(false),
+                name => Kind::String(name),
             },
-            NIL => Value::Array(Vec::new()),
+            NIL => Kind::Array,
             // A list of bytes.
             STRING => {
                 let length = self.u16()?;
-                Value::Array(
-                    self.take(length)?
-                        .iter()
-                        .map(|&byte| Value::Number(byte.into()))
-                        .collect(),
-                )
+                for &byte in self.take(length)? {
+                    self.leaf(Kind::Number(Numeral::Signed(byte.into())));
+                }
+                Kind::Array
             }
             LIST => {
                 let length = self.u32()?;
-                let mut items = Vec::with_capacity(length.min(self.bytes.len()));
-                for _ in 0..length {
-                    items.push(stack::grow(|| self.value())?);
-                }
-                // An improper list has no JSON.
-                if self.byte()? != NIL {
-                    return Err(NotJson);
-                }
-                Value::Array(items)
+                stack::grow(|| self.list(length))?;
+                Kind::Array
             }
             MAP => {
                 let arity = self.u32()?;
-                self.object(arity)?
+                stack::grow(|| self.object(arity))?
             }
             _ => return Err(NotJson),
-        })
+        };
+        self.slots[slot] = Slot {
+            kind,
+            next: self.slots.len(),
+        };
+        Ok(())
     }
 
-    fn object(&mut self, arity: usize) -> Result<Value, NotJson> {
-        let mut object = Map::with_capacity(arity.min(self.bytes.len()));
-        // Two strings are never the same key of one map, but an atom or integer key may write
-        // as one of them.
+    fn list(&mut self, length: usize) -> Result<(), NotJson> {
+        for _ in 0..length {
+            self.value()?;
+        }
+        // An improper list has no JSON.
+        match self.byte()? {
+            NIL => Ok(()),
+            _ => Err(NotJson),
+        }
+    }
+
+    fn object(&mut self, arity: usize) -> Result<Kind<'a>, NotJson> {
         let mut unique = true;
-        for _ in 0..arity {
+        for index in 0..arity {
             match self.key()? {
-                ReadKey::Text(key, string) => {
-                    unique &= string;
-                    let value = stack::grow(|| self.value())?;
-                    if unique {
-                        object.push(key, value);
-                    } else {
-                        object.insert(key, value);
-                    }
-                }
+                ReadKey::String => {}
+                ReadKey::Other => unique = false,
                 // A struct's map is small, so its keys come in term order, the atom
                 // `__struct__` before `values`, and before any key of its own that is a string.
-                ReadKey::Struct if arity == 2 && object.is_empty() => return self.ordered_object(),
+                ReadKey::Struct if arity == 2 && index == 0 => return self.ordered_object(),
                 ReadKey::Struct => return Err(NotJson),
             }
+            self.value()?;
         }
-        Ok(Value::Object(object))
+        Ok(Kind::Object { unique })
     }
 
     /// The rest of a `Jason.OrderedObject`: its entries, in order.
-    fn ordered_object(&mut self) -> Result<Value, NotJson> {
-        let tag = self.byte()?;
-        if !matches!(tag, ATOM | SMALL_ATOM | ATOM_UTF8 | SMALL_ATOM_UTF8)
-            || self.atom(tag)? != "Elixir.Jason.OrderedObject"
-        {
-            return Err(NotJson);
-        }
-        match self.key()? {
-            ReadKey::Text(key, false) if key == "values" => {}
-            _ => return Err(NotJson),
+    fn ordered_object(&mut self) -> Result<Kind<'a>, NotJson> {
+        for expected in ["Elixir.Jason.OrderedObject", "values"] {
+            let tag = self.byte()?;
+            if !matches!(tag, ATOM | SMALL_ATOM | ATOM_UTF8 | SMALL_ATOM_UTF8)
+                || self.atom(tag)? != expected
+            {
+                return Err(NotJson);
+            }
         }
         let length = match self.byte()? {
-            NIL => return Ok(Value::Object(Map::new())),
+            NIL => return Ok(Kind::Object { unique: false }),
             LIST => self.u32()?,
             _ => return Err(NotJson),
         };
-        let mut object = Map::with_capacity(length.min(self.bytes.len()));
         for _ in 0..length {
             if self.take(2)? != [SMALL_TUPLE, 2] {
                 return Err(NotJson);
             }
-            let ReadKey::Text(key, _) = self.key()? else {
+            if let ReadKey::Struct = self.key()? {
                 return Err(NotJson);
-            };
-            // A key written twice keeps its first place and its last value, as parsing the
-            // JSON Jason writes for it does.
-            object.insert(key, stack::grow(|| self.value())?);
+            }
+            self.value()?;
         }
-        if self.byte()? != NIL {
-            return Err(NotJson);
+        match self.byte()? {
+            NIL => Ok(Kind::Object { unique: false }),
+            _ => Err(NotJson),
         }
-        Ok(Value::Object(object))
     }
 
+    /// Reads a map's key, adding its slot unless it is `__struct__`.
     fn key(&mut self) -> Result<ReadKey, NotJson> {
         Ok(match self.byte()? {
             BINARY => {
                 let length = self.u32()?;
-                ReadKey::Text(text(self.take(length)?)?.into(), true)
+                let text = self.text(length)?;
+                self.leaf(Kind::String(text));
+                ReadKey::String
             }
             tag @ (ATOM | SMALL_ATOM | ATOM_UTF8 | SMALL_ATOM_UTF8) => match self.atom(tag)? {
                 "__struct__" => ReadKey::Struct,
-                name => ReadKey::Text(name.into(), false),
+                name => {
+                    self.leaf(Kind::String(name));
+                    ReadKey::Other
+                }
             },
             tag @ (SMALL_INTEGER | INTEGER | SMALL_BIG | LARGE_BIG) => {
-                ReadKey::Text(self.integer(tag)?.text().into(), false)
+                let text = self.integer(tag)?.text();
+                self.keys.push(text.into());
+                self.leaf(Kind::Key(self.keys.len() - 1));
+                ReadKey::Other
             }
             _ => return Err(NotJson),
         })
@@ -219,12 +432,12 @@ impl<'a> Reader<'a> {
             SMALL_ATOM | SMALL_ATOM_UTF8 => self.byte()?.into(),
             _ => self.u16()?,
         };
-        let name = self.take(length)?;
+        let name = self.text(length)?;
         // Latin-1 atoms Jason could encode are ASCII, as every atom the VM writes this way is.
         if matches!(tag, ATOM | SMALL_ATOM) && !name.is_ascii() {
             return Err(NotJson);
         }
-        text(name)
+        Ok(name)
     }
 
     fn integer(&mut self, tag: u8) -> Result<Integer<'a>, NotJson> {
@@ -248,6 +461,42 @@ impl<'a> Reader<'a> {
     }
 }
 
+/// A number as JSON reads it: an integer exactly within 64 bits, and as the nearest double past
+/// them.
+#[derive(Clone, Copy)]
+enum Numeral {
+    Signed(i64),
+    Unsigned(u64),
+    Double(f64),
+}
+
+impl Numeral {
+    fn double(double: f64) -> Result<Numeral, NotJson> {
+        match double.is_finite() {
+            true => Ok(Numeral::Double(double)),
+            false => Err(NotJson),
+        }
+    }
+
+    fn truthy(self) -> bool {
+        match self {
+            Numeral::Signed(integer) => integer != 0,
+            Numeral::Unsigned(integer) => integer != 0,
+            Numeral::Double(double) => double != 0.0,
+        }
+    }
+}
+
+impl From<Numeral> for Number {
+    fn from(numeral: Numeral) -> Number {
+        match numeral {
+            Numeral::Signed(integer) => integer.into(),
+            Numeral::Unsigned(integer) => integer.into(),
+            Numeral::Double(double) => Number::from_f64(double).expect("a finite double"),
+        }
+    }
+}
+
 enum Integer<'a> {
     Word(i64),
     /// A sign, and base-256 digits, lowest first.
@@ -260,25 +509,23 @@ enum Integer<'a> {
 impl Integer<'_> {
     /// The integer as Jason writes it and `JSON.parse` reads it back: exactly within 64 bits,
     /// as the nearest double past them.
-    fn number(&self) -> Result<Number, NotJson> {
+    fn number(&self) -> Result<Numeral, NotJson> {
         match *self {
-            Integer::Word(word) => Ok(word.into()),
+            Integer::Word(word) => Ok(Numeral::Signed(word)),
             Integer::Big { negative, digits } if digits.len() <= 8 => {
                 let mut bytes = [0; 8];
                 bytes[..digits.len()].copy_from_slice(digits);
                 let magnitude = u64::from_le_bytes(bytes);
                 match negative {
-                    false => Ok(magnitude.into()),
-                    true if magnitude <= 1 << 63 => Ok((magnitude as i64).wrapping_neg().into()),
-                    true => self.double(),
+                    false => Ok(Numeral::Unsigned(magnitude)),
+                    true if magnitude <= 1 << 63 => {
+                        Ok(Numeral::Signed((magnitude as i64).wrapping_neg()))
+                    }
+                    true => Numeral::double(self.text().parse().map_err(|_| NotJson)?),
                 }
             }
-            Integer::Big { .. } => self.double(),
+            Integer::Big { .. } => Numeral::double(self.text().parse().map_err(|_| NotJson)?),
         }
-    }
-
-    fn double(&self) -> Result<Number, NotJson> {
-        Number::from_f64(self.text().parse().map_err(|_| NotJson)?).ok_or(NotJson)
     }
 
     /// The integer's decimal digits, as Jason writes an integer key.
@@ -318,11 +565,6 @@ impl Integer<'_> {
         }
         text
     }
-}
-
-/// A binary that holds UTF-8, which is all Jason encodes.
-fn text(bytes: &[u8]) -> Result<&str, NotJson> {
-    std::str::from_utf8(bytes).map_err(|_| NotJson)
 }
 
 fn write_value(out: &mut Vec<u8>, value: &Value) {
