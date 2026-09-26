@@ -13,6 +13,7 @@ use super::fragment::Fragment;
 use super::node::Node;
 use super::schema::{NodeType, NodeTypeData, Schema};
 use crate::error::{Error, Result};
+use crate::js;
 use crate::stack;
 use crate::text::is_js_space;
 
@@ -241,11 +242,10 @@ impl ContentMatch {
         GENERATING.with_borrow_mut(|generating| generating.push(key));
         let _generating = Generating;
         // A type nothing fills gives ProseMirror a `null` node, whose size the fragment reads.
-        self.node_type(node)
-            .create_and_fill(None, Fragment::empty(), &[])?
-            .ok_or_else(|| {
-                Error::Type("Cannot read properties of null (reading 'nodeSize')".into())
-            })
+        let filled = self
+            .node_type(node)
+            .create_and_fill(None, Fragment::empty(), &[])?;
+        js::non_null(filled, "nodeSize")
     }
 
     fn search_fill(

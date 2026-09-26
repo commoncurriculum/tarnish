@@ -11,6 +11,7 @@ use super::html::{
 use super::rule::{Content, ContentElement, ElementRule, PreserveWhitespace, Skip};
 use crate::dom::{Dom, NodeKind};
 use crate::error::{Error, Result};
+use crate::js::{self, Nullish};
 use crate::model::{Fragment, Mark, MarkType, Node, NodeType};
 use crate::stack;
 use crate::text::{Text, is_blank, line_breaks, replace_line_breaks, split_lines};
@@ -411,12 +412,10 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
                 // `undefined` of an index past it, or the `null` after it.
                 if end_child.is_some() {
                     let missing = match start {
-                        Some(start) if start > 0 && index == start => "undefined",
-                        _ => "null",
+                        Some(start) if start > 0 && index == start => Nullish::Undefined,
+                        _ => Nullish::Null,
                     };
-                    return Err(Error::Type(format!(
-                        "Cannot read properties of {missing} (reading 'nodeType')"
-                    )));
+                    return Err(js::type_error(missing, "nodeType"));
                 }
                 break;
             };
