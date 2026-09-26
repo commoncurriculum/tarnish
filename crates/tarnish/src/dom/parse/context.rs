@@ -89,14 +89,6 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
         &mut self.nodes[self.open]
     }
 
-    /// The context with this identity, which is on the stack.
-    pub(super) fn context(&self, id: usize) -> &NodeContext {
-        self.nodes
-            .iter()
-            .find(|context| context.id == id)
-            .expect("a context on the stack")
-    }
-
     pub(super) fn schema(&self) -> &'p Schema {
         &self.parser.schema
     }

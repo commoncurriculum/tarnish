@@ -15,9 +15,9 @@ use context::ParseContext;
 use node_context::Finished;
 
 pub use rule::{
-    AttrsHook, ClearMarkHook, ContentElement, ContentElementHook, GetAttrs, GetContentHook,
-    ParseRule, PreserveWhitespace, RuleFromNode, RuleKind, SchemaRule, Skip, StyleAttrsHook,
-    TagRule, schema_rules,
+    AttrsHook, ClearMarkHook, Content, ContentElement, ContentElementHook, ElementRule,
+    GetAttrsResult, GetContentHook, Namespace, PreserveWhitespace, Rule, RuleFromNode, Skip,
+    StyleAttrsHook, StyleRule, TagRule, by_priority,
 };
 
 /// A DOM position to find the document position of: the offset into `node`. Parsing sets `pos`
@@ -65,44 +65,41 @@ impl<N> Default for ParseOptions<'_, N> {
 /// Parses DOM content into documents of a schema by its rules.
 pub struct DomParser<N> {
     schema: Schema,
-    tags: Vec<ParseRule<N>>,
-    styles: Vec<ParseRule<N>>,
+    tags: Vec<Rule<TagRule<N>>>,
+    styles: Vec<Rule<StyleRule>>,
+    /// The properties the style rules match, each once.
     matched_styles: Vec<String>,
     normalize_lists: bool,
 }
 
 impl<N: Clone> DomParser<N> {
-    /// A parser of `schema` with these rules, tried in order.
-    pub fn new(schema: Schema, rules: Vec<ParseRule<N>>) -> Result<Self> {
-        let mut tags = Vec::new();
-        let mut styles = Vec::new();
+    /// A parser of `schema` with these rules, each kind tried in order.
+    pub fn new(
+        schema: Schema,
+        tags: Vec<Rule<TagRule<N>>>,
+        styles: Vec<Rule<StyleRule>>,
+    ) -> Result<Self> {
         let mut matched_styles: Vec<String> = Vec::new();
-        for rule in rules {
-            match &rule.kind {
-                RuleKind::Tag(_) => tags.push(rule),
-                RuleKind::Style(style) => {
-                    let property = style.split('=').next().unwrap_or_default().to_owned();
-                    if !matched_styles.contains(&property) {
-                        matched_styles.push(property);
-                    }
-                    styles.push(rule);
-                }
+        for rule in &styles {
+            let property = rule.kind.property();
+            if !matched_styles.iter().any(|matched| matched == property) {
+                matched_styles.push(property.to_owned());
             }
         }
         // Lists are only normalized when a list in the schema can't directly hold one.
         let mut normalize_lists = true;
         for rule in &tags {
-            let Some(tag) = rule.tag() else { continue };
-            let is_list = (tag.selector.starts_with("ul") || tag.selector.starts_with("ol"))
-                && !tag.selector[2..].starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_');
-            let Some(node) = &rule.node else { continue };
-            if !is_list {
-                continue;
-            }
-            let node_type = schema.expect_node_type(node)?;
-            if node_type.content_match().match_type(&node_type).is_some() {
-                normalize_lists = false;
-                break;
+            let tag = &rule.kind.tag;
+            let is_list = (tag.starts_with("ul") || tag.starts_with("ol"))
+                && !tag[2..].starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_');
+            if let Some(node) = &rule.kind.element.node
+                && is_list
+            {
+                let node_type = schema.expect_node_type(node)?;
+                if node_type.content_match().match_type(&node_type).is_some() {
+                    normalize_lists = false;
+                    break;
+                }
             }
         }
         Ok(DomParser {
@@ -150,24 +147,26 @@ impl<N: Clone> DomParser<N> {
         }
     }
 
-    /// The first tag rule after the rule at `after` that matches the element, and the attributes
-    /// it gives.
+    /// The first tag rule after the one at `after` that matches the element.
     fn match_tag<D: Dom<Node = N>>(
         &self,
         dom: &D,
         node: &N,
         context: &ParseContext<'_, '_, D>,
         after: Option<usize>,
-    ) -> Result<Option<Matched<N>>> {
+    ) -> Result<Option<Matched<'_, N>>> {
         let start = after.map_or(0, |after| after + 1);
         for (index, rule) in self.tags.iter().enumerate().skip(start) {
-            let tag = rule.tag().expect("a tag rule");
-            if !dom.matches(node, &tag.selector)? {
+            let tag = &rule.kind;
+            if !dom.matches(node, &tag.tag)? {
                 continue;
             }
-            if let Some(namespace) = &tag.namespace
-                && dom.namespace(node)? != *namespace
-            {
+            let in_namespace = match &tag.namespace {
+                Namespace::Any => true,
+                Namespace::Null => dom.namespace(node)?.is_none(),
+                Namespace::Is(namespace) => dom.namespace(node)?.as_ref() == Some(namespace),
+            };
+            if !in_namespace {
                 continue;
             }
             if let Some(rule_context) = &rule.context
@@ -175,23 +174,29 @@ impl<N: Clone> DomParser<N> {
             {
                 continue;
             }
-            let attrs = match &rule.get_attrs {
-                Some(GetAttrs::Tag(get_attrs)) => match get_attrs(node)? {
-                    None => continue,
-                    Some(attrs) => attrs,
+            // JavaScript's `matchTag` and `matchStyle` write what `getAttrs` gives onto the
+            // rule, where it stays after the parse. Here it travels with the match instead.
+            let attrs = match &tag.get_attrs {
+                Some(get_attrs) => match get_attrs(node)? {
+                    GetAttrsResult::Reject => continue,
+                    GetAttrsResult::Defaults => None,
+                    GetAttrsResult::Attrs(attrs) => Some(attrs),
                 },
-                _ => rule.attrs.clone(),
+                None => rule.attrs.clone(),
             };
             return Ok(Some(Matched {
-                rule: RuleRef::Listed(index),
+                element: &tag.element,
+                mark: rule.mark.as_deref(),
+                ignore: rule.ignore,
                 attrs,
+                continue_after: (!rule.consuming).then_some(index),
             }));
         }
         Ok(None)
     }
 
-    /// The first style rule after the rule at `after` that matches the style, and the
-    /// attributes it gives.
+    /// The index of the first style rule after the one at `after` that matches the style, and
+    /// the attributes it gives.
     fn match_style<D: Dom<Node = N>>(
         &self,
         property: &str,
@@ -201,9 +206,7 @@ impl<N: Clone> DomParser<N> {
     ) -> Result<Option<(usize, Option<Attrs>)>> {
         let start = after.map_or(0, |after| after + 1);
         for (index, rule) in self.styles.iter().enumerate().skip(start) {
-            let RuleKind::Style(style) = &rule.kind else {
-                continue;
-            };
+            let style = &rule.kind.style;
             if !style.starts_with(property) {
                 continue;
             }
@@ -219,12 +222,13 @@ impl<N: Clone> DomParser<N> {
             {
                 continue;
             }
-            let attrs = match &rule.get_attrs {
-                Some(GetAttrs::Style(get_attrs)) => match get_attrs(value)? {
-                    None => continue,
-                    Some(attrs) => attrs,
+            let attrs = match &rule.kind.get_attrs {
+                Some(get_attrs) => match get_attrs(value)? {
+                    GetAttrsResult::Reject => continue,
+                    GetAttrsResult::Defaults => None,
+                    GetAttrsResult::Attrs(attrs) => Some(attrs),
                 },
-                _ => rule.attrs.clone(),
+                None => rule.attrs.clone(),
             };
             return Ok(Some((index, attrs)));
         }
@@ -232,13 +236,24 @@ impl<N: Clone> DomParser<N> {
     }
 }
 
-/// A matched rule: one of the parser's, or one `ruleFromNode` gave.
-enum RuleRef<N> {
-    Listed(usize),
-    FromNode(Box<ParseRule<N>>),
+/// A rule that matched an element: one of the parser's, or the one `ruleFromNode` gave.
+struct Matched<'r, N> {
+    element: &'r ElementRule<N>,
+    mark: Option<&'r str>,
+    ignore: bool,
+    attrs: Option<Attrs>,
+    /// The parser's rule, when it isn't consuming, for the rules after it to be tried too.
+    continue_after: Option<usize>,
 }
 
-struct Matched<N> {
-    rule: RuleRef<N>,
-    attrs: Option<Attrs>,
+impl<'r, N> Matched<'r, N> {
+    fn from_node(rule: &'r Rule<ElementRule<N>>) -> Self {
+        Matched {
+            element: &rule.kind,
+            mark: rule.mark.as_deref(),
+            ignore: rule.ignore,
+            attrs: rule.attrs.clone(),
+            continue_after: None,
+        }
+    }
 }

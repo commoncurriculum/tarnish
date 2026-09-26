@@ -5,9 +5,9 @@ mod parse;
 mod serialize;
 
 pub use parse::{
-    AttrsHook, ClearMarkHook, ContentElement, ContentElementHook, DomParser, FindPosition,
-    GetAttrs, GetContentHook, ParseOptions, ParseRule, PreserveWhitespace, RuleFromNode, RuleKind,
-    SchemaRule, Skip, StyleAttrsHook, TagRule, schema_rules,
+    AttrsHook, ClearMarkHook, Content, ContentElement, ContentElementHook, DomParser, ElementRule,
+    FindPosition, GetAttrsResult, GetContentHook, Namespace, ParseOptions, PreserveWhitespace,
+    Rule, RuleFromNode, Skip, StyleAttrsHook, StyleRule, TagRule, by_priority,
 };
 pub use serialize::{DomSerializer, DomSpec, MarkToDom, NodeToDom, Rendered, render_spec};
 

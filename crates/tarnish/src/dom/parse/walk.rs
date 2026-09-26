@@ -1,13 +1,15 @@
 //! Walking the DOM, and parsing each node by the rules.
 
+use std::borrow::Cow;
+
+use super::Matched;
 use super::context::ParseContext;
 use super::html::{
     BLOCK_TAGS, IGNORE_TAGS, collapse_spaces, is_html_space, is_list_tag, normalize_list,
     normalize_newlines, split_lines,
 };
 use super::node_context::{OPT_PRESERVE_WS, OPT_PRESERVE_WS_FULL};
-use super::rule::{ContentElement, ParseRule, PreserveWhitespace, Skip};
-use super::{Matched, RuleRef};
+use super::rule::{Content, ContentElement, ElementRule, PreserveWhitespace, Skip};
 use crate::dom::{Dom, NodeKind};
 use crate::error::{Error, Result};
 use crate::model::{Fragment, Mark, MarkType, Node, NodeType};
@@ -149,100 +151,110 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
         marks: &[Mark],
         match_after: Option<usize>,
     ) -> Result<()> {
-        let dom = self.dom;
+        let (dom, parser) = (self.dom, self.parser);
         let outer_ws = self.local_preserve_ws;
-        let mut top = self.top().id;
         let name = dom.node_name(node)?;
         if name == "PRE" || dom.style_value(node, "white-space")?.contains("pre") {
             self.local_preserve_ws = true;
         }
-        let name = name.to_lowercase();
-        if is_list_tag(&name) && self.parser.normalize_lists {
+        let lower_name = name.to_lowercase();
+        if is_list_tag(&lower_name) && parser.normalize_lists {
             normalize_list(dom, node)?;
         }
         let from_node = match self.options.rule_from_node {
             Some(rule_from_node) => rule_from_node(node)?,
             None => None,
         };
-        let matched = match from_node {
-            Some(rule) => Some(Matched {
-                attrs: rule.attrs.clone(),
-                rule: RuleRef::FromNode(Box::new(rule)),
-            }),
-            None => self.parser.match_tag(dom, node, self, match_after)?,
+        let matched = match &from_node {
+            Some(rule) => Some(Matched::from_node(rule)),
+            None => parser.match_tag(dom, node, self, match_after)?,
         };
-        let rule = matched.as_ref().map(|matched| match &matched.rule {
-            RuleRef::Listed(index) => &self.parser.tags[*index],
-            RuleRef::FromNode(rule) => &**rule,
-        });
-        let ignore = match rule {
-            Some(rule) => rule.ignore,
-            None => IGNORE_TAGS.contains(&name.as_str()),
+        let ignore = match &matched {
+            Some(matched) => matched.ignore,
+            None => IGNORE_TAGS.contains(&lower_name.as_str()),
         };
-        if ignore {
-            self.find_inside(node)?;
-            self.ignore_fallback(node, marks)?;
-        } else if rule.is_none_or(|rule| !matches!(rule.skip, Skip::No) || rule.close_parent) {
-            let mut node = node.clone();
-            if let Some(rule) = rule {
-                if rule.close_parent {
-                    self.open = self.open.saturating_sub(1);
-                } else if let Skip::Node(skip) = &rule.skip {
-                    node = skip.clone();
+        match matched {
+            _ if ignore => {
+                self.find_inside(node)?;
+                self.ignore_fallback(&name, marks)?;
+            }
+            Some(matched)
+                if matches!(matched.element.skip, Skip::No) && !matched.element.close_parent =>
+            {
+                if let Some(inner_marks) = self.read_styles(node, marks)? {
+                    self.add_element_by_rule(node, &name, &matched, &inner_marks)?;
                 }
             }
-            let skip = rule.is_some_and(|rule| !matches!(rule.skip, Skip::No));
-            let mut sync = false;
-            let old_needs_block = self.needs_block;
-            if BLOCK_TAGS.contains(&name.as_str()) {
-                // `top` is the context that was open when the element came, which closing its
-                // parent leaves on the stack.
-                if self
-                    .context(top)
-                    .content
-                    .first()
-                    .is_some_and(Node::is_inline)
-                    && self.open > 0
-                {
-                    self.open -= 1;
-                    top = self.top().id;
-                }
-                sync = true;
-                if self.context(top).node_type.is_none() {
-                    self.needs_block = true;
-                }
-            } else if dom.first_child(&node)?.is_none() {
-                self.leaf_fallback(&node, marks)?;
-                self.local_preserve_ws = outer_ws;
-                return Ok(());
+            matched => {
+                let rule = matched.map(|matched| matched.element);
+                self.add_element_content(node, &name, &lower_name, marks, rule)?;
             }
-            let inner_marks = if skip {
-                Some(marks.to_vec())
-            } else {
-                self.read_styles(&node, marks)?
-            };
-            if let Some(inner_marks) = inner_marks {
-                self.add_all(&node, &inner_marks, None, None)?;
-            }
-            if sync {
-                self.sync(top);
-            }
-            self.needs_block = old_needs_block;
-        } else if let Some(inner_marks) = self.read_styles(node, marks)? {
-            let matched = matched.expect("a matched rule");
-            let continue_after = match &matched.rule {
-                RuleRef::Listed(index) if !self.parser.tags[*index].consuming => Some(*index),
-                _ => None,
-            };
-            self.add_element_by_rule(node, &matched, &inner_marks, continue_after)?;
         }
         self.local_preserve_ws = outer_ws;
         Ok(())
     }
 
-    /// Called for a leaf DOM node that would otherwise be ignored.
-    pub(super) fn leaf_fallback(&mut self, node: &D::Node, marks: &[Mark]) -> Result<()> {
-        if self.dom.node_name(node)? == "BR"
+    /// Parse the content of an element that makes nothing itself: no rule matched it, or its
+    /// rule skips it or closes the parent.
+    fn add_element_content(
+        &mut self,
+        node: &D::Node,
+        name: &str,
+        lower_name: &str,
+        marks: &[Mark],
+        rule: Option<&ElementRule<D::Node>>,
+    ) -> Result<()> {
+        // The context open when the element came, which closing its parent leaves on the stack.
+        let mut top = self.open;
+        let skip = rule.is_some_and(|rule| !matches!(rule.skip, Skip::No));
+        let replaced = match rule {
+            Some(rule) if rule.close_parent => {
+                self.open = self.open.saturating_sub(1);
+                None
+            }
+            Some(ElementRule {
+                skip: Skip::Node(skip),
+                ..
+            }) => Some(skip),
+            _ => None,
+        };
+        let content = replaced.unwrap_or(node);
+        let mut sync = None;
+        let old_needs_block = self.needs_block;
+        if BLOCK_TAGS.contains(&lower_name) {
+            if self.nodes[top].content.first().is_some_and(Node::is_inline) && self.open > 0 {
+                self.open -= 1;
+                top = self.open;
+            }
+            sync = Some(self.nodes[top].id);
+            if self.nodes[top].node_type.is_none() {
+                self.needs_block = true;
+            }
+        } else if self.dom.first_child(content)?.is_none() {
+            let name = match replaced {
+                Some(replaced) => Cow::Owned(self.dom.node_name(replaced)?),
+                None => Cow::Borrowed(name),
+            };
+            return self.leaf_fallback(&name, marks);
+        }
+        let inner_marks = if skip {
+            Some(marks.to_vec())
+        } else {
+            self.read_styles(content, marks)?
+        };
+        if let Some(inner_marks) = inner_marks {
+            self.add_all(content, &inner_marks, None, None)?;
+        }
+        if let Some(sync) = sync {
+            self.sync(sync);
+        }
+        self.needs_block = old_needs_block;
+        Ok(())
+    }
+
+    /// Called for a leaf DOM node, by its name, that would otherwise be ignored.
+    pub(super) fn leaf_fallback(&mut self, name: &str, marks: &[Mark]) -> Result<()> {
+        if name == "BR"
             && self
                 .top()
                 .node_type
@@ -258,10 +270,10 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
         Ok(())
     }
 
-    /// Called for an ignored node.
-    pub(super) fn ignore_fallback(&mut self, node: &D::Node, marks: &[Mark]) -> Result<()> {
+    /// Called for an ignored node, by its name.
+    pub(super) fn ignore_fallback(&mut self, name: &str, marks: &[Mark]) -> Result<()> {
         // An ignored <br> still makes an inline context.
-        if self.dom.node_name(node)? == "BR"
+        if name == "BR"
             && !self
                 .top()
                 .node_type
@@ -297,16 +309,20 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
                 if rule.ignore {
                     return Ok(None);
                 }
-                if let Some(clear_mark) = &rule.clear_mark {
-                    let mut kept = Vec::with_capacity(marks.len());
-                    for mark in marks {
-                        if !clear_mark(&mark)? {
-                            kept.push(mark);
+                match &rule.kind.clear_mark {
+                    Some(clear_mark) => {
+                        let mut kept = Vec::with_capacity(marks.len());
+                        for mark in marks {
+                            if !clear_mark(&mark)? {
+                                kept.push(mark);
+                            }
                         }
+                        marks = kept;
                     }
-                    marks = kept;
-                } else {
-                    marks.push(self.rule_mark_type(rule)?.create(attrs.as_deref())?);
+                    None => {
+                        let mark_type = self.rule_mark_type(rule.mark.as_deref())?;
+                        marks.push(mark_type.create(attrs.as_deref())?);
+                    }
                 }
                 if rule.consuming {
                     break;
@@ -317,75 +333,81 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
         Ok(Some(marks))
     }
 
-    pub(super) fn rule_mark_type(&self, rule: &ParseRule<D::Node>) -> Result<MarkType> {
-        let name = rule.mark.as_deref().unwrap_or("undefined");
-        self.schema()
-            .mark_type(name)
-            .ok_or_else(|| Error::Other(format!("No mark type {name} in the schema")))
+    fn rule_mark_type(&self, mark: Option<&str>) -> Result<MarkType> {
+        let mark_type = mark.and_then(|name| self.schema().mark_type(name));
+        mark_type.ok_or_else(|| {
+            Error::Other(match mark {
+                Some(name) => format!("No mark type {name} in the schema"),
+                None => "A parse rule that makes neither a node nor a mark".into(),
+            })
+        })
     }
 
-    pub(super) fn add_element_by_rule(
+    /// Parse an element, by its name, as its rule says.
+    fn add_element_by_rule(
         &mut self,
         node: &D::Node,
-        matched: &Matched<D::Node>,
+        name: &str,
+        matched: &Matched<'_, D::Node>,
         marks: &[Mark],
-        continue_after: Option<usize>,
     ) -> Result<()> {
-        let rule = match &matched.rule {
-            RuleRef::Listed(index) => &self.parser.tags[*index],
-            RuleRef::FromNode(rule) => &**rule,
-        };
+        let rule = matched.element;
         let mut marks = marks.to_vec();
         let mut sync = false;
-        let mut leaf = false;
-        if let Some(name) = &rule.node {
-            let node_type = self.schema().expect_node_type(name)?;
-            if !node_type.is_leaf() {
-                let preserve = rule.tag().and_then(|tag| tag.preserve_whitespace);
+        let node_type = match &rule.node {
+            Some(node_type) => Some(self.schema().expect_node_type(node_type)?),
+            None => None,
+        };
+        match &node_type {
+            Some(node_type) if node_type.is_leaf() => {
+                let created = node_type.create(matched.attrs.as_deref(), Fragment::empty(), &[])?;
+                if !self.insert_node(created, &marks, name == "BR")? {
+                    self.leaf_fallback(name, &marks)?;
+                }
+            }
+            Some(node_type) => {
+                let preserve = rule.preserve_whitespace;
                 if let Some(inner) =
-                    self.enter(&node_type, matched.attrs.clone(), marks.clone(), preserve)?
+                    self.enter(node_type, matched.attrs.clone(), marks.clone(), preserve)?
                 {
                     sync = true;
                     marks = inner;
                 }
-            } else {
-                leaf = true;
-                let is_break = self.dom.node_name(node)? == "BR";
-                let created = node_type.create(matched.attrs.as_deref(), Fragment::empty(), &[])?;
-                if !self.insert_node(created, &marks, is_break)? {
-                    self.leaf_fallback(node, &marks)?;
-                }
             }
-        } else {
-            marks.push(
-                self.rule_mark_type(rule)?
-                    .create(matched.attrs.as_deref())?,
-            );
+            None => {
+                let mark_type = self.rule_mark_type(matched.mark)?;
+                marks.push(mark_type.create(matched.attrs.as_deref())?);
+            }
         }
         let start_in = self.top().id;
-        let tag = rule.tag();
-        if leaf {
+        if node_type.as_ref().is_some_and(NodeType::is_leaf) {
             self.find_inside(node)?;
-        } else if let Some(after) = continue_after {
+        } else if let Some(after) = matched.continue_after {
             self.add_element(node, &marks, Some(after))?;
-        } else if let Some(get_content) = tag.and_then(|tag| tag.get_content.as_ref()) {
-            self.find_inside(node)?;
-            for child in get_content(node, self.schema())?.children() {
-                self.insert_node(child.clone(), &marks, false)?;
-            }
         } else {
-            let content_dom = match tag.and_then(|tag| tag.content_element.as_ref()) {
-                None => node.clone(),
-                Some(ContentElement::Selector(selector)) => self
-                    .dom
-                    .query_selector(node, selector)?
-                    .ok_or_else(|| Error::Other(format!("No element matches {selector}")))?,
-                Some(ContentElement::Hook(hook)) => hook(node)?,
-                Some(ContentElement::Node(content)) => content.clone(),
+            let content_dom = match &rule.content {
+                Content::Get(get_content) => {
+                    self.find_inside(node)?;
+                    for child in get_content(node, self.schema())?.children() {
+                        self.insert_node(child.clone(), &marks, false)?;
+                    }
+                    None
+                }
+                Content::Children => Some(node.clone()),
+                Content::Element(ContentElement::Selector(selector)) => {
+                    let found = self.dom.query_selector(node, selector)?;
+                    let found = found
+                        .ok_or_else(|| Error::Other(format!("No element matches {selector}")))?;
+                    Some(found)
+                }
+                Content::Element(ContentElement::Hook(hook)) => Some(hook(node)?),
+                Content::Element(ContentElement::Node(content)) => Some(content.clone()),
             };
-            self.find_around(node, &content_dom, true)?;
-            self.add_all(&content_dom, &marks, None, None)?;
-            self.find_around(node, &content_dom, false)?;
+            if let Some(content_dom) = content_dom {
+                self.find_around(node, &content_dom, true)?;
+                self.add_all(&content_dom, &marks, None, None)?;
+                self.find_around(node, &content_dom, false)?;
+            }
         }
         if sync && self.sync(start_in) {
             self.open -= 1;

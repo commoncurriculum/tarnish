@@ -5,11 +5,12 @@ use std::sync::Arc;
 use napi::bindgen_prelude::{ClassInstance, FromNapiValue, Object, Unknown};
 use napi::{Env, JsValue, Result, ValueType};
 use napi_derive::napi;
+use tarnish::Mark;
 use tarnish::dom::{
-    ClearMarkHook, ContentElement, DomParser, FindPosition, GetAttrs, GetContentHook, ParseOptions,
-    ParseRule, PreserveWhitespace, RuleFromNode, RuleKind, Skip, TagRule,
+    AttrsHook, ClearMarkHook, Content, ContentElement, DomParser, ElementRule, FindPosition,
+    GetAttrsResult, GetContentHook, Namespace, ParseOptions, PreserveWhitespace, Rule,
+    RuleFromNode, Skip, StyleAttrsHook, StyleRule, TagRule,
 };
-use tarnish::{Attrs, Mark};
 
 use super::{JsDom, JsNode, dom_node};
 use crate::content::ContentMatchHandle;
@@ -25,6 +26,10 @@ fn truthy_string(object: &Object, key: &str) -> Result<Option<String>> {
     Ok(js::get_string(object, key)?.filter(|value| !value.is_empty()))
 }
 
+fn truthy(object: &Object, key: &str) -> Result<bool> {
+    js::get(object, key)?.coerce_to_bool()
+}
+
 fn preserve_whitespace(value: Unknown) -> Result<Option<PreserveWhitespace>> {
     if js::is_nullish(&value)? {
         return Ok(None);
@@ -38,104 +43,118 @@ fn preserve_whitespace(value: Unknown) -> Result<Option<PreserveWhitespace>> {
 
 /// What `getAttrs` gave: `false` to not match, otherwise the attributes, falsy for the
 /// defaults.
-fn attrs_result(result: Unknown) -> Result<Option<Option<Attrs>>> {
+fn attrs_result(result: Unknown) -> Result<GetAttrsResult> {
     if js::is_false(&result)? {
-        return Ok(None);
+        return Ok(GetAttrsResult::Reject);
     }
     if !result.coerce_to_bool()? {
-        return Ok(Some(None));
+        return Ok(GetAttrsResult::Defaults);
     }
-    js::attrs_from_js(result).map(Some)
+    Ok(match js::attrs_from_js(result)? {
+        Some(attrs) => GetAttrsResult::Attrs(attrs),
+        None => GetAttrsResult::Defaults,
+    })
 }
 
-/// A parse rule of JavaScript's, `None` when it is neither a tag rule nor a style rule.
-fn parse_rule(rule: &Object) -> Result<Option<ParseRule<JsNode>>> {
-    let (tag, style) = (js::get(rule, "tag")?, js::get(rule, "style")?);
-    let kind = if !js::is_nullish(&tag)? {
-        RuleKind::Tag(tag_rule(rule, js::coerce_to_string(&tag)?)?)
-    } else if !js::is_nullish(&style)? {
-        RuleKind::Style(js::coerce_to_string(&style)?)
-    } else {
-        return Ok(None);
-    };
-    rule_with_kind(rule, kind).map(Some)
+fn priority(rule: &Object) -> Result<Option<f64>> {
+    let priority = js::get(rule, "priority")?;
+    match priority.get_type()? {
+        ValueType::Number => f64::from_unknown(priority).map(Some),
+        _ => Ok(None),
+    }
 }
 
-fn tag_rule(rule: &Object, selector: String) -> Result<TagRule<JsNode>> {
-    let namespace = js::get(rule, "namespace")?;
-    let content_element = js::get(rule, "contentElement")?;
-    Ok(TagRule {
-        selector,
+/// The fields a rule of either kind has.
+fn rule<K>(rule: &Object, kind: K) -> Result<Rule<K>> {
+    let mut parsed = Rule::new(kind);
+    parsed.priority = priority(rule)?;
+    parsed.consuming = !js::is_false(&js::get(rule, "consuming")?)?;
+    parsed.context = truthy_string(rule, "context")?;
+    parsed.mark = truthy_string(rule, "mark")?;
+    parsed.ignore = truthy(rule, "ignore")?;
+    parsed.attrs = js::attrs_from_js(js::get(rule, "attrs")?)?;
+    Ok(parsed)
+}
+
+fn tag_rule(object: &Object, tag: String) -> Result<Rule<TagRule<JsNode>>> {
+    let namespace = js::get(object, "namespace")?;
+    let get_attrs = Hook::method(object, "getAttrs")?.map(|hook| {
+        Arc::new(move |node: &JsNode| {
+            js::host(|env| attrs_result(hook.call(env, node.value(env)?)?))
+        }) as AttrsHook<JsNode>
+    });
+    let kind = TagRule {
+        tag,
         namespace: match namespace.get_type()? {
-            ValueType::Undefined => None,
-            ValueType::Null => Some(None),
-            _ => Some(Some(js::coerce_to_string(&namespace)?)),
+            ValueType::Undefined => Namespace::Any,
+            ValueType::Null => Namespace::Null,
+            _ => Namespace::Is(js::coerce_to_string(&namespace)?),
         },
-        content_element: match content_element.get_type()? {
-            ValueType::String => Some(ContentElement::Selector(String::from_unknown(
+        get_attrs,
+        element: element_rule(object)?,
+    };
+    rule(object, kind)
+}
+
+fn element_rule(rule: &Object) -> Result<ElementRule<JsNode>> {
+    let skip = js::get(rule, "skip")?;
+    let content_element = js::get(rule, "contentElement")?;
+    let content = match Hook::method(rule, "getContent")? {
+        Some(hook) => Content::Get(Arc::new(move |node: &JsNode, _: &tarnish::Schema| {
+            js::host(|env| {
+                let content = hook.call(env, node.value(env)?)?;
+                Ok(ClassInstance::<FragmentHandle>::from_unknown(content)?
+                    .fragment
+                    .clone())
+            })
+        }) as GetContentHook<JsNode>),
+        None => match content_element.get_type()? {
+            ValueType::String => Content::Element(ContentElement::Selector(String::from_unknown(
                 content_element,
             )?)),
-            ValueType::Function => Hook::method(rule, "contentElement")?.map(|hook| {
-                ContentElement::Hook(Arc::new(move |node: &JsNode| {
-                    js::host(|env| JsNode::new(hook.call(env, node.value(env)?)?))
-                }))
-            }),
+            ValueType::Function => match Hook::method(rule, "contentElement")? {
+                Some(hook) => {
+                    Content::Element(ContentElement::Hook(Arc::new(move |node: &JsNode| {
+                        js::host(|env| JsNode::new(hook.call(env, node.value(env)?)?))
+                    })))
+                }
+                None => Content::Children,
+            },
             _ if content_element.coerce_to_bool()? => {
-                Some(ContentElement::Node(JsNode::new(content_element)?))
+                Content::Element(ContentElement::Node(JsNode::new(content_element)?))
             }
-            _ => None,
+            _ => Content::Children,
         },
-        get_content: Hook::method(rule, "getContent")?.map(|hook| {
-            Arc::new(move |node: &JsNode, _: &tarnish::Schema| {
-                js::host(|env| {
-                    let content = hook.call(env, node.value(env)?)?;
-                    Ok(ClassInstance::<FragmentHandle>::from_unknown(content)?
-                        .fragment
-                        .clone())
-                })
-            }) as GetContentHook<JsNode>
-        }),
+    };
+    Ok(ElementRule {
+        node: truthy_string(rule, "node")?,
+        skip: match dom_node(skip)? {
+            Some(node) => Skip::Node(node),
+            None if skip.coerce_to_bool()? => Skip::Yes,
+            None => Skip::No,
+        },
+        close_parent: truthy(rule, "closeParent")?,
+        content,
         preserve_whitespace: preserve_whitespace(js::get(rule, "preserveWhitespace")?)?,
     })
 }
 
-fn rule_with_kind(rule: &Object, kind: RuleKind<JsNode>) -> Result<ParseRule<JsNode>> {
-    let is_tag = matches!(kind, RuleKind::Tag(_));
-    let (priority, skip) = (js::get(rule, "priority")?, js::get(rule, "skip")?);
-    let mut parsed = ParseRule::new(kind);
-    parsed.priority = match priority.get_type()? {
-        ValueType::Number => Some(f64::from_unknown(priority)?),
-        _ => None,
-    };
-    parsed.consuming = !js::is_false(&js::get(rule, "consuming")?)?;
-    parsed.context = truthy_string(rule, "context")?;
-    parsed.node = truthy_string(rule, "node")?;
-    parsed.mark = truthy_string(rule, "mark")?;
-    parsed.ignore = js::get(rule, "ignore")?.coerce_to_bool()?;
-    parsed.close_parent = js::get(rule, "closeParent")?.coerce_to_bool()?;
-    parsed.skip = match dom_node(skip)? {
-        Some(node) => Skip::Node(node),
-        None if skip.coerce_to_bool()? => Skip::Yes,
-        None => Skip::No,
-    };
-    parsed.attrs = js::attrs_from_js(js::get(rule, "attrs")?)?;
-    parsed.get_attrs = Hook::method(rule, "getAttrs")?.map(|hook| {
-        if is_tag {
-            GetAttrs::Tag(Arc::new(move |node: &JsNode| {
-                js::host(|env| attrs_result(hook.call(env, node.value(env)?)?))
-            }))
-        } else {
-            GetAttrs::Style(Arc::new(move |value: &str| {
-                js::host(|env| attrs_result(hook.call(env, value)?))
-            }))
-        }
+fn style_rule(object: &Object, style: String) -> Result<Rule<StyleRule>> {
+    let get_attrs = Hook::method(object, "getAttrs")?.map(|hook| {
+        Arc::new(move |value: &str| js::host(|env| attrs_result(hook.call(env, value)?)))
+            as StyleAttrsHook
     });
-    parsed.clear_mark = Hook::method(rule, "clearMark")?.map(|hook| {
+    let clear_mark = Hook::method(object, "clearMark")?.map(|hook| {
         Arc::new(move |mark: &Mark| {
             js::host(|env| hook.call(env, mark::wrap(env, mark)?)?.coerce_to_bool())
         }) as ClearMarkHook
     });
-    Ok(parsed)
+    let kind = StyleRule {
+        style,
+        get_attrs,
+        clear_mark,
+    };
+    rule(object, kind)
 }
 
 #[napi]
@@ -145,15 +164,21 @@ pub struct DomParserHandle {
 
 #[napi]
 impl DomParserHandle {
-    /// A parser of the rules, whose `getContent` gives the handle of the fragment it makes.
+    /// A parser of the rules, whose `getContent` gives the handle of the fragment it makes. A
+    /// rule with neither a `tag` nor a `style` is left out.
     #[napi(constructor)]
     pub fn new(env: &Env, schema: &SchemaHandle, rules: Vec<Object>) -> Result<Self> {
-        let mut parsed = Vec::with_capacity(rules.len());
+        let (mut tags, mut styles) = (Vec::new(), Vec::new());
         for rule in &rules {
-            parsed.extend(parse_rule(rule)?);
+            let (tag, style) = (js::get(rule, "tag")?, js::get(rule, "style")?);
+            if !js::is_nullish(&tag)? {
+                tags.push(tag_rule(rule, js::coerce_to_string(&tag)?)?);
+            } else if !js::is_nullish(&style)? {
+                styles.push(style_rule(rule, js::coerce_to_string(&style)?)?);
+            }
         }
         Ok(DomParserHandle {
-            parser: DomParser::new(schema.schema.clone(), parsed).or_throw(env)?,
+            parser: DomParser::new(schema.schema.clone(), tags, styles).or_throw(env)?,
         })
     }
 
@@ -220,24 +245,14 @@ fn with_options<T>(
         });
     }
     let rule_from_node = set("ruleFromNode")?.map(|function| {
-        move |node: &JsNode| -> tarnish::Result<Option<ParseRule<JsNode>>> {
+        move |node: &JsNode| -> tarnish::Result<Option<Rule<ElementRule<JsNode>>>> {
             js::host(|env| {
-                let rule = js::call(function, node.value(env)?)?;
-                if !rule.coerce_to_bool()? {
+                let found = js::call(function, node.value(env)?)?;
+                if !found.coerce_to_bool()? {
                     return Ok(None);
                 }
-                let rule = Object::from_unknown(rule)?;
-                let tag = TagRule {
-                    selector: String::new(),
-                    namespace: None,
-                    content_element: None,
-                    get_content: None,
-                    preserve_whitespace: preserve_whitespace(js::get(
-                        &rule,
-                        "preserveWhitespace",
-                    )?)?,
-                };
-                rule_with_kind(&rule, RuleKind::Tag(tag)).map(Some)
+                let found = Object::from_unknown(found)?;
+                rule(&found, element_rule(&found)?).map(Some)
             })
         }
     });
@@ -272,48 +287,35 @@ fn with_options<T>(
     Ok(result)
 }
 
-/// `DOMParser.schemaRules`: the schema's rules in parse order, each as `[ofMark, typeIndex,
-/// ruleIndex, named]`.
+/// `DOMParser.schemaRules`: the schema's rules, given by type as its mark and node types come,
+/// in parse order, each as `[ofMark, typeIndex, ruleIndex, named]`. A rule is `named` when it
+/// gets its type's name: a mark type's rule without a `mark`, `ignore` or `clearMark`, and a
+/// node type's without a `node`, `ignore` or `mark`.
 #[napi]
 pub fn schema_rules(
-    schema: &SchemaHandle,
     marks: Vec<Vec<Object>>,
     nodes: Vec<Vec<Object>>,
 ) -> Result<Vec<(bool, u32, u32, bool)>> {
-    let named = |types: Vec<Vec<Object>>, names: Vec<String>| {
-        types
-            .into_iter()
-            .zip(names)
-            .map(|(rules, name)| {
-                let rules = rules
-                    .iter()
-                    .map(|rule| match parse_rule(rule)? {
-                        Some(rule) => Ok(rule),
-                        // A rule of neither kind still takes its place in the order, which its
-                        // kind doesn't decide.
-                        None => rule_with_kind(rule, RuleKind::Style(String::new())),
-                    })
-                    .collect::<Result<_>>()?;
-                Ok((name, rules))
-            })
-            .collect::<Result<Vec<_>>>()
-    };
-    let schema = &schema.schema;
-    let mark_names = schema.mark_types().map(|mark| mark.name().to_owned());
-    let node_names = schema.node_types().map(|node| node.name().to_owned());
-    let ordered = tarnish::dom::schema_rules(
-        named(marks, mark_names.collect())?,
-        named(nodes, node_names.collect())?,
-    );
-    Ok(ordered
-        .into_iter()
-        .map(|rule| {
-            (
-                rule.of_mark,
-                rule.type_index as u32,
-                rule.rule_index as u32,
-                rule.named,
-            )
-        })
-        .collect())
+    let mut rules = Vec::new();
+    for (of_mark, types) in [(true, marks), (false, nodes)] {
+        let own = match of_mark {
+            true => ["mark", "ignore", "clearMark"],
+            false => ["node", "ignore", "mark"],
+        };
+        for (type_index, type_rules) in types.iter().enumerate() {
+            for (rule_index, rule) in type_rules.iter().enumerate() {
+                let mut named = true;
+                for key in own {
+                    if truthy(rule, key)? {
+                        named = false;
+                        break;
+                    }
+                }
+                let entry = (of_mark, type_index as u32, rule_index as u32, named);
+                rules.push((priority(rule)?, entry));
+            }
+        }
+    }
+    let ordered = tarnish::dom::by_priority(rules, |(priority, _)| *priority);
+    Ok(ordered.into_iter().map(|(_, entry)| entry).collect())
 }
