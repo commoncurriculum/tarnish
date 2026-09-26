@@ -12,7 +12,7 @@ use super::Dom;
 use crate::error::Result;
 use crate::model::{Attrs, ContentMatch, Node, ResolvedPos, Schema, Slice};
 use context::ParseContext;
-use node_context::Finished;
+use node_context::NodeContext;
 
 pub use rule::{
     AttrsHook, ClearMarkHook, Content, ContentElement, ContentElementHook, ElementRule,
@@ -122,29 +122,35 @@ impl<N: Clone> DomParser<N> {
         node: &N,
         options: ParseOptions<'_, N>,
     ) -> Result<Node> {
-        let (from, to) = (options.from, options.to);
-        let mut context = ParseContext::new(self, dom, options, false);
-        context.add_all(node, &[], from, to)?;
-        match context.finish()? {
-            Finished::Node(node) => Ok(node),
-            Finished::Fragment(_) => unreachable!("a closed parse has a top node"),
-        }
+        let top_open = options.top_open;
+        self.run(dom, node, options, false)?.finish_node(top_open)
     }
 
-    /// Parse the content of a DOM node as a slice, open at its sides.
+    /// Parse the content of a DOM node as a slice, open at its sides. With a top node, the
+    /// slice holds the content parsed into it.
     pub fn parse_slice<D: Dom<Node = N>>(
         &self,
         dom: &D,
         node: &N,
         options: ParseOptions<'_, N>,
     ) -> Result<Slice> {
+        let content = self.run(dom, node, options, true)?.finish_content(true)?;
+        Ok(Slice::max_open(content, true))
+    }
+
+    /// Parse the node's children, and give back the top context, with every node above it
+    /// closed.
+    fn run<D: Dom<Node = N>>(
+        &self,
+        dom: &D,
+        node: &N,
+        options: ParseOptions<'_, N>,
+        is_open: bool,
+    ) -> Result<NodeContext> {
         let (from, to) = (options.from, options.to);
-        let mut context = ParseContext::new(self, dom, options, true);
+        let mut context = ParseContext::new(self, dom, options, is_open);
         context.add_all(node, &[], from, to)?;
-        match context.finish()? {
-            Finished::Fragment(fragment) => Ok(Slice::max_open(fragment, true)),
-            Finished::Node(_) => unreachable!("an open parse has no top node"),
-        }
+        context.finish()
     }
 
     /// The first tag rule after the one at `after` that matches the element.

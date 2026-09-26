@@ -8,7 +8,6 @@ use super::html::{
     BLOCK_TAGS, IGNORE_TAGS, collapse_spaces, is_html_space, is_list_tag, normalize_list,
     normalize_newlines, split_lines,
 };
-use super::node_context::{OPT_PRESERVE_WS, OPT_PRESERVE_WS_FULL};
 use super::rule::{Content, ContentElement, ElementRule, PreserveWhitespace, Skip};
 use crate::dom::{Dom, NodeKind};
 use crate::error::{Error, Result};
@@ -40,43 +39,20 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
         }
     }
 
-    pub(super) fn inline_context(&self, source: &TextSource<'_, D::Node>) -> Result<bool> {
-        let top = self.top();
-        if let Some(node_type) = &top.node_type {
-            return Ok(node_type.inline_content());
-        }
-        if let Some(first) = top.content.first() {
-            return Ok(first.is_inline());
-        }
-        let Some(dom) = source.dom else {
-            return Ok(false);
-        };
-        match self.dom.parent(dom)? {
-            Some(parent) => {
-                let name = self.dom.node_name(&parent)?.to_lowercase();
-                Ok(!BLOCK_TAGS.contains(&name.as_str()))
-            }
-            None => Ok(false),
-        }
-    }
-
     pub(super) fn add_text_node(
         &mut self,
         source: TextSource<'_, D::Node>,
         marks: &[Mark],
     ) -> Result<()> {
-        let top_options = self.top().options;
-        let preserve = if top_options & OPT_PRESERVE_WS_FULL != 0 {
-            PreserveWhitespace::Full
-        } else if self.local_preserve_ws || top_options & OPT_PRESERVE_WS != 0 {
-            PreserveWhitespace::Yes
-        } else {
-            PreserveWhitespace::No
+        let local = match self.local_preserve_ws {
+            true => PreserveWhitespace::Yes,
+            false => PreserveWhitespace::No,
         };
+        let preserve = self.top().ws.preserve.max(local);
         let mut value: Vec<u16> = source.value.units().to_vec();
         let schema = self.schema();
         if preserve == PreserveWhitespace::Full
-            || self.inline_context(&source)?
+            || self.top().inline_context(self.dom, source.dom)?
             || value.iter().any(|&unit| !is_html_space(unit))
         {
             if preserve == PreserveWhitespace::No {
