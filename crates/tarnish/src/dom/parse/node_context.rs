@@ -1,7 +1,7 @@
 //! A node being parsed into.
 
 use super::PreserveWhitespace;
-use super::html::{BLOCK_TAGS, is_html_space};
+use super::html::{BLOCK_TAGS, trailing_spaces};
 use crate::dom::Dom;
 use crate::error::Result;
 use crate::model::{Attrs, ContentMatch, Fragment, Mark, Node, NodeType, Whitespace};
@@ -127,23 +127,14 @@ impl NodeContext {
     /// to fit unless its end is open.
     fn take_content(&mut self, open_end: bool) -> Result<Fragment> {
         if self.ws.preserve == PreserveWhitespace::No
-            && let Some(last) = self.content.last()
+            && let Some(last) = self.content.last_mut()
             && let Some(text) = last.text()
         {
-            let units = text.units();
-            let kept = units.len()
-                - units
-                    .iter()
-                    .rev()
-                    .take_while(|&&unit| is_html_space(unit))
-                    .count();
-            if kept < units.len() {
-                if kept == 0 {
-                    self.content.pop();
-                } else {
-                    let cut = last.cut(0, kept)?;
-                    *self.content.last_mut().expect("a last node") = cut;
-                }
+            let kept = text.len() - trailing_spaces(text);
+            if kept == 0 {
+                self.content.pop();
+            } else if kept < text.len() {
+                *last = last.cut(0, kept)?;
             }
         }
         let mut content = Fragment::from_array(std::mem::take(&mut self.content));

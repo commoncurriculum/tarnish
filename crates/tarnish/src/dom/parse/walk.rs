@@ -5,15 +5,15 @@ use std::borrow::Cow;
 use super::Matched;
 use super::context::ParseContext;
 use super::html::{
-    BLOCK_TAGS, IGNORE_TAGS, collapse_spaces, is_html_space, is_list_tag, normalize_list,
-    normalize_newlines, split_lines,
+    BLOCK_TAGS, IGNORE_TAGS, collapse_spaces, has_non_space, is_html_space, is_list_tag,
+    normalize_list,
 };
 use super::rule::{Content, ContentElement, ElementRule, PreserveWhitespace, Skip};
 use crate::dom::{Dom, NodeKind};
 use crate::error::{Error, Result};
 use crate::model::{Fragment, Mark, MarkType, Node, NodeType};
 use crate::stack;
-use crate::text::{Text, is_js_space};
+use crate::text::{Text, is_blank, line_breaks, replace_line_breaks, split_lines};
 
 /// A text to add: a DOM text node's, or the newline a `<br>` stands for.
 pub(super) struct TextSource<'n, N> {
@@ -49,75 +49,81 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
             false => PreserveWhitespace::No,
         };
         let preserve = self.top().ws.preserve.max(local);
-        let mut value: Vec<u16> = source.value.units().to_vec();
         let schema = self.schema();
-        if preserve == PreserveWhitespace::Full
+        let text = &source.value;
+        if !(preserve == PreserveWhitespace::Full
             || self.top().inline_context(self.dom, source.dom)?
-            || value.iter().any(|&unit| !is_html_space(unit))
+            || has_non_space(text))
         {
-            if preserve == PreserveWhitespace::No {
-                value = collapse_spaces(&value);
-                // Leading space goes when nothing comes before it, or a hard break, or text
-                // that ends in space.
-                if value.first().is_some_and(|&unit| is_html_space(unit))
-                    && self.open == self.nodes.len() - 1
-                {
-                    let node_before = self.top().content.last();
-                    let dom_before = match source.dom {
-                        Some(dom) => self.dom.previous_sibling(dom)?,
-                        None => None,
-                    };
-                    let after_break = match &dom_before {
-                        Some(before) => self.dom.node_name(before)? == "BR",
-                        None => false,
-                    };
-                    let after_space = node_before.is_some_and(|before| {
-                        before
-                            .text()
-                            .and_then(|text| text.units().last().copied())
-                            .is_some_and(is_html_space)
-                    });
-                    if node_before.is_none() || after_break || after_space {
-                        value.remove(0);
-                    }
-                }
-            } else if preserve == PreserveWhitespace::Full {
-                value = normalize_newlines(&value, &[0x0a]);
-            } else if let Some(linebreak) = schema.linebreak_replacement()
-                && value.iter().any(|&unit| unit == 0x0a || unit == 0x0d)
-                && self
-                    .top_mut()
-                    .find_wrapping(&linebreak.create(None, Fragment::empty(), &[])?)?
-                    .is_some()
-            {
-                for (index, line) in split_lines(&value).into_iter().enumerate() {
-                    if index > 0 {
-                        self.insert_node(
-                            linebreak.create(None, Fragment::empty(), &[])?,
-                            marks,
-                            true,
-                        )?;
-                    }
-                    if !line.is_empty() {
-                        let blank = !line.iter().any(|&unit| !is_js_space(unit));
-                        self.insert_node(schema.text(line, &[])?, marks, blank)?;
-                    }
-                }
-                value.clear();
-            } else {
-                value = normalize_newlines(&value, &[0x20]);
-            }
-            if !value.is_empty() {
-                let blank = !value.iter().any(|&unit| !is_js_space(unit));
-                self.insert_node(schema.text(value, &[])?, marks, blank)?;
-            }
-            if let Some(dom) = source.dom {
-                self.find_in_text(dom, &source.value)?;
-            }
+            // JavaScript looks for positions inside the dropped text, which holds none, as only
+            // an element can.
+            return Ok(());
         }
-        // JavaScript looks for positions inside dropped text, which holds none, as only an
-        // element can.
+        let value = match preserve {
+            PreserveWhitespace::No => {
+                let value = collapse_spaces(text);
+                if value.first_unit().is_some_and(is_html_space)
+                    && self.open == self.nodes.len() - 1
+                    && self.strips_leading_space(source.dom)?
+                {
+                    value.slice(1, value.len())
+                } else {
+                    value
+                }
+            }
+            PreserveWhitespace::Full => replace_line_breaks(text, '\n'),
+            PreserveWhitespace::Yes => match schema.linebreak_replacement() {
+                Some(linebreak)
+                    if line_breaks(text).next().is_some()
+                        && self
+                            .top_mut()
+                            .find_wrapping(&linebreak.create(None, Fragment::empty(), &[])?)?
+                            .is_some() =>
+                {
+                    for (index, line) in split_lines(text).enumerate() {
+                        if index > 0 {
+                            let created = linebreak.create(None, Fragment::empty(), &[])?;
+                            self.insert_node(created, marks, true)?;
+                        }
+                        if !line.is_empty() {
+                            let blank = is_blank(&line);
+                            self.insert_node(schema.text(line, &[])?, marks, blank)?;
+                        }
+                    }
+                    Text::default()
+                }
+                _ => replace_line_breaks(text, ' '),
+            },
+        };
+        if !value.is_empty() {
+            let blank = is_blank(&value);
+            self.insert_node(schema.text(value, &[])?, marks, blank)?;
+        }
+        if let Some(dom) = source.dom {
+            self.find_in_text(dom, text)?;
+        }
         Ok(())
+    }
+
+    /// Whether a text's leading space goes: when nothing comes before it, or a hard break, or
+    /// text that ends in space.
+    fn strips_leading_space(&self, text: Option<&D::Node>) -> Result<bool> {
+        let Some(before) = self.top().content.last() else {
+            return Ok(true);
+        };
+        let sibling = match text {
+            Some(text) => self.dom.previous_sibling(text)?,
+            None => None,
+        };
+        if let Some(sibling) = sibling
+            && self.dom.node_name(&sibling)? == "BR"
+        {
+            return Ok(true);
+        }
+        let text_before = before.text();
+        Ok(text_before
+            .and_then(Text::last_unit)
+            .is_some_and(is_html_space))
     }
 
     /// Parse an element by the first rule that matches it, or its content when none does.
