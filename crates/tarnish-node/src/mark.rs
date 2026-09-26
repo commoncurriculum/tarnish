@@ -1,7 +1,5 @@
 //! Marks.
 
-use std::sync::Arc;
-
 use napi::bindgen_prelude::{FnArgs, ToNapiValue, Unknown};
 use napi::{Env, Result};
 use napi_derive::napi;
@@ -21,7 +19,7 @@ pub fn changed_set<'env>(
     given: &Marks,
     result: &Marks,
 ) -> Result<Option<Unknown<'env>>> {
-    if Arc::ptr_eq(given, result) {
+    if given.ptr_eq(result) {
         return Ok(None);
     }
     wrap_set(env, result).map(Some)

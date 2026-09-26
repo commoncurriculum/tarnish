@@ -1,7 +1,7 @@
 //! Fragments: a node's children.
 
 use std::fmt;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use super::node::Node;
 use super::read::Reader;
@@ -19,19 +19,19 @@ pub type NodeVisitor<'a> = dyn FnMut(&Node, usize, Option<&Node>, usize) -> Resu
 /// What [`Fragment::text_between`] calls for a leaf node that isn't text.
 pub type LeafTextHook<'a> = dyn FnMut(&Node) -> Result<Text> + 'a;
 
-static EMPTY: LazyLock<Arc<[Node]>> = LazyLock::new(|| Arc::from(Vec::new()));
-
 /// A node's children. Like nodes, fragments are persistent: changing one makes a new one.
 #[derive(Clone)]
 pub struct Fragment {
-    children: Arc<[Node]>,
+    /// `None` for no children, as a leaf has, so that making or dropping a leaf touches no count
+    /// shared between threads.
+    children: Option<Arc<[Node]>>,
     size: usize,
 }
 
 impl Fragment {
     pub fn empty() -> Fragment {
         Fragment {
-            children: EMPTY.clone(),
+            children: None,
             size: 0,
         }
     }
@@ -41,7 +41,7 @@ impl Fragment {
             return Fragment::empty();
         }
         Fragment {
-            children: children.into(),
+            children: Some(children.into()),
             size,
         }
     }
@@ -59,7 +59,7 @@ impl Fragment {
         let children: Arc<[Node]> = children.collect();
         Fragment {
             size: children.iter().map(Node::node_size).sum(),
-            children,
+            children: Some(children),
         }
     }
 
@@ -83,12 +83,16 @@ impl Fragment {
 
     /// An identity for the fragment, the same for clones of it.
     pub fn id(&self) -> usize {
-        self.children.as_ptr() as usize
+        self.children().as_ptr() as usize
     }
 
     /// Whether this is the very same fragment as `other`, not just an equal one.
     pub fn ptr_eq(&self, other: &Fragment) -> bool {
-        Arc::ptr_eq(&self.children, &other.children)
+        match (&self.children, &other.children) {
+            (Some(children), Some(others)) => Arc::ptr_eq(children, others),
+            (None, None) => true,
+            _ => false,
+        }
     }
 
     pub fn size(&self) -> usize {
@@ -96,16 +100,16 @@ impl Fragment {
     }
 
     pub fn children(&self) -> &[Node] {
-        &self.children
+        self.children.as_deref().unwrap_or(&[])
     }
 
     pub fn child_count(&self) -> usize {
-        self.children.len()
+        self.children().len()
     }
 
     /// The child at `index`, raising an error when there is none.
     pub fn child(&self, index: usize) -> Result<&Node> {
-        match self.children.get(index) {
+        match self.children().get(index) {
             Some(child) => Ok(child),
             None => Err(Error::Range(format!(
                 "Index {index} out of range for {}",
@@ -115,20 +119,20 @@ impl Fragment {
     }
 
     pub fn maybe_child(&self, index: usize) -> Option<&Node> {
-        self.children.get(index)
+        self.children().get(index)
     }
 
     pub fn first_child(&self) -> Option<&Node> {
-        self.children.first()
+        self.children().first()
     }
 
     pub fn last_child(&self) -> Option<&Node> {
-        self.children.last()
+        self.children().last()
     }
 
     /// The children, each with its offset in the fragment.
     pub fn children_with_offsets(&self) -> impl Iterator<Item = (usize, &Node)> {
-        self.children.iter().scan(0, |offset, child| {
+        self.children().iter().scan(0, |offset, child| {
             let at = *offset;
             *offset += child.node_size();
             Some((at, child))
@@ -146,7 +150,7 @@ impl Fragment {
         parent: Option<&Node>,
     ) -> Result<()> {
         let mut pos = 0;
-        for (index, child) in self.children.iter().enumerate() {
+        for (index, child) in self.children().iter().enumerate() {
             if pos >= to {
                 break;
             }
@@ -228,9 +232,9 @@ impl Fragment {
         if self.size == 0 {
             return other.clone();
         }
-        let mut content = Vec::with_capacity(self.children.len() + other.children.len());
-        content.extend_from_slice(&self.children);
-        let mut rest = &other.children[..];
+        let mut content = Vec::with_capacity(self.children().len() + other.children().len());
+        content.extend_from_slice(self.children());
+        let mut rest = other.children();
         if let Some(last) = content.last_mut()
             && let Some(joined) = last.join_text(&rest[0])
         {
@@ -250,7 +254,7 @@ impl Fragment {
         let mut size = 0;
         if to > from {
             let mut pos = 0;
-            for child in self.children.iter() {
+            for child in self.children().iter() {
                 if pos >= to {
                     break;
                 }
@@ -281,40 +285,40 @@ impl Fragment {
 
     /// The children from index `from` to `to`.
     pub fn cut_by_index(&self, from: usize, to: usize) -> Fragment {
-        let to = to.min(self.children.len());
+        let to = to.min(self.children().len());
         let from = from.min(to);
         if from == to {
             return Fragment::empty();
         }
-        if from == 0 && to == self.children.len() {
+        if from == 0 && to == self.children().len() {
             return self.clone();
         }
-        Fragment::new(self.children[from..to].to_vec())
+        Fragment::new(self.children()[from..to].to_vec())
     }
 
     /// The fragment with the child at `index` replaced by `node`.
     pub fn replace_child(&self, index: usize, node: Node) -> Fragment {
-        let current = &self.children[index];
+        let current = &self.children()[index];
         if current.ptr_eq(&node) {
             return self.clone();
         }
         let size = self.size + node.node_size() - current.node_size();
-        let mut copy = self.children.to_vec();
+        let mut copy = self.children().to_vec();
         copy[index] = node;
         Fragment::with_size(copy, size)
     }
 
     pub fn add_to_start(&self, node: Node) -> Fragment {
         let size = self.size + node.node_size();
-        let mut children = Vec::with_capacity(self.children.len() + 1);
+        let mut children = Vec::with_capacity(self.children().len() + 1);
         children.push(node);
-        children.extend_from_slice(&self.children);
+        children.extend_from_slice(self.children());
         Fragment::with_size(children, size)
     }
 
     pub fn add_to_end(&self, node: Node) -> Fragment {
         let size = self.size + node.node_size();
-        let mut children = self.children.to_vec();
+        let mut children = self.children().to_vec();
         children.push(node);
         Fragment::with_size(children, size)
     }
@@ -326,7 +330,7 @@ impl Fragment {
             return Ok((0, pos));
         }
         if pos == self.size {
-            return Ok((self.children.len(), pos));
+            return Ok((self.children().len(), pos));
         }
         if pos > self.size {
             return Err(Error::Range(format!(
@@ -335,7 +339,7 @@ impl Fragment {
             )));
         }
         let mut offset = 0;
-        for (index, child) in self.children.iter().enumerate() {
+        for (index, child) in self.children().iter().enumerate() {
             let end = offset + child.node_size();
             if end >= pos {
                 if end == pos {
@@ -364,7 +368,7 @@ impl Fragment {
     }
 
     pub(crate) fn write_debug(&self, out: &mut String) -> Result<()> {
-        for (index, child) in self.children.iter().enumerate() {
+        for (index, child) in self.children().iter().enumerate() {
             if index > 0 {
                 out.push_str(", ");
             }
@@ -375,11 +379,11 @@ impl Fragment {
 
     /// The children as JSON, or `null` when there are none.
     pub fn to_json(&self) -> Value {
-        if self.children.is_empty() {
+        if self.children().is_empty() {
             return Value::Null;
         }
         Value::Array(
-            self.children
+            self.children()
                 .iter()
                 .map(|child| stack::grow(|| child.to_json()))
                 .collect(),
@@ -393,11 +397,11 @@ impl Fragment {
 
 impl PartialEq for Fragment {
     fn eq(&self, other: &Fragment) -> bool {
-        self.children.len() == other.children.len()
+        self.child_count() == other.child_count()
             && self
-                .children
+                .children()
                 .iter()
-                .zip(other.children.iter())
+                .zip(other.children())
                 .all(|(a, b)| stack::grow(|| a == b))
     }
 }

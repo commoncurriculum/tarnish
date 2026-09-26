@@ -232,7 +232,7 @@ impl Node {
 
     /// The node with these marks, or itself when they are its marks.
     pub fn mark(&self, marks: Marks) -> Node {
-        if Arc::ptr_eq(&marks, &self.0.marks) {
+        if marks.ptr_eq(&self.0.marks) {
             return self.clone();
         }
         Node(Arc::new(NodeData {

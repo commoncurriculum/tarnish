@@ -1,7 +1,8 @@
 //! Marks: emphasis, links and the like, held by nodes in sets sorted by their types' rank.
 
 use std::fmt;
-use std::sync::{Arc, LazyLock};
+use std::ops::Deref;
+use std::sync::Arc;
 
 use super::attrs::Attrs;
 use super::compare_deep::objects_equal;
@@ -10,10 +11,60 @@ use super::schema::{MarkType, Schema};
 use crate::error::Result;
 use crate::js::Json;
 
-/// A set of marks, sorted by their types' rank.
-pub type Marks = Arc<[Mark]>;
+/// A set of marks, sorted by their types' rank. The empty set holds nothing, so that a node
+/// without marks, as most are, touches no count shared between threads to make or drop it.
+#[derive(Clone, Default, PartialEq)]
+pub struct Marks(Option<Arc<[Mark]>>);
 
-static NONE: LazyLock<Marks> = LazyLock::new(|| Arc::from(Vec::new()));
+impl Marks {
+    /// Whether these are the very same set, every empty set being `Mark.none`.
+    pub fn ptr_eq(&self, other: &Marks) -> bool {
+        match (&self.0, &other.0) {
+            (Some(marks), Some(others)) => Arc::ptr_eq(marks, others),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+}
+
+impl Deref for Marks {
+    type Target = [Mark];
+
+    fn deref(&self) -> &[Mark] {
+        self.0.as_deref().unwrap_or(&[])
+    }
+}
+
+impl FromIterator<Mark> for Marks {
+    fn from_iter<I: IntoIterator<Item = Mark>>(marks: I) -> Marks {
+        let marks: Arc<[Mark]> = marks.into_iter().collect();
+        Marks((!marks.is_empty()).then_some(marks))
+    }
+}
+
+impl From<Vec<Mark>> for Marks {
+    fn from(marks: Vec<Mark>) -> Marks {
+        marks.into_iter().collect()
+    }
+}
+
+impl From<&[Mark]> for Marks {
+    fn from(marks: &[Mark]) -> Marks {
+        marks.iter().cloned().collect()
+    }
+}
+
+impl<const N: usize> From<[Mark; N]> for Marks {
+    fn from(marks: [Mark; N]) -> Marks {
+        marks.into_iter().collect()
+    }
+}
+
+impl fmt::Debug for Marks {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Debug::fmt(&**self, f)
+    }
+}
 
 #[derive(Clone)]
 pub struct Mark(Arc<MarkData>);
@@ -30,7 +81,7 @@ impl Mark {
 
     /// The empty set.
     pub fn none() -> Marks {
-        NONE.clone()
+        Marks::default()
     }
 
     pub fn mark_type(&self) -> &MarkType {
