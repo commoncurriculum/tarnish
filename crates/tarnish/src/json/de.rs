@@ -435,7 +435,10 @@ mod tests {
         let depth = 1_000_000;
         let text = "[".repeat(depth) + &"]".repeat(depth);
         let value = from_str(&text).unwrap();
-        assert_eq!(crate::js::json::depth(&value), depth);
+        let opened = crate::json::events(&value)
+            .filter(|event| matches!(event, crate::json::Event::Open(_)))
+            .count();
+        assert_eq!(opened, depth);
         assert_eq!(value.clone(), value);
     }
 }

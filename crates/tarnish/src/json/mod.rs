@@ -14,7 +14,7 @@ use std::fmt;
 
 pub use convert::IntoValue;
 pub use de::from_str;
-pub use deep::{Event, events, nested};
+pub use deep::{Event, events};
 pub use index::JsonIndex;
 pub use macros::{json, object};
 pub use map::Map;
@@ -23,6 +23,9 @@ pub type Key = compact_str::CompactString;
 pub use serde_json::Number;
 
 pub static NULL: Value = Value::Null;
+
+/// An object without properties, to lend where one is needed.
+pub static EMPTY: Map = Map::new();
 
 #[derive(Debug, Default)]
 pub enum Value {

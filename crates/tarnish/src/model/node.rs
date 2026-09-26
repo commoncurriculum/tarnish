@@ -3,16 +3,17 @@
 use std::fmt;
 use std::sync::Arc;
 
+use super::attrs::Attrs;
 use super::compare_deep::objects_equal;
 use super::content::ContentMatch;
 use super::fragment::{Fragment, LeafTextHook, NodeVisitor};
 use super::mark::{Mark, Marks};
 use super::replace::{self, Slice};
 use super::resolved_pos::ResolvedPos;
-use super::schema::{Attrs, MarkType, NodeType, Schema};
+use super::schema::{MarkType, NodeType, Schema};
 use crate::error::{Error, Result};
 use crate::js::{Given, Json};
-use crate::json::{Map, Value};
+use crate::json::{self, Map, Value};
 use crate::stack;
 use crate::text::Text;
 
@@ -204,11 +205,10 @@ impl Node {
         attrs: Option<&Map>,
         marks: Option<&[Mark]>,
     ) -> bool {
-        static EMPTY: Map = Map::new();
         let attrs = attrs.unwrap_or_else(|| {
             node_type
                 .default_attrs()
-                .map_or(&EMPTY, |defaults| &**defaults)
+                .map_or(&json::EMPTY, |defaults| &**defaults)
         });
         self.node_type() == node_type
             && objects_equal(self.attrs(), attrs)
@@ -289,12 +289,20 @@ impl Node {
         self.copy(self.0.content.cut(from, to))
     }
 
-    /// Where a text node's cut from `from` to `to` isn't empty, the cut.
-    pub(crate) fn cut_within(&self, from: usize, to: usize) -> Node {
-        match &self.0.text {
-            Some(text) => self.with_nonempty_text(text.slice(from, to)),
-            None => self.cut_content(from, to),
-        }
+    /// A text node with only its text from `from` to `to`, which mustn't be empty; `None` for
+    /// a node that isn't text.
+    pub(crate) fn cut_text(&self, from: usize, to: usize) -> Option<Node> {
+        let text = self.0.text.as_ref()?;
+        Some(self.with_nonempty_text(text.slice(from, to)))
+    }
+
+    /// This text node and `next` as one, when both are text with the same marks.
+    pub(crate) fn join_text(&self, next: &Node) -> Option<Node> {
+        let (Some(text), Some(more)) = (&self.0.text, &next.0.text) else {
+            return None;
+        };
+        self.same_markup(next)
+            .then(|| self.with_nonempty_text(text.concat(more)))
     }
 
     /// The document between `from` and `to` as a slice. With `include_parents`, the slice is
@@ -606,23 +614,20 @@ impl Node {
             return Err(Error::Range("Invalid input for Node.fromJSON".into()));
         }
         let marks = match json.get("marks").filter(|marks| marks.truthy()) {
-            None => None,
-            Some(marks) => Some(
-                marks
-                    .items()
-                    .ok_or_else(|| Error::Range("Invalid mark data for Node.fromJSON".into()))?
-                    .map(|mark| Mark::from_json(schema, mark))
-                    .collect::<Result<Vec<_>>>()?,
-            ),
+            None => Vec::new(),
+            Some(marks) => marks
+                .items()
+                .ok_or_else(|| Error::Range("Invalid mark data for Node.fromJSON".into()))?
+                .map(|mark| Mark::from_json(schema, mark))
+                .collect::<Result<_>>()?,
         };
-        let marks = marks.as_deref().unwrap_or(&[]);
         let name = json.get("type").map_or("undefined".into(), Json::string);
         if name == "text" {
             let text = json
                 .get("text")
                 .and_then(Json::text)
                 .ok_or_else(|| Error::Range("Invalid text node in JSON".into()))?;
-            return schema.text(text, marks);
+            return schema.text(text, &marks);
         }
         let content = match json.get("content") {
             Some(content) => Fragment::from_json(schema, content)?,
@@ -633,7 +638,7 @@ impl Node {
             .get("attrs")
             .map_or(Given::Falsy(Value::Null), Json::attrs);
         let attrs = node_type.attrs_given(&attrs)?;
-        let node = Node::new(node_type, attrs, content, Mark::set_from(marks));
+        let node = Node::new(node_type, attrs, content, Mark::set_from(&marks));
         node.node_type().check_attrs(node.attrs())?;
         Ok(node)
     }
@@ -651,6 +656,9 @@ impl PartialEq for Node {
 
 impl fmt::Debug for Node {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(&self.to_debug_string().map_err(|_| fmt::Error)?)
+        match self.to_debug_string() {
+            Ok(described) => f.write_str(&described),
+            Err(error) => write!(f, "<{error}>"),
+        }
     }
 }

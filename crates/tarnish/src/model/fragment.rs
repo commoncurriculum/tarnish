@@ -3,7 +3,6 @@
 use std::fmt;
 use std::sync::{Arc, LazyLock};
 
-use super::diff;
 use super::node::Node;
 use super::schema::Schema;
 use crate::error::{Error, Result};
@@ -52,24 +51,16 @@ impl Fragment {
     }
 
     /// A fragment of these nodes, joining adjacent text nodes with the same marks.
-    pub fn from_array(nodes: Vec<Node>) -> Fragment {
+    pub fn from_array(mut nodes: Vec<Node>) -> Fragment {
         let size = nodes.iter().map(Node::node_size).sum();
-        let mut joined: Option<Vec<Node>> = None;
-        for index in 0..nodes.len() {
-            let node = &nodes[index];
-            if index > 0 && node.is_text() && nodes[index - 1].same_markup(node) {
-                let joined = joined.get_or_insert_with(|| nodes[..index].to_vec());
-                let last = joined.last_mut().expect("a node before");
-                let text = last
-                    .text()
-                    .expect("text")
-                    .concat(node.text().expect("text"));
-                *last = node.with_nonempty_text(text);
-            } else if let Some(joined) = &mut joined {
-                joined.push(node.clone());
+        nodes.dedup_by(|next, last| match last.join_text(next) {
+            Some(joined) => {
+                *last = joined;
+                true
             }
-        }
-        Fragment::with_size(joined.unwrap_or(nodes), size)
+            None => false,
+        });
+        Fragment::with_size(nodes, size)
     }
 
     pub fn from_node(node: Node) -> Fragment {
@@ -224,15 +215,13 @@ impl Fragment {
         if self.size == 0 {
             return other.clone();
         }
-        let (last, first) = (self.children.last().expect("sized"), &other.children[0]);
-        let mut content = self.children.to_vec();
+        let mut content = Vec::with_capacity(self.children.len() + other.children.len());
+        content.extend_from_slice(&self.children);
         let mut rest = &other.children[..];
-        if last.is_text() && last.same_markup(first) {
-            let text = last
-                .text()
-                .expect("text")
-                .concat(first.text().expect("text"));
-            *content.last_mut().expect("sized") = last.with_nonempty_text(text);
+        if let Some(last) = content.last_mut()
+            && let Some(joined) = last.join_text(&rest[0])
+        {
+            *last = joined;
             rest = &rest[1..];
         }
         content.extend_from_slice(rest);
@@ -255,17 +244,16 @@ impl Fragment {
                 let end = pos + child.node_size();
                 if end > from {
                     let child = if pos < from || end > to {
-                        match child.text() {
-                            Some(text) => child.with_nonempty_text(
-                                text.slice(from.saturating_sub(pos), text.len().min(to - pos)),
-                            ),
-                            None => stack::grow(|| {
-                                child.cut_content(
-                                    from.saturating_sub(pos + 1),
-                                    child.content().size().min(to - pos - 1),
-                                )
-                            }),
-                        }
+                        child
+                            .cut_text(from.saturating_sub(pos), to - pos)
+                            .unwrap_or_else(|| {
+                                stack::grow(|| {
+                                    child.cut_content(
+                                        from.saturating_sub(pos + 1),
+                                        child.content().size().min(to - pos - 1),
+                                    )
+                                })
+                            })
                     } else {
                         child.clone()
                     };
@@ -316,23 +304,6 @@ impl Fragment {
         let mut children = self.children.to_vec();
         children.push(node);
         Fragment::with_size(children, size)
-    }
-
-    /// The first position at which this fragment and `other` differ, counting from `pos`, or
-    /// `None` when they are the same.
-    pub fn find_diff_start(&self, other: &Fragment, pos: usize) -> Option<usize> {
-        diff::find_diff_start(self, other, pos)
-    }
-
-    /// The first position, searching from the ends, at which this fragment and `other` differ,
-    /// as a position in each, or `None` when they are the same.
-    pub fn find_diff_end(
-        &self,
-        other: &Fragment,
-        pos: usize,
-        other_pos: usize,
-    ) -> Option<(usize, usize)> {
-        diff::find_diff_end(self, other, pos, other_pos)
     }
 
     /// The index of the child at `pos`, and that child's offset. At the end of a child, the
@@ -428,6 +399,9 @@ impl PartialEq for Fragment {
 
 impl fmt::Debug for Fragment {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(&self.to_debug_string().map_err(|_| fmt::Error)?)
+        match self.to_debug_string() {
+            Ok(described) => f.write_str(&described),
+            Err(error) => write!(f, "<{error}>"),
+        }
     }
 }

@@ -115,11 +115,6 @@ impl ContentMatch {
         Ok(ContentMatch::start(schema.clone(), automaton))
     }
 
-    /// The match of the empty expression, which only matches no content.
-    pub fn empty(schema: &Schema) -> ContentMatch {
-        ContentMatch::start(schema.clone(), Automaton::empty())
-    }
-
     fn state(&self) -> &State {
         &self.automaton.states[self.state]
     }
@@ -198,10 +193,7 @@ impl ContentMatch {
             .next
             .iter()
             .map(|&(node, _)| node)
-            .find(|&node| {
-                let data = &self.schema.0.nodes[node];
-                !(data.is_text || data.has_required_attrs())
-            })
+            .find(|&node| self.schema.0.nodes[node].is_generatable())
             .map(|node| self.node_type(node))
     }
 
@@ -275,7 +267,7 @@ impl ContentMatch {
         }
         for &(node, next) in &current.state().next {
             let data = &self.schema.0.nodes[node];
-            if !(data.is_text || data.has_required_attrs() || seen[next]) {
+            if data.is_generatable() && !seen[next] {
                 seen[next] = true;
                 types.push(node);
                 let found = stack::grow(|| {
@@ -351,7 +343,7 @@ impl ContentMatch {
                 let data = &self.schema.0.nodes[node];
                 let valid = visited[current].node.is_none() || at.automaton.states[next].valid_end;
                 if !data.content.is_empty_match()
-                    && !data.has_required_attrs()
+                    && !data.attrs.has_required()
                     && !seen[node]
                     && valid
                 {
@@ -862,7 +854,7 @@ fn check_for_dead_ends(automaton: &Automaton, stream: &TokenStream) -> Result<()
         for &(node, next) in &state.next {
             let data = &stream.nodes[node];
             names.push(data.name.to_string());
-            if dead && !(data.is_text || data.has_required_attrs()) {
+            if dead && data.is_generatable() {
                 dead = false;
             }
             if !queued[next] {

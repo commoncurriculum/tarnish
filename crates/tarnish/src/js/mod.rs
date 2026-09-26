@@ -5,7 +5,7 @@ pub mod json;
 
 use std::borrow::Cow;
 
-use crate::json::{Map, Number, Value};
+use crate::json::{EMPTY, Map, Number, Value};
 
 /// `Number.MAX_SAFE_INTEGER`.
 pub const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
@@ -99,7 +99,6 @@ impl<'a> From<Option<&'a Map>> for Given<'a> {
 
 /// A value as attributes a type is given.
 pub fn attrs(value: &Value) -> Given<'_> {
-    static EMPTY: Map = Map::new();
     match value {
         Value::Object(object) => Given::Object(Cow::Borrowed(object)),
         value if truthy(Some(value)) => Given::Object(Cow::Borrowed(&EMPTY)),

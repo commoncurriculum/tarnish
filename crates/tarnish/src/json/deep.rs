@@ -66,24 +66,6 @@ impl Drop for Value {
     }
 }
 
-/// Every value inside `value`, and `value` itself first, with how many arrays and objects hold
-/// it, in the order JSON writes them.
-pub fn nested(value: &Value) -> impl Iterator<Item = (&Value, usize)> {
-    let mut depth = 0;
-    events(value).filter_map(move |event| match event {
-        Event::Scalar(value) => Some((value, depth)),
-        Event::Open(value) => {
-            depth += 1;
-            Some((value, depth - 1))
-        }
-        Event::Close(_) => {
-            depth -= 1;
-            None
-        }
-        Event::Key(_) => None,
-    })
-}
-
 /// A part of a value, as JSON writes it.
 #[derive(Clone, Copy)]
 pub enum Event<'a> {

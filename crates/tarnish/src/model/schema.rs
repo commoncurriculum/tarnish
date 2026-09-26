@@ -4,24 +4,18 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
+use super::attrs::{AttrSet, AttributeSpec, Attrs};
 use super::content::{Automaton, ContentMatch};
 use super::fragment::Fragment;
 use super::mark::{Mark, Marks};
 use super::node::Node;
 use crate::error::{Error, Result};
-use crate::js::{self, Given};
-use crate::json::{Key, Map, Value};
+use crate::js::Given;
+use crate::json::Map;
 use crate::text::Text;
-
-/// A node's or mark's attributes, shared by the nodes and marks that have the same ones.
-pub type Attrs = Arc<Map>;
 
 /// A function the host gives a node spec, such as `leafText`.
 pub type NodeHook<T> = Arc<dyn Fn(&Node) -> Result<T> + Send + Sync>;
-
-/// A function that raises an error for an attribute value it doesn't accept, `None` being
-/// `undefined`.
-pub type ValidateHook = Arc<dyn Fn(Option<&Value>) -> Result<()> + Send + Sync>;
 
 /// What [`Schema::new`] builds a schema from. Its node and mark types are in order: the order
 /// decides which comes first in a group, and how marks sort in a set.
@@ -65,140 +59,17 @@ pub struct MarkSpec {
     pub code: bool,
 }
 
-#[derive(Clone, Default)]
-pub struct AttributeSpec {
-    /// The default, when the spec has one. `Some(None)` is a default of `undefined`, which
-    /// leaves the attribute out, as `JSON.stringify` does.
-    pub default: Option<Option<Value>>,
-    pub validate: Option<Validate>,
-}
-
-#[derive(Clone)]
-pub enum Validate {
-    /// `|`-separated names of the types a value may have, as `typeof` gives them.
-    Types(String),
-    Hook(ValidateHook),
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Whitespace {
     Pre,
     Normal,
 }
 
-/// An attribute of a node or mark type.
-#[derive(Clone)]
-pub(crate) struct Attribute {
-    pub default: Option<Option<Value>>,
-    pub validate: Option<ValidateHook>,
-}
-
-impl Attribute {
-    fn new(type_name: &str, attr_name: &str, spec: &AttributeSpec) -> Attribute {
-        let validate = spec.validate.as_ref().map(|validate| match validate {
-            Validate::Hook(hook) => hook.clone(),
-            Validate::Types(types) => validate_type(type_name, attr_name, types),
-        });
-        Attribute {
-            default: spec.default.clone(),
-            validate,
-        }
-    }
-}
-
-fn validate_type(type_name: &str, attr_name: &str, types: &str) -> ValidateHook {
-    let types: Vec<String> = types.split('|').map(str::to_owned).collect();
-    let (type_name, attr_name) = (type_name.to_owned(), attr_name.to_owned());
-    Arc::new(move |value: Option<&Value>| {
-        let name = js::type_of(value);
-        if types.iter().any(|allowed| allowed == name) {
-            return Ok(());
-        }
-        Err(Error::Range(format!(
-            "Expected value of type {} for attribute {attr_name} on type {type_name}, got {name}",
-            types.join(",")
-        )))
-    })
-}
-
-fn init_attrs(type_name: &str, specs: &[(String, AttributeSpec)]) -> Vec<(Key, Attribute)> {
-    specs
-        .iter()
-        .map(|(name, spec)| {
-            (
-                Key::from(name.as_str()),
-                Attribute::new(type_name, name, spec),
-            )
-        })
-        .collect()
-}
-
-/// The attributes' defaults, when every attribute has one.
-fn default_attrs(attrs: &[(Key, Attribute)]) -> Option<Attrs> {
-    let mut defaults = Map::with_capacity(attrs.len());
-    for (name, attr) in attrs {
-        if let Some(value) = attr.default.clone()? {
-            defaults.push(name.clone(), value);
-        }
-    }
-    Some(Arc::new(defaults))
-}
-
-/// A type's `computeAttrs`: a falsy value gives the defaults where every attribute has one, and
-/// is every attribute otherwise, required or not.
-fn compute_attrs(
-    attrs: &[(Key, Attribute)],
-    defaults: Option<&Attrs>,
-    given: &Given,
-) -> Result<Attrs> {
-    let given = match (given, defaults) {
-        (Given::Falsy(_), Some(defaults)) => return Ok(defaults.clone()),
-        (Given::Falsy(value), None) => {
-            let built = attrs.iter().map(|(name, _)| (name.clone(), value.clone()));
-            return Ok(Arc::new(built.collect()));
-        }
-        (Given::Object(given), _) => given,
-    };
-    let mut built = Map::with_capacity(attrs.len());
-    for (name, attr) in attrs {
-        let value = match (given.get(name), &attr.default) {
-            (Some(value), _) => Some(value.clone()),
-            (None, Some(default)) => default.clone(),
-            (None, None) => {
-                return Err(Error::Range(format!(
-                    "No value supplied for attribute {name}"
-                )));
-            }
-        };
-        if let Some(value) = value {
-            built.push(name.clone(), value);
-        }
-    }
-    Ok(Arc::new(built))
-}
-
-fn check_attrs(attrs: &[(Key, Attribute)], values: &Map, kind: &str, name: &str) -> Result<()> {
-    for attr in values.keys() {
-        if !attrs.iter().any(|(known, _)| known == attr) {
-            return Err(Error::Range(format!(
-                "Unsupported attribute {attr} for {kind} of type {name}"
-            )));
-        }
-    }
-    for (attr_name, attr) in attrs {
-        if let Some(validate) = &attr.validate {
-            validate(values.get(attr_name))?;
-        }
-    }
-    Ok(())
-}
-
 pub(crate) struct NodeTypeData {
     pub name: Arc<str>,
     pub spec: NodeSpec,
     pub groups: Vec<String>,
-    pub attrs: Vec<(Key, Attribute)>,
-    pub default_attrs: Option<Attrs>,
+    pub attrs: AttrSet,
     pub is_block: bool,
     pub is_text: bool,
     pub content: Arc<Automaton>,
@@ -212,16 +83,17 @@ impl NodeTypeData {
         !self.is_block
     }
 
-    pub fn has_required_attrs(&self) -> bool {
-        self.attrs.iter().any(|(_, attr)| attr.default.is_none())
+    /// Whether nodes of the type can be made to fill content: text can't, nor can a type with
+    /// attributes no defaults give.
+    pub fn is_generatable(&self) -> bool {
+        !(self.is_text || self.attrs.has_required())
     }
 }
 
 pub(crate) struct MarkTypeData {
     pub name: Arc<str>,
     pub spec: MarkSpec,
-    pub attrs: Vec<(Key, Attribute)>,
-    pub default_attrs: Option<Attrs>,
+    pub attrs: AttrSet,
     pub excluded: Vec<usize>,
 }
 
@@ -283,8 +155,7 @@ impl Schema {
                     }
                     _ => Vec::new(),
                 },
-                attrs: init_attrs(&name, &spec.attrs),
-                default_attrs: None,
+                attrs: AttrSet::new(&name, &spec.attrs),
                 is_block: !(spec.inline || name == "text"),
                 is_text: name == "text",
                 content: Automaton::empty(),
@@ -294,9 +165,6 @@ impl Schema {
                 spec,
             })
             .collect();
-        for node in &mut nodes {
-            node.default_attrs = default_attrs(&node.attrs);
-        }
         let top_name = spec.top_node.filter(|name| !name.is_empty());
         let top_name = top_name.as_deref().unwrap_or("doc");
         let top_node = position(&nodes, top_name).ok_or_else(|| {
@@ -315,15 +183,11 @@ impl Schema {
         let mut marks: Vec<MarkTypeData> = spec
             .marks
             .into_iter()
-            .map(|(name, spec)| {
-                let attrs = init_attrs(&name, &spec.attrs);
-                MarkTypeData {
-                    default_attrs: default_attrs(&attrs),
-                    attrs,
-                    excluded: Vec::new(),
-                    name: Arc::from(name),
-                    spec,
-                }
+            .map(|(name, spec)| MarkTypeData {
+                attrs: AttrSet::new(&name, &spec.attrs),
+                excluded: Vec::new(),
+                name: Arc::from(name),
+                spec,
             })
             .collect();
 
@@ -472,9 +336,8 @@ impl Schema {
     pub fn text(&self, text: impl Into<Text>, marks: &[Mark]) -> Result<Node> {
         let text_type = self.text_type();
         let attrs = text_type
-            .data()
-            .default_attrs
-            .clone()
+            .default_attrs()
+            .cloned()
             .expect("text has no attributes");
         Node::new_text(text_type, attrs, text.into(), Mark::set_from(marks))
     }
@@ -624,20 +487,12 @@ impl NodeType {
     }
 
     pub fn has_required_attrs(&self) -> bool {
-        self.data().has_required_attrs()
+        self.data().attrs.has_required()
     }
 
     /// The attributes every node of the type gets when none are given, if all have defaults.
     pub fn default_attrs(&self) -> Option<&Attrs> {
-        self.data().default_attrs.as_ref()
-    }
-
-    /// The names of the type's attributes, and their defaults as [`AttributeSpec`] holds them.
-    pub fn attr_defaults(&self) -> impl Iterator<Item = (&str, Option<Option<&Value>>)> {
-        self.data()
-            .attrs
-            .iter()
-            .map(|(name, attr)| (name.as_str(), attr.default.as_ref().map(Option::as_ref)))
+        self.data().attrs.defaults()
     }
 
     pub fn compatible_content(&self, other: &NodeType) -> bool {
@@ -650,8 +505,7 @@ impl NodeType {
 
     /// The attributes JavaScript makes of what it's given for a node of this type.
     pub fn attrs_given(&self, given: &Given) -> Result<Attrs> {
-        let data = self.data();
-        compute_attrs(&data.attrs, data.default_attrs.as_ref(), given)
+        self.data().attrs.compute(given)
     }
 
     /// Create a node of this type, as `NodeType.create`.
@@ -740,12 +594,12 @@ impl NodeType {
         Err(Error::Range(format!(
             "Invalid content for node {}: {}",
             self.name(),
-            js_slice(&described, 50)
+            Text::from(described).slice(0, 50).to_string_lossy()
         )))
     }
 
     pub fn check_attrs(&self, attrs: &Map) -> Result<()> {
-        check_attrs(&self.data().attrs, attrs, "node", self.name())
+        self.data().attrs.check(attrs, "node", self.name())
     }
 
     pub fn allows_mark_type(&self, mark_type: &MarkType) -> bool {
@@ -764,11 +618,7 @@ impl NodeType {
 
     /// The given marks without those this type doesn't allow.
     pub fn allowed_marks(&self, marks: &Marks) -> Marks {
-        if self.data().mark_set.is_none()
-            || marks
-                .iter()
-                .all(|mark| self.allows_mark_type(mark.mark_type()))
-        {
+        if self.allows_marks(marks) {
             return marks.clone();
         }
         let kept: Vec<Mark> = marks
@@ -782,12 +632,6 @@ impl NodeType {
             kept.into()
         }
     }
-}
-
-/// `string.slice(0, length)`, on the UTF-16 units JavaScript counts.
-pub(crate) fn js_slice(string: &str, length: usize) -> String {
-    let units: Vec<u16> = string.encode_utf16().take(length).collect();
-    String::from_utf16_lossy(&units)
 }
 
 /// A mark type in a schema.
@@ -834,14 +678,7 @@ impl MarkType {
     }
 
     pub fn default_attrs(&self) -> Option<&Attrs> {
-        self.data().default_attrs.as_ref()
-    }
-
-    pub fn attr_defaults(&self) -> impl Iterator<Item = (&str, Option<Option<&Value>>)> {
-        self.data()
-            .attrs
-            .iter()
-            .map(|(name, attr)| (name.as_str(), attr.default.as_ref().map(Option::as_ref)))
+        self.data().attrs.defaults()
     }
 
     /// Create a mark of this type, filling in attributes' defaults.
@@ -851,9 +688,7 @@ impl MarkType {
 
     /// Create a mark of this type from what JavaScript gives it as attributes.
     pub fn create_given(&self, given: &Given) -> Result<Mark> {
-        let data = self.data();
-        let attrs = compute_attrs(&data.attrs, data.default_attrs.as_ref(), given)?;
-        Ok(Mark::new(self.clone(), attrs))
+        Ok(Mark::new(self.clone(), self.data().attrs.compute(given)?))
     }
 
     /// The set without marks of this type.
@@ -879,7 +714,7 @@ impl MarkType {
     }
 
     pub fn check_attrs(&self, attrs: &Map) -> Result<()> {
-        check_attrs(&self.data().attrs, attrs, "mark", self.name())
+        self.data().attrs.check(attrs, "mark", self.name())
     }
 
     /// The mark types this one excludes.

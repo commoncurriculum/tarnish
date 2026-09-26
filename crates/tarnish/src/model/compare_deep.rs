@@ -24,8 +24,9 @@ pub fn compare_deep(a: &Value, b: &Value) -> bool {
 
 /// `compareDeep` on two objects: the same keys, with deeply equal values.
 pub fn objects_equal(a: &Map, b: &Map) -> bool {
-    a.iter().all(|(key, value)| {
-        b.get(key)
-            .is_some_and(|other| stack::grow(|| compare_deep(value, other)))
-    }) && b.keys().all(|key| a.contains_key(key))
+    a.len() == b.len()
+        && a.iter().all(|(key, value)| {
+            b.get(key)
+                .is_some_and(|other| stack::grow(|| compare_deep(value, other)))
+        })
 }

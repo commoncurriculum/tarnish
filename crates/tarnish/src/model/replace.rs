@@ -56,8 +56,8 @@ impl Slice {
             &self.content,
             pos + self.open_start,
             fragment,
-            self.open_start as isize + 1,
-            self.open_end as isize + 1,
+            self.open_start + 1,
+            self.open_end + 1,
             None,
         )?;
         Ok(content.map(|content| Slice::new(content, self.open_start, self.open_end)))
@@ -180,16 +180,16 @@ fn insert_into(
     content: &Fragment,
     dist: usize,
     insert: &Fragment,
-    open_start: isize,
-    open_end: isize,
+    open_start: usize,
+    open_end: usize,
     parent: Option<&Node>,
 ) -> Result<Option<Fragment>> {
     let (index, offset) = content.find_index(dist)?;
     let child = content.maybe_child(index);
     if offset == dist || child.is_some_and(Node::is_text) {
         if let Some(parent) = parent
-            && open_start <= 0
-            && open_end <= 0
+            && open_start == 0
+            && open_end == 0
             && !parent.can_replace(index, index, insert, 0, insert.child_count())?
         {
             return Ok(None);
@@ -207,9 +207,13 @@ fn insert_into(
             child.content(),
             dist - offset - 1,
             insert,
-            if index == 0 { open_start - 1 } else { 0 },
+            if index == 0 {
+                open_start.saturating_sub(1)
+            } else {
+                0
+            },
             if index + 1 == content.child_count() {
-                open_end - 1
+                open_end.saturating_sub(1)
             } else {
                 0
             },
@@ -226,9 +230,7 @@ pub(crate) fn replace(from: &ResolvedPos, to: &ResolvedPos, slice: &Slice) -> Re
             "Inserted content deeper than insertion position".into(),
         ));
     }
-    if from.depth() as isize - slice.open_start as isize
-        != to.depth() as isize - slice.open_end as isize
-    {
+    if from.depth() + slice.open_end != to.depth() + slice.open_start {
         return Err(Error::Replace("Inconsistent open depths".into()));
     }
     replace_outer(from, to, slice, 0)
@@ -286,14 +288,9 @@ fn joinable<'a>(before: &'a ResolvedPos, after: &ResolvedPos, depth: usize) -> R
 
 fn add_node(child: Node, target: &mut Vec<Node>) {
     if let Some(last) = target.last_mut()
-        && child.is_text()
-        && child.same_markup(last)
+        && let Some(joined) = last.join_text(&child)
     {
-        let text = last
-            .text()
-            .expect("text")
-            .concat(child.text().expect("text"));
-        *last = child.with_nonempty_text(text);
+        *last = joined;
     } else {
         target.push(child);
     }

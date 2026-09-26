@@ -5,7 +5,7 @@
 use std::borrow::Cow;
 
 use crate::js::{self, Given, Json};
-use crate::json::{Key, Map, Number, Value};
+use crate::json::{self, Key, Map, Number, Value};
 use crate::model::Node;
 use crate::stack;
 
@@ -90,8 +90,8 @@ impl<'a> Document<'a> {
         let mut indexer = Indexer {
             bytes,
             at: 0,
-            // A value takes at least two bytes.
-            slots: Vec::with_capacity(bytes.len() / 2),
+            // Values in documents average about ten bytes as terms.
+            slots: Vec::with_capacity(bytes.len() / 8),
             keys: Vec::new(),
         };
         if indexer.byte()? != VERSION {
@@ -241,7 +241,7 @@ impl<'a> Json<'a> for Term<'a> {
     fn attrs(self) -> Given<'a> {
         match self.kind() {
             Kind::Object { unique } => Given::Object(Cow::Owned(self.object(unique))),
-            _ if self.truthy() => Given::Object(Cow::Owned(Map::new())),
+            _ if self.truthy() => Given::Object(Cow::Borrowed(&json::EMPTY)),
             _ => Given::Falsy(self.value()),
         }
     }

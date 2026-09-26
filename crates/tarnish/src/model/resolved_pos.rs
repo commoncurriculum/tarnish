@@ -111,7 +111,7 @@ impl ResolvedPos {
         self.start(depth) + self.node(depth).content().size()
     }
 
-    /// The position before the ancestor at `depth`, or at `depth` one past the parent's, this
+    /// The position before the ancestor at `depth`. At one past the parent's depth, that's this
     /// position.
     pub fn before(&self, depth: usize) -> Result<usize> {
         if depth == 0 {
@@ -130,7 +130,7 @@ impl ResolvedPos {
         }
     }
 
-    /// The position after the ancestor at `depth`, or at `depth` one past the parent's, this
+    /// The position after the ancestor at `depth`. At one past the parent's depth, that's this
     /// position.
     pub fn after(&self, depth: usize) -> Result<usize> {
         if depth == 0 {
@@ -160,7 +160,7 @@ impl ResolvedPos {
         let child = parent.maybe_child(self.index(self.depth()))?;
         match self.text_offset() {
             0 => Some(child.clone()),
-            offset => Some(child.cut_within(offset, child.node_size())),
+            offset => child.cut_text(offset, child.node_size()),
         }
     }
 
@@ -170,7 +170,7 @@ impl ResolvedPos {
         match self.text_offset() {
             0 if index == 0 => None,
             0 => self.parent().maybe_child(index - 1).cloned(),
-            offset => Some(self.parent().maybe_child(index)?.cut_within(0, offset)),
+            offset => self.parent().maybe_child(index)?.cut_text(0, offset),
         }
     }
 
@@ -235,6 +235,7 @@ impl ResolvedPos {
         pred: Option<&mut NodePredicate>,
     ) -> Result<Option<NodeRange>> {
         if other.pos < self.pos {
+            // ProseMirror drops `pred` here too: `other.blockRange(this)`.
             return other.block_range(self, None);
         }
         let mut pred = pred;

@@ -3,8 +3,9 @@
 use std::fmt;
 use std::sync::{Arc, LazyLock};
 
+use super::attrs::Attrs;
 use super::compare_deep::objects_equal;
-use super::schema::{Attrs, MarkType, Schema};
+use super::schema::{MarkType, Schema};
 use crate::error::{Error, Result};
 use crate::js::{Given, Json};
 use crate::json::{Map, Value};

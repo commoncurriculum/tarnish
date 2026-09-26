@@ -38,16 +38,6 @@ pub fn stringify(value: &Value) -> String {
     out
 }
 
-/// How many arrays and objects `value` nests, itself included.
-#[cfg(test)]
-pub fn depth(value: &Value) -> usize {
-    crate::json::nested(value)
-        .filter(|(value, _)| matches!(value, Value::Array(_) | Value::Object(_)))
-        .map(|(_, depth)| depth + 1)
-        .max()
-        .unwrap_or(0)
-}
-
 // JavaScript holds every number as a double, so a parsed integer beyond 2^53 has already lost
 // its low digits by the time it is written back out.
 fn write_number(out: &mut String, number: &Number) {

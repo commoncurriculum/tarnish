@@ -3,10 +3,11 @@
 
 use std::sync::Arc;
 
-use super::schema::{AttributeSpec, MarkSpec, NodeSpec, SchemaSpec, Validate, Whitespace};
+use super::attrs::{AttributeSpec, Validate};
+use super::schema::{MarkSpec, NodeSpec, SchemaSpec, Whitespace};
 use crate::error::{Error, Result};
 use crate::js;
-use crate::json::{Map, Value};
+use crate::json::{self, Map, Value};
 
 fn invalid(what: &str) -> Error {
     Error::Range(format!("Invalid schema spec: {what}"))
@@ -71,11 +72,10 @@ fn unless_false(spec: &Map, key: &str) -> Option<bool> {
 /// The properties of a type's or an attribute's spec. ProseMirror finds none it reads in a
 /// value that isn't an object, and throws on `null`.
 fn properties<'a>(value: &'a Value, what: &str) -> Result<&'a Map> {
-    static NONE: Map = Map::new();
     match value {
         Value::Object(properties) => Ok(properties),
         Value::Null => Err(invalid(&format!("{what} must not be null"))),
-        _ => Ok(&NONE),
+        _ => Ok(&json::EMPTY),
     }
 }
 
