@@ -3,7 +3,7 @@
 use super::map::Mappable;
 use super::mark::{clear_incompatible, line_breaks};
 use super::step::Step;
-use super::transform::{BlockAttrs, Transform};
+use super::transform::Transform;
 use crate::error::{Error, Result};
 use crate::json::Map;
 use crate::model::{
@@ -21,6 +21,13 @@ impl Wrapper {
     fn create(&self, content: Fragment) -> Result<Node> {
         self.node_type.create(self.attrs.as_deref(), content, &[])
     }
+}
+
+/// The attributes `set_block_type` gives each textblock: the same for all, or from a function
+/// of the old block.
+pub enum BlockAttrs<'a> {
+    Fixed(Option<&'a Map>),
+    Hook(&'a mut dyn FnMut(&Node) -> Result<Option<Attrs>>),
 }
 
 fn can_cut(node: &Node, start: usize, end: usize) -> Result<bool> {
@@ -59,49 +66,6 @@ pub fn lift_target(range: &NodeRange) -> Result<Option<usize>> {
         }
         depth -= 1;
     }
-}
-
-pub(crate) fn lift(tr: &mut Transform, range: &NodeRange, target: usize) -> Result<()> {
-    let (from, to, depth) = (range.resolved_from(), range.resolved_to(), range.depth());
-    let gap_start = from.before(depth + 1)?;
-    let gap_end = to.after(depth + 1)?;
-    let (mut start, mut end) = (gap_start, gap_end);
-
-    let mut before = Fragment::empty();
-    let mut open_start = 0;
-    let mut splitting = false;
-    for d in (target + 1..=depth).rev() {
-        if splitting || from.index(d) > 0 {
-            splitting = true;
-            before = Fragment::from_node(from.node(d).copy(before));
-            open_start += 1;
-        } else {
-            start -= 1;
-        }
-    }
-    let mut after = Fragment::empty();
-    let mut open_end = 0;
-    let mut splitting = false;
-    for d in (target + 1..=depth).rev() {
-        if splitting || to.after(d + 1)? < to.end(d) {
-            splitting = true;
-            after = Fragment::from_node(to.node(d).copy(after));
-            open_end += 1;
-        } else {
-            end += 1;
-        }
-    }
-    let insert = before.size() - open_start;
-    tr.step(Step::ReplaceAround {
-        from: start,
-        to: end,
-        gap_from: gap_start,
-        gap_to: gap_end,
-        slice: Slice::new(before.append(&after), open_start, open_end),
-        insert,
-        structure: true,
-    })?;
-    Ok(())
 }
 
 /// A way to wrap the range's content in a node of this type: the wrappers around it and inside
@@ -159,102 +123,6 @@ fn find_wrapping_inside(range: &NodeRange, node_type: &NodeType) -> Result<Optio
         .then_some(inside))
 }
 
-pub(crate) fn wrap(tr: &mut Transform, range: &NodeRange, wrappers: &[Wrapper]) -> Result<()> {
-    let mut content = Fragment::empty();
-    for wrapper in wrappers.iter().rev() {
-        if content.size() > 0 {
-            let matched = wrapper.node_type.content_match().match_fragment(
-                &content,
-                0,
-                content.child_count(),
-            );
-            if !matched.is_some_and(|matched| matched.valid_end()) {
-                return Err(Error::Range(
-                    "Wrapper type given to Transform.wrap does not form valid content of its parent wrapper".into(),
-                ));
-            }
-        }
-        content = Fragment::from_node(wrapper.create(content)?);
-    }
-    let (start, end) = (range.start(), range.end());
-    tr.step(Step::ReplaceAround {
-        from: start,
-        to: end,
-        gap_from: start,
-        gap_to: end,
-        slice: Slice::new(content, 0, 0),
-        insert: wrappers.len(),
-        structure: true,
-    })?;
-    Ok(())
-}
-
-pub(crate) fn set_block_type(
-    tr: &mut Transform,
-    from: usize,
-    to: usize,
-    node_type: &NodeType,
-    mut attrs: BlockAttrs,
-) -> Result<()> {
-    if !node_type.is_textblock() {
-        return Err(Error::Range(
-            "Type given to setBlockType should be a textblock".into(),
-        ));
-    }
-    let map_from = tr.steps().len();
-    let schema = node_type.schema().clone();
-    tr.doc().clone().nodes_between(
-        from,
-        to,
-        &mut |node, pos, _, _| {
-            let attrs_here: Option<Attrs> = match &mut attrs {
-                BlockAttrs::Fixed(attrs) => attrs.map(|attrs| std::sync::Arc::new(attrs.clone())),
-                BlockAttrs::Hook(hook) => hook(node)?,
-            };
-            if !(node.is_textblock()
-                && !node.has_markup(node_type, attrs_here.as_deref(), None)
-                && can_change_type(tr.doc(), tr.mapping_from(map_from).map(pos, 1), node_type)?)
-            {
-                return Ok(true);
-            }
-            let mut convert_newlines = None;
-            if let Some(linebreak) = schema.linebreak_replacement() {
-                let pre = node_type.whitespace() == Whitespace::Pre;
-                let supports_linebreak = node_type.content_match().match_type(&linebreak).is_some();
-                if pre && !supports_linebreak {
-                    convert_newlines = Some(false);
-                } else if !pre && supports_linebreak {
-                    convert_newlines = Some(true);
-                }
-            }
-            // Clear the markup the new type doesn't allow.
-            if convert_newlines == Some(false) {
-                replace_linebreaks(tr, node, pos, map_from)?;
-            }
-            let at = tr.mapping_from(map_from).map(pos, 1);
-            clear_incompatible(tr, at, node_type, None, convert_newlines.is_none())?;
-            let mapping = tr.mapping_from(map_from);
-            let start = mapping.map(pos, 1);
-            let end = mapping.map(pos + node.node_size(), 1);
-            let block = node_type.create(attrs_here.as_deref(), Fragment::empty(), node.marks())?;
-            tr.step(Step::ReplaceAround {
-                from: start,
-                to: end,
-                gap_from: start + 1,
-                gap_to: end - 1,
-                slice: Slice::new(Fragment::from_node(block), 0, 0),
-                insert: 1,
-                structure: true,
-            })?;
-            if convert_newlines == Some(true) {
-                replace_newlines(tr, node, pos, map_from)?;
-            }
-            Ok(false)
-        },
-        0,
-    )
-}
-
 /// Replace the line breaks in the node's text with its schema's linebreak replacement.
 fn replace_newlines(tr: &mut Transform, node: &Node, pos: usize, map_from: usize) -> Result<()> {
     let schema = node.node_type().schema().clone();
@@ -291,42 +159,6 @@ fn can_change_type(doc: &Node, pos: usize, node_type: &NodeType) -> Result<bool>
     resolved
         .parent()
         .can_replace_with(index, index + 1, node_type, None)
-}
-
-pub(crate) fn set_node_markup(
-    tr: &mut Transform,
-    pos: usize,
-    node_type: Option<&NodeType>,
-    attrs: Option<&Map>,
-    marks: Option<&[Mark]>,
-) -> Result<()> {
-    let node = tr
-        .doc()
-        .node_at(pos)?
-        .cloned()
-        .ok_or_else(|| Error::Range("No node at given position".into()))?;
-    let node_type = node_type.unwrap_or(node.node_type());
-    let new_node = node_type.create(attrs, Fragment::empty(), marks.unwrap_or(node.marks()))?;
-    if node.is_leaf() {
-        tr.replace_with(pos, pos + node.node_size(), Fragment::from_node(new_node))?;
-        return Ok(());
-    }
-    if !node_type.valid_content(node.content()) {
-        return Err(Error::Range(format!(
-            "Invalid content for node type {}",
-            node_type.name()
-        )));
-    }
-    tr.step(Step::ReplaceAround {
-        from: pos,
-        to: pos + node.node_size(),
-        gap_from: pos + 1,
-        gap_to: pos + node.node_size() - 1,
-        slice: Slice::new(Fragment::from_node(new_node), 0, 0),
-        insert: 1,
-        structure: true,
-    })?;
-    Ok(())
 }
 
 /// A type in `types_after`, which may be shorter than asked for, or have no type at a depth.
@@ -394,33 +226,6 @@ pub fn can_split(
     resolved
         .node(base)
         .can_replace_with(index, index, &base_type, None)
-}
-
-pub(crate) fn split(
-    tr: &mut Transform,
-    pos: usize,
-    depth: usize,
-    types_after: Option<&[Option<Wrapper>]>,
-) -> Result<()> {
-    let resolved = tr.doc().resolve(pos)?;
-    let mut before = Fragment::empty();
-    let mut after = Fragment::empty();
-    let mut i = depth as isize - 1;
-    for d in (resolved.depth().saturating_sub(depth) + 1..=resolved.depth()).rev() {
-        before = Fragment::from_node(resolved.node(d).copy(before));
-        after = Fragment::from_node(match type_after(types_after, i) {
-            Some(wrapper) => wrapper.create(after)?,
-            None => resolved.node(d).copy(after),
-        });
-        i -= 1;
-    }
-    tr.step(Step::Replace {
-        from: pos,
-        to: pos,
-        slice: Slice::new(before.append(&after), depth, depth),
-        structure: true,
-    })?;
-    Ok(())
 }
 
 /// Whether the blocks before and after `pos` can be joined.
@@ -505,57 +310,6 @@ pub fn join_point(doc: &Node, pos: usize, dir: i32) -> Result<Option<usize>> {
         };
         d -= 1;
     }
-}
-
-pub(crate) fn join(tr: &mut Transform, pos: usize, depth: usize) -> Result<()> {
-    let mut convert_newlines = None;
-    let schema = tr.doc().node_type().schema().clone();
-    let before = tr.doc().resolve(pos - depth)?;
-    let before_type = before.parent().node_type().clone();
-    if let Some(linebreak) = schema.linebreak_replacement()
-        && before_type.inline_content()
-    {
-        let pre = before_type.whitespace() == Whitespace::Pre;
-        let supports_linebreak = before_type.content_match().match_type(&linebreak).is_some();
-        if pre && !supports_linebreak {
-            convert_newlines = Some(false);
-        } else if !pre && supports_linebreak {
-            convert_newlines = Some(true);
-        }
-    }
-    let map_from = tr.steps().len();
-    if convert_newlines == Some(false) {
-        let after = tr.doc().resolve(pos + depth)?;
-        let (node, at) = (after.parent().clone(), after.before(after.depth())?);
-        replace_linebreaks(tr, &node, at, map_from)?;
-    }
-    if before_type.inline_content() {
-        let start: ContentMatch = before
-            .parent()
-            .content_match_at(before.index(before.depth()))?;
-        clear_incompatible(
-            tr,
-            pos + depth - 1,
-            &before_type,
-            Some(start),
-            convert_newlines.is_none(),
-        )?;
-    }
-    let mapping = tr.mapping_from(map_from);
-    let start = mapping.map(pos - depth, 1);
-    tr.step(Step::Replace {
-        from: start,
-        to: mapping.map(pos + depth, -1),
-        slice: Slice::empty(),
-        structure: true,
-    })?;
-    if convert_newlines == Some(true) {
-        let full = tr.doc().resolve(start)?;
-        let (node, at) = (full.parent().clone(), full.before(full.depth())?);
-        let steps = tr.steps().len();
-        replace_newlines(tr, &node, at, steps)?;
-    }
-    Ok(())
 }
 
 /// A position at or around `pos` where a node of this type can be inserted, looking up at
@@ -657,4 +411,271 @@ pub fn drop_point(doc: &Node, pos: usize, slice: &Slice) -> Result<Option<usize>
         }
     }
     Ok(None)
+}
+
+impl Transform {
+    /// Lift the range's content out of its parent to `target` depth.
+    pub fn lift(&mut self, range: &NodeRange, target: usize) -> Result<&mut Self> {
+        let (from, to, depth) = (range.resolved_from(), range.resolved_to(), range.depth());
+        let gap_start = from.before(depth + 1)?;
+        let gap_end = to.after(depth + 1)?;
+        let (mut start, mut end) = (gap_start, gap_end);
+
+        let mut before = Fragment::empty();
+        let mut open_start = 0;
+        let mut splitting = false;
+        for d in (target + 1..=depth).rev() {
+            if splitting || from.index(d) > 0 {
+                splitting = true;
+                before = Fragment::from_node(from.node(d).copy(before));
+                open_start += 1;
+            } else {
+                start -= 1;
+            }
+        }
+        let mut after = Fragment::empty();
+        let mut open_end = 0;
+        let mut splitting = false;
+        for d in (target + 1..=depth).rev() {
+            if splitting || to.after(d + 1)? < to.end(d) {
+                splitting = true;
+                after = Fragment::from_node(to.node(d).copy(after));
+                open_end += 1;
+            } else {
+                end += 1;
+            }
+        }
+        let insert = before.size() - open_start;
+        self.step(Step::ReplaceAround {
+            from: start,
+            to: end,
+            gap_from: gap_start,
+            gap_to: gap_end,
+            slice: Slice::new(before.append(&after), open_start, open_end),
+            insert,
+            structure: true,
+        })
+    }
+
+    /// Wrap the range in these nodes, outermost first.
+    pub fn wrap(&mut self, range: &NodeRange, wrappers: &[Wrapper]) -> Result<&mut Self> {
+        let mut content = Fragment::empty();
+        for wrapper in wrappers.iter().rev() {
+            if content.size() > 0 {
+                let matched = wrapper.node_type.content_match().match_fragment(
+                    &content,
+                    0,
+                    content.child_count(),
+                );
+                if !matched.is_some_and(|matched| matched.valid_end()) {
+                    return Err(Error::Range(
+                        "Wrapper type given to Transform.wrap does not form valid content of its parent wrapper".into(),
+                    ));
+                }
+            }
+            content = Fragment::from_node(wrapper.create(content)?);
+        }
+        let (start, end) = (range.start(), range.end());
+        self.step(Step::ReplaceAround {
+            from: start,
+            to: end,
+            gap_from: start,
+            gap_to: end,
+            slice: Slice::new(content, 0, 0),
+            insert: wrappers.len(),
+            structure: true,
+        })
+    }
+
+    /// Give the textblocks between `from` and `to` this type, and these attributes.
+    pub fn set_block_type(
+        &mut self,
+        from: usize,
+        to: usize,
+        node_type: &NodeType,
+        mut attrs: BlockAttrs,
+    ) -> Result<&mut Self> {
+        if !node_type.is_textblock() {
+            return Err(Error::Range(
+                "Type given to setBlockType should be a textblock".into(),
+            ));
+        }
+        let map_from = self.steps().len();
+        let schema = node_type.schema().clone();
+        self.doc().clone().nodes_between(
+            from,
+            to,
+            &mut |node, pos, _, _| {
+                let attrs_here: Option<Attrs> = match &mut attrs {
+                    BlockAttrs::Fixed(attrs) => {
+                        attrs.map(|attrs| std::sync::Arc::new(attrs.clone()))
+                    }
+                    BlockAttrs::Hook(hook) => hook(node)?,
+                };
+                if !(node.is_textblock()
+                    && !node.has_markup(node_type, attrs_here.as_deref(), None)
+                    && can_change_type(
+                        self.doc(),
+                        self.mapping_from(map_from).map(pos, 1),
+                        node_type,
+                    )?)
+                {
+                    return Ok(true);
+                }
+                let mut convert_newlines = None;
+                if let Some(linebreak) = schema.linebreak_replacement() {
+                    let pre = node_type.whitespace() == Whitespace::Pre;
+                    let supports_linebreak =
+                        node_type.content_match().match_type(&linebreak).is_some();
+                    if pre && !supports_linebreak {
+                        convert_newlines = Some(false);
+                    } else if !pre && supports_linebreak {
+                        convert_newlines = Some(true);
+                    }
+                }
+                // Clear the markup the new type doesn't allow.
+                if convert_newlines == Some(false) {
+                    replace_linebreaks(self, node, pos, map_from)?;
+                }
+                let at = self.mapping_from(map_from).map(pos, 1);
+                clear_incompatible(self, at, node_type, None, convert_newlines.is_none())?;
+                let mapping = self.mapping_from(map_from);
+                let start = mapping.map(pos, 1);
+                let end = mapping.map(pos + node.node_size(), 1);
+                let block =
+                    node_type.create(attrs_here.as_deref(), Fragment::empty(), node.marks())?;
+                self.step(Step::ReplaceAround {
+                    from: start,
+                    to: end,
+                    gap_from: start + 1,
+                    gap_to: end - 1,
+                    slice: Slice::new(Fragment::from_node(block), 0, 0),
+                    insert: 1,
+                    structure: true,
+                })?;
+                if convert_newlines == Some(true) {
+                    replace_newlines(self, node, pos, map_from)?;
+                }
+                Ok(false)
+            },
+            0,
+        )?;
+        Ok(self)
+    }
+
+    /// Change the type, attributes or marks of the node at `pos`, keeping its type when none
+    /// is given and its marks when none are.
+    pub fn set_node_markup(
+        &mut self,
+        pos: usize,
+        node_type: Option<&NodeType>,
+        attrs: Option<&Map>,
+        marks: Option<&[Mark]>,
+    ) -> Result<&mut Self> {
+        let node = self
+            .doc()
+            .node_at(pos)?
+            .cloned()
+            .ok_or_else(|| Error::Range("No node at given position".into()))?;
+        let node_type = node_type.unwrap_or(node.node_type());
+        let new_node = node_type.create(attrs, Fragment::empty(), marks.unwrap_or(node.marks()))?;
+        if node.is_leaf() {
+            return self.replace_with(pos, pos + node.node_size(), Fragment::from_node(new_node));
+        }
+        if !node_type.valid_content(node.content()) {
+            return Err(Error::Range(format!(
+                "Invalid content for node type {}",
+                node_type.name()
+            )));
+        }
+        self.step(Step::ReplaceAround {
+            from: pos,
+            to: pos + node.node_size(),
+            gap_from: pos + 1,
+            gap_to: pos + node.node_size() - 1,
+            slice: Slice::new(Fragment::from_node(new_node), 0, 0),
+            insert: 1,
+            structure: true,
+        })
+    }
+
+    /// Split the node at `pos`, and `depth - 1` of its ancestors. Each part split off gets the
+    /// matching type of `types_after`, outermost first, when it has one, or its original's.
+    pub fn split(
+        &mut self,
+        pos: usize,
+        depth: usize,
+        types_after: Option<&[Option<Wrapper>]>,
+    ) -> Result<&mut Self> {
+        let resolved = self.doc().resolve(pos)?;
+        let mut before = Fragment::empty();
+        let mut after = Fragment::empty();
+        let mut i = depth as isize - 1;
+        for d in (resolved.depth().saturating_sub(depth) + 1..=resolved.depth()).rev() {
+            before = Fragment::from_node(resolved.node(d).copy(before));
+            after = Fragment::from_node(match type_after(types_after, i) {
+                Some(wrapper) => wrapper.create(after)?,
+                None => resolved.node(d).copy(after),
+            });
+            i -= 1;
+        }
+        self.step(Step::Replace {
+            from: pos,
+            to: pos,
+            slice: Slice::new(before.append(&after), depth, depth),
+            structure: true,
+        })
+    }
+
+    /// Join the blocks around `pos`, and their last and first descendants down `depth` levels.
+    pub fn join(&mut self, pos: usize, depth: usize) -> Result<&mut Self> {
+        let mut convert_newlines = None;
+        let schema = self.doc().node_type().schema().clone();
+        let before = self.doc().resolve(pos - depth)?;
+        let before_type = before.parent().node_type().clone();
+        if let Some(linebreak) = schema.linebreak_replacement()
+            && before_type.inline_content()
+        {
+            let pre = before_type.whitespace() == Whitespace::Pre;
+            let supports_linebreak = before_type.content_match().match_type(&linebreak).is_some();
+            if pre && !supports_linebreak {
+                convert_newlines = Some(false);
+            } else if !pre && supports_linebreak {
+                convert_newlines = Some(true);
+            }
+        }
+        let map_from = self.steps().len();
+        if convert_newlines == Some(false) {
+            let after = self.doc().resolve(pos + depth)?;
+            let (node, at) = (after.parent().clone(), after.before(after.depth())?);
+            replace_linebreaks(self, &node, at, map_from)?;
+        }
+        if before_type.inline_content() {
+            let start: ContentMatch = before
+                .parent()
+                .content_match_at(before.index(before.depth()))?;
+            clear_incompatible(
+                self,
+                pos + depth - 1,
+                &before_type,
+                Some(start),
+                convert_newlines.is_none(),
+            )?;
+        }
+        let mapping = self.mapping_from(map_from);
+        let start = mapping.map(pos - depth, 1);
+        self.step(Step::Replace {
+            from: start,
+            to: mapping.map(pos + depth, -1),
+            slice: Slice::empty(),
+            structure: true,
+        })?;
+        if convert_newlines == Some(true) {
+            let full = self.doc().resolve(start)?;
+            let (node, at) = (full.parent().clone(), full.before(full.depth())?);
+            let steps = self.steps().len();
+            replace_newlines(self, &node, at, steps)?;
+        }
+        Ok(self)
+    }
 }

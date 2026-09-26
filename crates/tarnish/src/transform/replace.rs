@@ -627,136 +627,232 @@ fn defines_content(node_type: &NodeType) -> bool {
     spec.defining || spec.defining_for_content
 }
 
-pub(crate) fn replace_range(
-    tr: &mut Transform,
-    from: usize,
-    to: usize,
-    slice: &Slice,
-) -> Result<()> {
-    if slice.size() == 0 {
-        return delete_range(tr, from, to);
-    }
-    let (mut from, mut to) = (from, to);
-    let resolved_from = tr.doc().resolve(from)?;
-    let resolved_to = tr.doc().resolve(to)?;
-    if fits_trivially(&resolved_from, &resolved_to, slice)? {
-        tr.step(Step::Replace {
-            from,
-            to,
-            slice: slice.clone(),
-            structure: false,
-        })?;
-        return Ok(());
-    }
-
-    let mut target_depths: Vec<isize> = covered_depths(&resolved_from, &resolved_to)
-        .into_iter()
-        .map(|depth| depth as isize)
-        .collect();
-    // The whole document can't be replaced.
-    if target_depths.last() == Some(&0) {
-        target_depths.pop();
-    }
-    // A negative depth -D stands for replacing from before the node at D to `to`, rather than
-    // over the whole node.
-    let mut preferred_target = -(resolved_from.depth() as isize + 1);
-    target_depths.insert(0, preferred_target);
-    // Pick a preferred target depth among the covering ones not outside a defining node, and
-    // add negative depths for those `from` is at the start of, up to a defining node.
-    let mut pos = resolved_from.pos() as isize - 1;
-    for d in (1..=resolved_from.depth()).rev() {
-        let spec = resolved_from.node(d).node_type().spec();
-        if spec.defining || spec.defining_as_context || spec.isolating {
-            break;
+impl Transform {
+    /// Replace a range with a slice, taking `from`, `to` and the slice's open start as hints
+    /// rather than fixed points, as for a paste.
+    pub fn replace_range(&mut self, from: usize, to: usize, slice: &Slice) -> Result<&mut Self> {
+        if slice.size() == 0 {
+            return self.delete_range(from, to);
         }
-        if target_depths.contains(&(d as isize)) {
-            preferred_target = d as isize;
-        } else if resolved_from.before(d)? as isize == pos {
-            target_depths.insert(1, -(d as isize));
+        let (mut from, mut to) = (from, to);
+        let resolved_from = self.doc().resolve(from)?;
+        let resolved_to = self.doc().resolve(to)?;
+        if fits_trivially(&resolved_from, &resolved_to, slice)? {
+            return self.step(Step::Replace {
+                from,
+                to,
+                slice: slice.clone(),
+                structure: false,
+            });
         }
-        pos -= 1;
-    }
-    // Try each depth of the slice in each target depth, the preferred ones first.
-    let preferred_target_index = target_depths
-        .iter()
-        .position(|&depth| depth == preferred_target)
-        .unwrap_or(0);
 
-    // The nodes down the slice's start, the innermost open one's first child last, which the
-    // open node may not have.
-    let mut left_nodes: Vec<Option<Node>> = Vec::new();
-    let mut preferred_depth = slice.open_start();
-    let mut content = slice.content().clone();
-    for i in 0.. {
-        let node = content.first_child().cloned();
-        left_nodes.push(node.clone());
-        if i == slice.open_start() {
-            break;
+        let mut target_depths: Vec<isize> = covered_depths(&resolved_from, &resolved_to)
+            .into_iter()
+            .map(|depth| depth as isize)
+            .collect();
+        // The whole document can't be replaced.
+        if target_depths.last() == Some(&0) {
+            target_depths.pop();
         }
-        content = must(node)?.content().clone();
-    }
-
-    // Back up the preferred depth to cover defining textblocks right above it, maybe skipping
-    // one textblock that isn't defining.
-    let preferred_parent = resolved_from.node((preferred_target.unsigned_abs()).saturating_sub(1));
-    for d in (0..preferred_depth).rev() {
-        let left_node = must(left_nodes[d].as_ref())?;
-        let defines = defines_content(left_node.node_type());
-        if defines && !left_node.same_markup(preferred_parent) {
-            preferred_depth = d;
-        } else if defines || !left_node.node_type().is_textblock() {
-            break;
-        }
-    }
-
-    for j in (0..=slice.open_start()).rev() {
-        let open_depth = (j + preferred_depth + 1) % (slice.open_start() + 1);
-        let Some(Some(insert)) = left_nodes.get(open_depth) else {
-            continue;
-        };
-        for i in 0..target_depths.len() {
-            let mut target_depth =
-                target_depths[(i + preferred_target_index) % target_depths.len()];
-            let mut expand = true;
-            if target_depth < 0 {
-                expand = false;
-                target_depth = -target_depth;
+        // A negative depth -D stands for replacing from before the node at D to `to`, rather than
+        // over the whole node.
+        let mut preferred_target = -(resolved_from.depth() as isize + 1);
+        target_depths.insert(0, preferred_target);
+        // Pick a preferred target depth among the covering ones not outside a defining node, and
+        // add negative depths for those `from` is at the start of, up to a defining node.
+        let mut pos = resolved_from.pos() as isize - 1;
+        for d in (1..=resolved_from.depth()).rev() {
+            let spec = resolved_from.node(d).node_type().spec();
+            if spec.defining || spec.defining_as_context || spec.isolating {
+                break;
             }
-            let target_depth = target_depth as usize;
-            let parent = resolved_from.node(target_depth - 1);
-            let index = resolved_from.index(target_depth - 1);
-            if parent.can_replace_with(index, index, insert.node_type(), Some(insert.marks()))? {
-                let closed =
-                    close_fragment(slice.content(), 0, slice.open_start(), open_depth, None)?;
-                let end = if expand {
-                    resolved_to.after(target_depth)?
-                } else {
-                    to
-                };
-                tr.replace(
-                    resolved_from.before(target_depth)?,
-                    end,
-                    &Slice::new(closed, open_depth, slice.open_end()),
-                )?;
-                return Ok(());
+            if target_depths.contains(&(d as isize)) {
+                preferred_target = d as isize;
+            } else if resolved_from.before(d)? as isize == pos {
+                target_depths.insert(1, -(d as isize));
+            }
+            pos -= 1;
+        }
+        // Try each depth of the slice in each target depth, the preferred ones first.
+        let preferred_target_index = target_depths
+            .iter()
+            .position(|&depth| depth == preferred_target)
+            .unwrap_or(0);
+
+        // The nodes down the slice's start, the innermost open one's first child last, which the
+        // open node may not have.
+        let mut left_nodes: Vec<Option<Node>> = Vec::new();
+        let mut preferred_depth = slice.open_start();
+        let mut content = slice.content().clone();
+        for i in 0.. {
+            let node = content.first_child().cloned();
+            left_nodes.push(node.clone());
+            if i == slice.open_start() {
+                break;
+            }
+            content = must(node)?.content().clone();
+        }
+
+        // Back up the preferred depth to cover defining textblocks right above it, maybe skipping
+        // one textblock that isn't defining.
+        let preferred_parent =
+            resolved_from.node((preferred_target.unsigned_abs()).saturating_sub(1));
+        for d in (0..preferred_depth).rev() {
+            let left_node = must(left_nodes[d].as_ref())?;
+            let defines = defines_content(left_node.node_type());
+            if defines && !left_node.same_markup(preferred_parent) {
+                preferred_depth = d;
+            } else if defines || !left_node.node_type().is_textblock() {
+                break;
             }
         }
+
+        for j in (0..=slice.open_start()).rev() {
+            let open_depth = (j + preferred_depth + 1) % (slice.open_start() + 1);
+            let Some(Some(insert)) = left_nodes.get(open_depth) else {
+                continue;
+            };
+            for i in 0..target_depths.len() {
+                let mut target_depth =
+                    target_depths[(i + preferred_target_index) % target_depths.len()];
+                let mut expand = true;
+                if target_depth < 0 {
+                    expand = false;
+                    target_depth = -target_depth;
+                }
+                let target_depth = target_depth as usize;
+                let parent = resolved_from.node(target_depth - 1);
+                let index = resolved_from.index(target_depth - 1);
+                if parent.can_replace_with(
+                    index,
+                    index,
+                    insert.node_type(),
+                    Some(insert.marks()),
+                )? {
+                    let closed =
+                        close_fragment(slice.content(), 0, slice.open_start(), open_depth, None)?;
+                    let end = if expand {
+                        resolved_to.after(target_depth)?
+                    } else {
+                        to
+                    };
+                    return self.replace(
+                        resolved_from.before(target_depth)?,
+                        end,
+                        &Slice::new(closed, open_depth, slice.open_end()),
+                    );
+                }
+            }
+        }
+
+        let start_steps = self.steps().len();
+        for i in (0..target_depths.len()).rev() {
+            self.replace(from, to, slice)?;
+            if self.steps().len() > start_steps {
+                break;
+            }
+            let depth = target_depths[i];
+            if depth < 0 {
+                continue;
+            }
+            from = resolved_from.before(depth as usize)?;
+            to = resolved_to.after(depth as usize)?;
+        }
+        Ok(self)
     }
 
-    let start_steps = tr.steps().len();
-    for i in (0..target_depths.len()).rev() {
-        tr.replace(from, to, slice)?;
-        if tr.steps().len() > start_steps {
-            break;
+    /// Replace a range with a node, moving the range out of a parent where the node doesn't fit.
+    pub fn replace_range_with(&mut self, from: usize, to: usize, node: Node) -> Result<&mut Self> {
+        let (mut from, mut to) = (from, to);
+        if !node.is_inline()
+            && from == to
+            && self.doc().resolve(from)?.parent().content().size() > 0
+            && let Some(point) = insert_point(self.doc(), from, node.node_type())?
+        {
+            from = point;
+            to = point;
         }
-        let depth = target_depths[i];
-        if depth < 0 {
-            continue;
-        }
-        from = resolved_from.before(depth as usize)?;
-        to = resolved_to.after(depth as usize)?;
+        self.replace_range(from, to, &Slice::new(Fragment::from_node(node), 0, 0))
     }
-    Ok(())
+
+    /// Delete a range, growing it over whole parents until the deletion is valid.
+    pub fn delete_range(&mut self, from: usize, to: usize) -> Result<&mut Self> {
+        let (mut from, mut to) = (from, to);
+        let mut resolved_from = self.doc().resolve(from)?;
+        let mut resolved_to = self.doc().resolve(to)?;
+
+        // When the range spans from the start of one textblock to the start of another, move out
+        // of the start of both.
+        if resolved_from.parent().is_textblock()
+            && resolved_to.parent().is_textblock()
+            && resolved_from.start(resolved_from.depth()) != resolved_to.start(resolved_to.depth())
+            && resolved_from.parent_offset() == 0
+            && resolved_to.parent_offset() == 0
+        {
+            let shared = resolved_from.shared_depth(to);
+            let isolated = (shared + 1..=resolved_from.depth())
+                .any(|d| resolved_from.node(d).node_type().spec().isolating)
+                || (shared + 1..=resolved_to.depth())
+                    .any(|d| resolved_to.node(d).node_type().spec().isolating);
+            if !isolated {
+                let mut d = resolved_from.depth();
+                while d > 0 && from == resolved_from.start(d) {
+                    from = resolved_from.before(d)?;
+                    d -= 1;
+                }
+                let mut d = resolved_to.depth();
+                while d > 0 && to == resolved_to.start(d) {
+                    to = resolved_to.before(d)?;
+                    d -= 1;
+                }
+                resolved_from = self.doc().resolve(from)?;
+                resolved_to = self.doc().resolve(to)?;
+            }
+        }
+
+        let covered = covered_depths(&resolved_from, &resolved_to);
+        for (i, &depth) in covered.iter().enumerate() {
+            let last = i == covered.len() - 1;
+            if (last && depth == 0)
+                || resolved_from
+                    .node(depth)
+                    .node_type()
+                    .content_match()
+                    .valid_end()
+            {
+                return self.delete(resolved_from.start(depth), resolved_to.end(depth));
+            }
+            if depth > 0
+                && (last
+                    || resolved_from.node(depth - 1).can_replace(
+                        resolved_from.index(depth - 1),
+                        resolved_to.index_after(depth - 1),
+                        &Fragment::empty(),
+                        0,
+                        0,
+                    )?)
+            {
+                return self.delete(resolved_from.before(depth)?, resolved_to.after(depth)?);
+            }
+        }
+        for d in 1..=resolved_from.depth().min(resolved_to.depth()) {
+            if from - resolved_from.start(d) == resolved_from.depth() - d
+                && to > resolved_from.end(d)
+                && resolved_to.end(d) as isize - to as isize != (resolved_to.depth() - d) as isize
+                && resolved_from.start(d - 1) == resolved_to.start(d - 1)
+                && resolved_from.node(d - 1).can_replace(
+                    resolved_from.index(d - 1),
+                    resolved_to.index(d - 1),
+                    &Fragment::empty(),
+                    0,
+                    0,
+                )?
+            {
+                return self.delete(resolved_from.before(d)?, to);
+            }
+        }
+        self.delete(from, to)
+    }
 }
 
 fn close_fragment(
@@ -787,106 +883,6 @@ fn close_fragment(
         fragment = start.append(&end);
     }
     Ok(fragment)
-}
-
-pub(crate) fn replace_range_with(
-    tr: &mut Transform,
-    from: usize,
-    to: usize,
-    node: Node,
-) -> Result<()> {
-    let (mut from, mut to) = (from, to);
-    if !node.is_inline()
-        && from == to
-        && tr.doc().resolve(from)?.parent().content().size() > 0
-        && let Some(point) = insert_point(tr.doc(), from, node.node_type())?
-    {
-        from = point;
-        to = point;
-    }
-    replace_range(tr, from, to, &Slice::new(Fragment::from_node(node), 0, 0))
-}
-
-pub(crate) fn delete_range(tr: &mut Transform, from: usize, to: usize) -> Result<()> {
-    let (mut from, mut to) = (from, to);
-    let mut resolved_from = tr.doc().resolve(from)?;
-    let mut resolved_to = tr.doc().resolve(to)?;
-
-    // When the range spans from the start of one textblock to the start of another, move out
-    // of the start of both.
-    if resolved_from.parent().is_textblock()
-        && resolved_to.parent().is_textblock()
-        && resolved_from.start(resolved_from.depth()) != resolved_to.start(resolved_to.depth())
-        && resolved_from.parent_offset() == 0
-        && resolved_to.parent_offset() == 0
-    {
-        let shared = resolved_from.shared_depth(to);
-        let isolated = (shared + 1..=resolved_from.depth())
-            .any(|d| resolved_from.node(d).node_type().spec().isolating)
-            || (shared + 1..=resolved_to.depth())
-                .any(|d| resolved_to.node(d).node_type().spec().isolating);
-        if !isolated {
-            let mut d = resolved_from.depth();
-            while d > 0 && from == resolved_from.start(d) {
-                from = resolved_from.before(d)?;
-                d -= 1;
-            }
-            let mut d = resolved_to.depth();
-            while d > 0 && to == resolved_to.start(d) {
-                to = resolved_to.before(d)?;
-                d -= 1;
-            }
-            resolved_from = tr.doc().resolve(from)?;
-            resolved_to = tr.doc().resolve(to)?;
-        }
-    }
-
-    let covered = covered_depths(&resolved_from, &resolved_to);
-    for (i, &depth) in covered.iter().enumerate() {
-        let last = i == covered.len() - 1;
-        if (last && depth == 0)
-            || resolved_from
-                .node(depth)
-                .node_type()
-                .content_match()
-                .valid_end()
-        {
-            tr.delete(resolved_from.start(depth), resolved_to.end(depth))?;
-            return Ok(());
-        }
-        if depth > 0
-            && (last
-                || resolved_from.node(depth - 1).can_replace(
-                    resolved_from.index(depth - 1),
-                    resolved_to.index_after(depth - 1),
-                    &Fragment::empty(),
-                    0,
-                    0,
-                )?)
-        {
-            tr.delete(resolved_from.before(depth)?, resolved_to.after(depth)?)?;
-            return Ok(());
-        }
-    }
-    for d in 1..=resolved_from.depth().min(resolved_to.depth()) {
-        if from - resolved_from.start(d) == resolved_from.depth() - d
-            && to > resolved_from.end(d)
-            && resolved_to.end(d) as isize - to as isize != (resolved_to.depth() - d) as isize
-            && resolved_from.start(d - 1) == resolved_to.start(d - 1)
-            && resolved_from.node(d - 1).can_replace(
-                resolved_from.index(d - 1),
-                resolved_to.index(d - 1),
-                &Fragment::empty(),
-                0,
-                0,
-            )?
-        {
-            tr.delete(resolved_from.before(d)?, to)?;
-            return Ok(());
-        }
-    }
-    tr.delete(from, to)?;
-    Ok(())
 }
 
 /// The depths at which `from` to `to` spans the whole content of the node.

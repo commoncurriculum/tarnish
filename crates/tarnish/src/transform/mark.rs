@@ -1,139 +1,164 @@
 //! Adding and removing marks, and clearing what a new parent type doesn't allow.
 
 use super::step::{MarkOp, Step};
-use super::transform::{MarkMatch, Transform};
+use super::transform::Transform;
 use crate::error::{Error, Result};
-use crate::model::{ContentMatch, Fragment, Mark, NodeType, Slice, Whitespace};
+use crate::model::{ContentMatch, Fragment, Mark, MarkType, NodeType, Slice, Whitespace};
 
-pub(crate) fn add_mark(tr: &mut Transform, from: usize, to: usize, mark: &Mark) -> Result<()> {
-    // Ranges the steps cover, extended while the next node continues them.
-    let mut removed: Vec<(usize, usize, Mark)> = Vec::new();
-    let mut added: Vec<(usize, usize)> = Vec::new();
-    let mut removing: Option<usize> = None;
-    tr.doc().clone().nodes_between(
-        from,
-        to,
-        &mut |node, pos, parent, _| {
-            if !node.is_inline() {
-                return Ok(true);
-            }
-            let marks = node.marks();
-            let parent = parent.expect("an inline node's parent");
-            if !mark.is_in_set(marks) && parent.node_type().allows_mark_type(mark.mark_type()) {
-                let start = pos.max(from);
-                let end = (pos + node.node_size()).min(to);
-                let new_set = mark.add_to_set(marks);
-                for old in marks.iter() {
-                    if !old.is_in_set(&new_set) {
-                        match removing {
-                            Some(index)
-                                if removed[index].1 == start && removed[index].2 == *old =>
-                            {
-                                removed[index].1 = end;
-                            }
-                            _ => {
-                                removed.push((start, end, old.clone()));
-                                removing = Some(removed.len() - 1);
+/// A mark, or all marks of a type.
+#[derive(Clone, Copy)]
+pub enum MarkMatch<'a> {
+    Mark(&'a Mark),
+    Type(&'a MarkType),
+}
+
+impl Transform {
+    pub fn add_mark(&mut self, from: usize, to: usize, mark: &Mark) -> Result<&mut Self> {
+        // Ranges the steps cover, extended while the next node continues them.
+        let mut removed: Vec<(usize, usize, Mark)> = Vec::new();
+        let mut added: Vec<(usize, usize)> = Vec::new();
+        let mut removing: Option<usize> = None;
+        self.doc().clone().nodes_between(
+            from,
+            to,
+            &mut |node, pos, parent, _| {
+                if !node.is_inline() {
+                    return Ok(true);
+                }
+                let marks = node.marks();
+                let parent = parent.expect("an inline node's parent");
+                if !mark.is_in_set(marks) && parent.node_type().allows_mark_type(mark.mark_type()) {
+                    let start = pos.max(from);
+                    let end = (pos + node.node_size()).min(to);
+                    let new_set = mark.add_to_set(marks);
+                    for old in marks.iter() {
+                        if !old.is_in_set(&new_set) {
+                            match removing {
+                                Some(index)
+                                    if removed[index].1 == start && removed[index].2 == *old =>
+                                {
+                                    removed[index].1 = end;
+                                }
+                                _ => {
+                                    removed.push((start, end, old.clone()));
+                                    removing = Some(removed.len() - 1);
+                                }
                             }
                         }
                     }
+                    match added.last_mut() {
+                        Some(adding) if adding.1 == start => adding.1 = end,
+                        _ => added.push((start, end)),
+                    }
                 }
-                match added.last_mut() {
-                    Some(adding) if adding.1 == start => adding.1 = end,
-                    _ => added.push((start, end)),
-                }
-            }
-            Ok(true)
-        },
-        0,
-    )?;
-    for (from, to, mark) in removed {
-        tr.step(Step::Mark {
-            op: MarkOp::Remove,
-            from,
-            to,
-            mark,
-        })?;
+                Ok(true)
+            },
+            0,
+        )?;
+        for (from, to, mark) in removed {
+            self.step(Step::Mark {
+                op: MarkOp::Remove,
+                from,
+                to,
+                mark,
+            })?;
+        }
+        for (from, to) in added {
+            self.step(Step::Mark {
+                op: MarkOp::Add,
+                from,
+                to,
+                mark: mark.clone(),
+            })?;
+        }
+        Ok(self)
     }
-    for (from, to) in added {
-        tr.step(Step::Mark {
-            op: MarkOp::Add,
-            from,
-            to,
-            mark: mark.clone(),
-        })?;
-    }
-    Ok(())
-}
 
-pub(crate) fn remove_mark(
-    tr: &mut Transform,
-    from: usize,
-    to: usize,
-    mark: Option<MarkMatch>,
-) -> Result<()> {
-    struct Matched {
-        style: Mark,
+    /// Remove the mark, the marks of the type, or with `None` all marks, from the inline
+    /// content between `from` and `to`.
+    pub fn remove_mark(
+        &mut self,
         from: usize,
         to: usize,
-        step: usize,
-    }
-    let mut matched: Vec<Matched> = Vec::new();
-    let mut step = 0;
-    tr.doc().clone().nodes_between(
-        from,
-        to,
-        &mut |node, pos, _, _| {
-            if !node.is_inline() {
-                return Ok(true);
-            }
-            step += 1;
-            let to_remove: Vec<Mark> = match mark {
-                Some(MarkMatch::Type(mark_type)) => {
-                    let mut set = node.marks().clone();
-                    let mut found = Vec::new();
-                    while let Some(mark) = mark_type.is_in_set(&set).cloned() {
-                        set = mark.remove_from_set(&set);
-                        found.push(mark);
-                    }
-                    found
+        mark: Option<MarkMatch>,
+    ) -> Result<&mut Self> {
+        struct Matched {
+            style: Mark,
+            from: usize,
+            to: usize,
+            step: usize,
+        }
+        let mut matched: Vec<Matched> = Vec::new();
+        let mut step = 0;
+        self.doc().clone().nodes_between(
+            from,
+            to,
+            &mut |node, pos, _, _| {
+                if !node.is_inline() {
+                    return Ok(true);
                 }
-                Some(MarkMatch::Mark(mark)) if mark.is_in_set(node.marks()) => vec![mark.clone()],
-                Some(MarkMatch::Mark(_)) => Vec::new(),
-                None => node.marks().to_vec(),
-            };
-            let end = (pos + node.node_size()).min(to);
-            for style in to_remove {
-                let found = matched
-                    .iter_mut()
-                    .rev()
-                    .find(|m| m.step == step - 1 && m.style == style);
-                match found {
-                    Some(found) => {
-                        found.to = end;
-                        found.step = step;
+                step += 1;
+                let to_remove: Vec<Mark> = match mark {
+                    Some(MarkMatch::Type(mark_type)) => {
+                        let mut set = node.marks().clone();
+                        let mut found = Vec::new();
+                        while let Some(mark) = mark_type.is_in_set(&set).cloned() {
+                            set = mark.remove_from_set(&set);
+                            found.push(mark);
+                        }
+                        found
                     }
-                    None => matched.push(Matched {
-                        style,
-                        from: pos.max(from),
-                        to: end,
-                        step,
-                    }),
+                    Some(MarkMatch::Mark(mark)) if mark.is_in_set(node.marks()) => {
+                        vec![mark.clone()]
+                    }
+                    Some(MarkMatch::Mark(_)) => Vec::new(),
+                    None => node.marks().to_vec(),
+                };
+                let end = (pos + node.node_size()).min(to);
+                for style in to_remove {
+                    let found = matched
+                        .iter_mut()
+                        .rev()
+                        .find(|m| m.step == step - 1 && m.style == style);
+                    match found {
+                        Some(found) => {
+                            found.to = end;
+                            found.step = step;
+                        }
+                        None => matched.push(Matched {
+                            style,
+                            from: pos.max(from),
+                            to: end,
+                            step,
+                        }),
+                    }
                 }
-            }
-            Ok(true)
-        },
-        0,
-    )?;
-    for m in matched {
-        tr.step(Step::Mark {
-            op: MarkOp::Remove,
-            from: m.from,
-            to: m.to,
-            mark: m.style,
-        })?;
+                Ok(true)
+            },
+            0,
+        )?;
+        for m in matched {
+            self.step(Step::Mark {
+                op: MarkOp::Remove,
+                from: m.from,
+                to: m.to,
+                mark: m.style,
+            })?;
+        }
+        Ok(self)
     }
-    Ok(())
+
+    /// Remove the content and marks of the node at `pos` that a node of `parent_type` wouldn't
+    /// allow, matching from `start` when given.
+    pub fn clear_incompatible(
+        &mut self,
+        pos: usize,
+        parent_type: &NodeType,
+        start: Option<ContentMatch>,
+    ) -> Result<&mut Self> {
+        clear_incompatible(self, pos, parent_type, start, true)?;
+        Ok(self)
+    }
 }
 
 /// The ends of the line breaks in a text: `\r\n`, `\r` or `\n`, as start and length.
@@ -155,7 +180,9 @@ pub(crate) fn line_breaks(units: &[u16]) -> Vec<(usize, usize)> {
     found
 }
 
-pub(crate) fn clear_incompatible(
+/// [`Transform::clear_incompatible`], which with `clear_newlines` false keeps the newlines in
+/// text rather than making them spaces.
+pub(super) fn clear_incompatible(
     tr: &mut Transform,
     pos: usize,
     parent_type: &NodeType,
