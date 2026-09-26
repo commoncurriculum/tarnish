@@ -1,7 +1,7 @@
 //! Transforms: a document, and the steps that changed it.
 
 use super::map::{Mappable, Mapping, MappingSlice};
-use super::step::{Step, StepResult};
+use super::step::{MarkOp, Step, StepResult};
 use super::structure::{self, Wrapper};
 use super::{mark, replace};
 use crate::error::{Error, Result};
@@ -220,7 +220,11 @@ impl Transform {
     }
 
     pub fn add_node_mark(&mut self, pos: usize, mark: Mark) -> Result<&mut Self> {
-        self.step(Step::AddNodeMark { pos, mark })
+        self.step(Step::NodeMark {
+            op: MarkOp::Add,
+            pos,
+            mark,
+        })
     }
 
     /// Remove the mark, or all marks of the type, from the node at `pos`.
@@ -233,7 +237,8 @@ impl Transform {
         match mark {
             MarkMatch::Mark(mark) => {
                 if mark.is_in_set(node.marks()) {
-                    self.step(Step::RemoveNodeMark {
+                    self.step(Step::NodeMark {
+                        op: MarkOp::Remove,
                         pos,
                         mark: mark.clone(),
                     })?;
@@ -244,7 +249,11 @@ impl Transform {
                 let mut steps = Vec::new();
                 while let Some(found) = mark_type.is_in_set(&set).cloned() {
                     set = found.remove_from_set(&set);
-                    steps.push(Step::RemoveNodeMark { pos, mark: found });
+                    steps.push(Step::NodeMark {
+                        op: MarkOp::Remove,
+                        pos,
+                        mark: found,
+                    });
                 }
                 for step in steps.into_iter().rev() {
                     self.step(step)?;

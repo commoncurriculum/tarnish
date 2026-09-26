@@ -171,7 +171,7 @@ export class AddMarkStep extends Step {
   }
 
   /// @internal
-  handle() { return native.StepHandle.addMark(this.from, this.to, this.mark.h) }
+  handle() { return native.StepHandle.mark(true, this.from, this.to, this.mark.h) }
   static fromJSON(schema, json) { return Step.fromJSON(schema, { ...json, stepType: "addMark" }) }
 }
 
@@ -184,7 +184,7 @@ export class RemoveMarkStep extends Step {
   }
 
   /// @internal
-  handle() { return native.StepHandle.removeMark(this.from, this.to, this.mark.h) }
+  handle() { return native.StepHandle.mark(false, this.from, this.to, this.mark.h) }
   static fromJSON(schema, json) { return Step.fromJSON(schema, { ...json, stepType: "removeMark" }) }
 }
 
@@ -196,7 +196,7 @@ export class AddNodeMarkStep extends Step {
   }
 
   /// @internal
-  handle() { return native.StepHandle.addNodeMark(this.pos, this.mark.h) }
+  handle() { return native.StepHandle.nodeMark(true, this.pos, this.mark.h) }
   static fromJSON(schema, json) { return Step.fromJSON(schema, { ...json, stepType: "addNodeMark" }) }
 }
 
@@ -208,7 +208,7 @@ export class RemoveNodeMarkStep extends Step {
   }
 
   /// @internal
-  handle() { return native.StepHandle.removeNodeMark(this.pos, this.mark.h) }
+  handle() { return native.StepHandle.nodeMark(false, this.pos, this.mark.h) }
   static fromJSON(schema, json) { return Step.fromJSON(schema, { ...json, stepType: "removeNodeMark" }) }
 }
 

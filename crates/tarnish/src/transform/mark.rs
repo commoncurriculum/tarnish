@@ -1,6 +1,6 @@
 //! Adding and removing marks, and clearing what a new parent type doesn't allow.
 
-use super::step::Step;
+use super::step::{MarkOp, Step};
 use super::transform::{MarkMatch, Transform};
 use crate::error::{Error, Result};
 use crate::model::{ContentMatch, Fragment, Mark, NodeType, Slice, Whitespace};
@@ -48,10 +48,16 @@ pub(crate) fn add_mark(tr: &mut Transform, from: usize, to: usize, mark: &Mark) 
         0,
     )?;
     for (from, to, mark) in removed {
-        tr.step(Step::RemoveMark { from, to, mark })?;
+        tr.step(Step::Mark {
+            op: MarkOp::Remove,
+            from,
+            to,
+            mark,
+        })?;
     }
     for (from, to) in added {
-        tr.step(Step::AddMark {
+        tr.step(Step::Mark {
+            op: MarkOp::Add,
             from,
             to,
             mark: mark.clone(),
@@ -120,7 +126,8 @@ pub(crate) fn remove_mark(
         0,
     )?;
     for m in matched {
-        tr.step(Step::RemoveMark {
+        tr.step(Step::Mark {
+            op: MarkOp::Remove,
             from: m.from,
             to: m.to,
             mark: m.style,
@@ -176,7 +183,8 @@ pub(crate) fn clear_incompatible(
                 matched = allowed;
                 for mark in child.marks().iter() {
                     if !parent_type.allows_mark_type(mark.mark_type()) {
-                        tr.step(Step::RemoveMark {
+                        tr.step(Step::Mark {
+                            op: MarkOp::Remove,
                             from: cur,
                             to: end,
                             mark: mark.clone(),

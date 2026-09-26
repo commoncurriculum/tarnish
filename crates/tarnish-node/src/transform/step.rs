@@ -3,7 +3,7 @@
 use napi::bindgen_prelude::{Either, FnArgs, Null, ToNapiValue, Unknown};
 use napi::{Env, Result};
 use napi_derive::napi;
-use tarnish::transform::{Step, StepResult};
+use tarnish::transform::{MarkOp, Step, StepResult};
 
 use super::map::{self, MappingHandle, StepMapHandle};
 use crate::js::{self, OrThrow};
@@ -53,11 +53,11 @@ pub fn wrap<'env>(env: &'env Env, step: &Step) -> Result<Unknown<'env>> {
             );
             js::call_registered(env, make, FnArgs::from(args))
         }
-        Step::AddMark { from, to, mark } | Step::RemoveMark { from, to, mark } => {
+        Step::Mark { from, to, mark, .. } => {
             let args = (id, *from as f64, *to as f64, mark::wrap(env, mark)?);
             js::call_registered(env, make, FnArgs::from(args))
         }
-        Step::AddNodeMark { pos, mark } | Step::RemoveNodeMark { pos, mark } => {
+        Step::NodeMark { pos, mark, .. } => {
             let args = (id, *pos as f64, mark::wrap(env, mark)?);
             js::call_registered(env, make, FnArgs::from(args))
         }
@@ -89,6 +89,10 @@ pub fn wrap_result<'env>(env: &'env Env, result: &StepResult) -> Result<Unknown<
         StepResult::Failed(message) => (Null.into_unknown(env)?, Some(message.as_str())),
     };
     js::call_registered(env, "makeStepResult", FnArgs::from((doc, failed)))
+}
+
+fn mark_op(add: bool) -> MarkOp {
+    if add { MarkOp::Add } else { MarkOp::Remove }
 }
 
 #[napi]
@@ -141,10 +145,12 @@ impl StepHandle {
         })
     }
 
+    /// An `AddMarkStep`, or with `add` false a `RemoveMarkStep`.
     #[napi(factory)]
-    pub fn add_mark(env: &Env, from: f64, to: f64, mark: &MarkHandle) -> Result<Self> {
+    pub fn mark(env: &Env, add: bool, from: f64, to: f64, mark: &MarkHandle) -> Result<Self> {
         Ok(StepHandle {
-            step: Step::AddMark {
+            step: Step::Mark {
+                op: mark_op(add),
                 from: js::pos(env, from)?,
                 to: js::pos(env, to)?,
                 mark: mark.mark.clone(),
@@ -152,31 +158,12 @@ impl StepHandle {
         })
     }
 
+    /// An `AddNodeMarkStep`, or with `add` false a `RemoveNodeMarkStep`.
     #[napi(factory)]
-    pub fn remove_mark(env: &Env, from: f64, to: f64, mark: &MarkHandle) -> Result<Self> {
+    pub fn node_mark(env: &Env, add: bool, pos: f64, mark: &MarkHandle) -> Result<Self> {
         Ok(StepHandle {
-            step: Step::RemoveMark {
-                from: js::pos(env, from)?,
-                to: js::pos(env, to)?,
-                mark: mark.mark.clone(),
-            },
-        })
-    }
-
-    #[napi(factory)]
-    pub fn add_node_mark(env: &Env, pos: f64, mark: &MarkHandle) -> Result<Self> {
-        Ok(StepHandle {
-            step: Step::AddNodeMark {
-                pos: js::pos(env, pos)?,
-                mark: mark.mark.clone(),
-            },
-        })
-    }
-
-    #[napi(factory)]
-    pub fn remove_node_mark(env: &Env, pos: f64, mark: &MarkHandle) -> Result<Self> {
-        Ok(StepHandle {
-            step: Step::RemoveNodeMark {
+            step: Step::NodeMark {
+                op: mark_op(add),
                 pos: js::pos(env, pos)?,
                 mark: mark.mark.clone(),
             },

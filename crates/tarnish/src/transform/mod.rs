@@ -11,7 +11,7 @@ mod transform;
 
 pub use map::{MapResult, Mappable, Mapping, MappingSlice, Recover, StepMap};
 pub use replace::replace_step;
-pub use step::{Step, StepResult};
+pub use step::{MarkOp, Step, StepResult};
 pub use structure::{
     Wrapper, can_join, can_split, drop_point, find_wrapping, insert_point, join_point, lift_target,
 };
