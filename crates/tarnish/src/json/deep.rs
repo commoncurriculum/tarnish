@@ -1,6 +1,5 @@
-//! Cloning, comparing, dropping and measuring values, which nest as deeply as the JSON they
-//! came from: each recurses a few levels, then keeps its place in a vector instead of on the
-//! stack.
+//! Cloning, comparing, dropping and walking values, which nest as deeply as the JSON they came
+//! from: each recurses a few levels, then keeps its place in a vector instead of on the stack.
 
 use std::cell::{Cell, RefCell};
 
@@ -199,16 +198,46 @@ impl Drop for Value {
 
 /// Every value inside `value`, and `value` itself first, with how many arrays and objects hold
 /// it, in the order JSON writes them.
-pub fn nested(value: &Value) -> Nested<'_> {
-    Nested {
-        next: Some((value, 0)),
+pub fn nested(value: &Value) -> impl Iterator<Item = (&Value, usize)> {
+    let mut depth = 0;
+    events(value).filter_map(move |event| match event {
+        Event::Scalar(value) => Some((value, depth)),
+        Event::Open(value) => {
+            depth += 1;
+            Some((value, depth - 1))
+        }
+        Event::Close(_) => {
+            depth -= 1;
+            None
+        }
+        Event::Key(_) => None,
+    })
+}
+
+/// A part of a value, as JSON writes it.
+#[derive(Clone, Copy)]
+pub enum Event<'a> {
+    /// Null, a boolean, a number or a string.
+    Scalar(&'a Value),
+    /// An array or object, whose items, or keys each followed by its value, come next.
+    Open(&'a Value),
+    /// The key of the entry whose value comes next.
+    Key(&'a Key),
+    /// The end of the innermost array or object open.
+    Close(&'a Value),
+}
+
+/// The parts of `value` in the order JSON writes them, however deeply it nests.
+pub fn events(value: &Value) -> Events<'_> {
+    Events {
+        next: Some(value),
         open: Vec::new(),
     }
 }
 
-pub struct Nested<'a> {
-    next: Option<(&'a Value, usize)>,
-    open: Vec<(Children<'a>, usize)>,
+pub struct Events<'a> {
+    next: Option<&'a Value>,
+    open: Vec<(&'a Value, Children<'a>)>,
 }
 
 enum Children<'a> {
@@ -216,34 +245,40 @@ enum Children<'a> {
     Entries(std::slice::Iter<'a, (Key, Value)>),
 }
 
-impl<'a> Iterator for Nested<'a> {
-    type Item = (&'a Value, usize);
+impl<'a> Iterator for Events<'a> {
+    type Item = Event<'a>;
 
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if let Some((value, depth)) = self.next.take() {
-                match value {
-                    Value::Array(items) => {
-                        self.open.push((Children::Items(items.iter()), depth + 1))
+    fn next(&mut self) -> Option<Event<'a>> {
+        let value = match self.next.take() {
+            Some(value) => value,
+            None => {
+                let (open, children) = self.open.last_mut()?;
+                let item = match children {
+                    Children::Items(items) => items.next(),
+                    Children::Entries(entries) => {
+                        if let Some((key, item)) = entries.next() {
+                            self.next = Some(item);
+                            return Some(Event::Key(key));
+                        }
+                        None
                     }
-                    Value::Object(map) => self
-                        .open
-                        .push((Children::Entries(map.entries.iter()), depth + 1)),
-                    _ => {}
-                }
-                return Some((value, depth));
-            }
-            let (children, depth) = self.open.last_mut()?;
-            let child = match children {
-                Children::Items(items) => items.next(),
-                Children::Entries(entries) => entries.next().map(|(_, item)| item),
-            };
-            match child {
-                Some(child) => self.next = Some((child, *depth)),
-                None => {
-                    self.open.pop();
+                };
+                match item {
+                    Some(item) => item,
+                    None => {
+                        let closed = *open;
+                        self.open.pop();
+                        return Some(Event::Close(closed));
+                    }
                 }
             }
-        }
+        };
+        let children = match value {
+            Value::Array(items) => Children::Items(items.iter()),
+            Value::Object(map) => Children::Entries(map.entries.iter()),
+            _ => return Some(Event::Scalar(value)),
+        };
+        self.open.push((value, children));
+        Some(Event::Open(value))
     }
 }

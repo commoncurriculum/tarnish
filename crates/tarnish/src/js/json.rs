@@ -1,49 +1,41 @@
-//! `JSON`: what JavaScript parses and writes.
+//! `JSON.stringify`, as JavaScript writes values.
 
-use crate::json::{Number, Value};
+use crate::json::{Event, Number, Value, events};
 
-/// `JSON.parse(text)`, or `None` where it throws.
-pub fn parse(text: &str) -> Option<Value> {
-    crate::json::from_str(text).ok()
-}
-
-/// `JSON.stringify(value)`.
+/// `JSON.stringify(value)`, however deeply it nests.
 pub fn stringify(value: &Value) -> String {
     let mut out = String::new();
-    write_value(&mut out, value);
-    out
-}
-
-fn write_value(out: &mut String, value: &Value) {
-    match value {
-        Value::Null => out.push_str("null"),
-        Value::Bool(true) => out.push_str("true"),
-        Value::Bool(false) => out.push_str("false"),
-        Value::Number(number) => write_number(out, number),
-        Value::String(string) => write_string(out, string),
-        Value::Array(items) => {
-            out.push('[');
-            for (index, item) in items.iter().enumerate() {
-                if index > 0 {
-                    out.push(',');
-                }
-                write_value(out, item);
-            }
-            out.push(']');
+    let mut comma = false;
+    for event in events(value) {
+        if comma && !matches!(event, Event::Close(_)) {
+            out.push(',');
         }
-        Value::Object(entries) => {
-            out.push('{');
-            for (index, (key, item)) in entries.iter().enumerate() {
-                if index > 0 {
-                    out.push(',');
-                }
-                write_string(out, key);
-                out.push(':');
-                write_value(out, item);
+        comma = true;
+        match event {
+            Event::Scalar(Value::Null) => out.push_str("null"),
+            Event::Scalar(Value::Bool(boolean)) => {
+                out.push_str(if *boolean { "true" } else { "false" })
             }
-            out.push('}');
+            Event::Scalar(Value::Number(number)) => write_number(&mut out, number),
+            Event::Scalar(Value::String(string)) => write_string(&mut out, string),
+            Event::Open(Value::Array(_)) => {
+                out.push('[');
+                comma = false;
+            }
+            Event::Open(_) => {
+                out.push('{');
+                comma = false;
+            }
+            Event::Key(key) => {
+                write_string(&mut out, key);
+                out.push(':');
+                comma = false;
+            }
+            Event::Close(Value::Array(_)) => out.push(']'),
+            Event::Close(_) | Event::Scalar(_) => out.push('}'),
         }
     }
+    out
 }
 
 /// How many arrays and objects `value` nests, itself included.

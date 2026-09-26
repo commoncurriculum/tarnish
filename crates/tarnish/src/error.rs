@@ -1,6 +1,4 @@
-use std::any::Any;
 use std::fmt;
-use std::sync::Arc;
 
 /// An error, of the class ProseMirror throws it as.
 #[derive(Clone)]
@@ -15,13 +13,25 @@ pub enum Error {
     Transform(String),
     /// A plain `Error`.
     Other(String),
-    /// What a hook of the host, such as a spec's `leafText`, threw, passed along untouched.
-    Host(Arc<dyn Any + Send + Sync>),
+    /// What a hook of the host, such as a spec's `leafText`, threw. The host keeps what was
+    /// thrown, to pass it along untouched.
+    Host,
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 impl Error {
+    /// The name of the class ProseMirror throws the error as.
+    pub fn class(&self) -> &'static str {
+        match self {
+            Error::Range(_) => "RangeError",
+            Error::Syntax(_) => "SyntaxError",
+            Error::Replace(_) => "ReplaceError",
+            Error::Transform(_) => "TransformError",
+            Error::Other(_) | Error::Host => "Error",
+        }
+    }
+
     pub fn message(&self) -> &str {
         match self {
             Error::Range(message)
@@ -29,21 +39,14 @@ impl Error {
             | Error::Replace(message)
             | Error::Transform(message)
             | Error::Other(message) => message,
-            Error::Host(_) => "an error thrown by a host hook",
+            Error::Host => "an error thrown by a host hook",
         }
     }
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let class = match self {
-            Error::Range(_) => "RangeError",
-            Error::Syntax(_) => "SyntaxError",
-            Error::Replace(_) => "ReplaceError",
-            Error::Transform(_) => "TransformError",
-            Error::Other(_) | Error::Host(_) => "Error",
-        };
-        write!(f, "{class}: {}", self.message())
+        write!(f, "{}: {}", self.class(), self.message())
     }
 }
 

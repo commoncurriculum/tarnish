@@ -32,7 +32,7 @@ fn failure<'a>(env: Env<'a>, failed: Error) -> Term<'a> {
         Error::Syntax(_) => syntax_error(),
         Error::Replace(_) => replace_error(),
         Error::Transform(_) => transform_error(),
-        Error::Other(_) | Error::Host(_) => js_error(),
+        Error::Other(_) | Error::Host => js_error(),
     };
     (error(), (kind, failed.message())).encode(env)
 }

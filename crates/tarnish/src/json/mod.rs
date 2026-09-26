@@ -14,7 +14,7 @@ use std::fmt;
 
 pub use convert::IntoValue;
 pub use de::from_str;
-pub use deep::nested;
+pub use deep::{Event, events, nested};
 pub use index::JsonIndex;
 pub use macros::{json, object};
 pub use map::Map;

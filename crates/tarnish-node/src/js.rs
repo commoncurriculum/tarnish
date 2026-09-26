@@ -557,17 +557,12 @@ pub fn call_registered(
 /// Throw `error` as the class ProseMirror throws it as, and return the error that lets it
 /// through napi.
 pub fn throw(env: sys::napi_env, error: tarnish::Error) -> Error {
-    let (class, message) = match &error {
-        tarnish::Error::Host(_) => return pending(),
-        tarnish::Error::Range(message) => ("RangeError", message),
-        tarnish::Error::Syntax(message) => ("SyntaxError", message),
-        tarnish::Error::Replace(message) => ("ReplaceError", message),
-        tarnish::Error::Transform(message) => ("TransformError", message),
-        tarnish::Error::Other(message) => ("Error", message),
-    };
+    if let tarnish::Error::Host = error {
+        return pending();
+    }
     let thrown = (|| {
-        let class = registered(env, class)?;
-        let message = string(env, message)?;
+        let class = registered(env, error.class())?;
+        let message = string(env, error.message())?;
         let mut instance = ptr::null_mut();
         check(unsafe { sys::napi_new_instance(env, class, 1, [message].as_ptr(), &mut instance) })?;
         check(unsafe { sys::napi_throw(env, instance) })
@@ -584,7 +579,7 @@ pub fn host_error(env: sys::napi_env, error: Error) -> tarnish::Error {
     if error.status != Status::PendingException {
         unsafe { napi::JsError::from(error).throw_into(env) };
     }
-    tarnish::Error::Host(Arc::new(()))
+    tarnish::Error::Host
 }
 
 pub trait OrThrow<T> {
