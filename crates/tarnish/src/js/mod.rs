@@ -114,6 +114,9 @@ pub trait Json<'a>: Copy {
     /// An object's property; `None` for a value that isn't an object, or has no such property.
     fn get(self, key: &str) -> Option<Self>;
 
+    /// [`get`](Self::get) of each key, found in one pass over the object.
+    fn fields<const N: usize>(self, keys: [&str; N]) -> [Option<Self>; N];
+
     /// `String(value)`.
     fn string(self) -> Cow<'a, str>;
 
@@ -134,6 +137,16 @@ impl<'a> Json<'a> for &'a Value {
 
     fn get(self, key: &str) -> Option<Self> {
         self.as_object()?.get(key)
+    }
+
+    fn fields<const N: usize>(self, keys: [&str; N]) -> [Option<Self>; N] {
+        let mut fields = [None; N];
+        for (name, value) in self.as_object().into_iter().flatten() {
+            if let Some(index) = keys.iter().position(|&key| key == name.as_str()) {
+                fields[index] = Some(value);
+            }
+        }
+        fields
     }
 
     fn string(self) -> Cow<'a, str> {

@@ -128,13 +128,12 @@ impl Mark {
         if !json.truthy() {
             return Err(Error::Range("Invalid input for Mark.fromJSON".into()));
         }
-        let name = json.get("type").map_or("undefined".into(), Json::string);
+        let [name, attrs] = json.fields(["type", "attrs"]);
+        let name = name.map_or("undefined".into(), Json::string);
         let mark_type = schema
             .mark_type(&name)
             .ok_or_else(|| Error::Range(format!("There is no mark type {name} in this schema")))?;
-        let attrs = json
-            .get("attrs")
-            .map_or(Given::Falsy(Value::Null), Json::attrs);
+        let attrs = attrs.map_or(Given::Falsy(Value::Null), Json::attrs);
         let mark = mark_type.create_given(&attrs)?;
         mark_type.check_attrs(mark.attrs())?;
         Ok(mark)

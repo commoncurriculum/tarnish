@@ -613,7 +613,9 @@ impl Node {
         if !json.truthy() {
             return Err(Error::Range("Invalid input for Node.fromJSON".into()));
         }
-        let marks = match json.get("marks").filter(|marks| marks.truthy()) {
+        let [marks, name, text, content, attrs] =
+            json.fields(["marks", "type", "text", "content", "attrs"]);
+        let marks = match marks.filter(|marks| marks.truthy()) {
             None => Vec::new(),
             Some(marks) => marks
                 .items()
@@ -621,22 +623,19 @@ impl Node {
                 .map(|mark| Mark::from_json(schema, mark))
                 .collect::<Result<_>>()?,
         };
-        let name = json.get("type").map_or("undefined".into(), Json::string);
+        let name = name.map_or("undefined".into(), Json::string);
         if name == "text" {
-            let text = json
-                .get("text")
+            let text = text
                 .and_then(Json::text)
                 .ok_or_else(|| Error::Range("Invalid text node in JSON".into()))?;
             return schema.text(text, &marks);
         }
-        let content = match json.get("content") {
+        let content = match content {
             Some(content) => Fragment::from_json(schema, content)?,
             None => Fragment::empty(),
         };
         let node_type = schema.expect_node_type(&name)?;
-        let attrs = json
-            .get("attrs")
-            .map_or(Given::Falsy(Value::Null), Json::attrs);
+        let attrs = attrs.map_or(Given::Falsy(Value::Null), Json::attrs);
         let attrs = node_type.attrs_given(&attrs)?;
         let node = Node::new(node_type, attrs, content, Mark::set_from(&marks));
         node.node_type().check_attrs(node.attrs())?;

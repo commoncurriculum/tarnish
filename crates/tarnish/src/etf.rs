@@ -217,6 +217,18 @@ impl<'a> Json<'a> for Term<'a> {
         }
     }
 
+    fn fields<const N: usize>(self, keys: [&str; N]) -> [Option<Self>; N] {
+        let mut fields = [None; N];
+        if let Kind::Object { .. } = self.kind() {
+            for (name, value) in self.entries() {
+                if let Some(index) = keys.iter().position(|&key| key == name) {
+                    fields[index] = Some(value);
+                }
+            }
+        }
+        fields
+    }
+
     fn string(self) -> Cow<'a, str> {
         match self.kind() {
             Kind::String(text) => Cow::Borrowed(text),
