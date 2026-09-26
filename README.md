@@ -44,9 +44,10 @@ The proof doesn't depend on anyone reading the Rust. CI checks it:
 Where ProseMirror takes input it can't make sense of, tarnish refuses it or gives what it can
 hold:
 
-- A step's position must be a whole number from zero up, and its ranges must run forwards.
-  ProseMirror takes any number, and gives a backwards range a negative size. tarnish raises the
-  `RangeError` its `fromJSON` raises for a position that isn't a number.
+- A step's position must be a whole number from zero up, its ranges must run forwards, and a
+  slice can't be open deeper than its content. ProseMirror takes any number, and gives a
+  backwards range or such a slice a negative size. tarnish raises the `RangeError` its
+  `fromJSON` raises for a position that isn't a number.
 - A JSON value holds strings as Rust does, which can't hold a lone surrogate, so one read or
   written as a value is U+FFFD. A document written as JSON text keeps it.
 - An attribute whose spec's default is `undefined` is left out. ProseMirror keeps its name with

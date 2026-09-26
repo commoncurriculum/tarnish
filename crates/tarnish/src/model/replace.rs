@@ -43,7 +43,9 @@ impl Slice {
         self.open_end
     }
 
-    /// The size the slice adds to a document it goes into.
+    /// The size the slice adds to a document it goes into. A slice open deeper than its content
+    /// has a negative size in JavaScript, and none here; [`from_json`](Self::from_json) refuses
+    /// one.
     pub fn size(&self) -> usize {
         self.content
             .size()
@@ -107,16 +109,17 @@ impl Slice {
                 .map(|number| number as usize),
             _ => None,
         };
+        let invalid = || Error::Range("Invalid input for Slice.fromJSON".into());
         let (Some(open_start), Some(open_end)) =
             (depth(json.get("openStart")), depth(json.get("openEnd")))
         else {
-            return Err(Error::Range("Invalid input for Slice.fromJSON".into()));
+            return Err(invalid());
         };
-        Ok(Slice::new(
-            Fragment::from_json(schema, json.get("content").unwrap_or(&NULL))?,
-            open_start,
-            open_end,
-        ))
+        let content = Fragment::from_json(schema, json.get("content").unwrap_or(&NULL))?;
+        if open_start + open_end > content.size() {
+            return Err(invalid());
+        }
+        Ok(Slice::new(content, open_start, open_end))
     }
 
     /// A slice of `fragment` open as deep as it goes at both ends, but not into isolating

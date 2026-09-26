@@ -1,5 +1,6 @@
 //! Input ProseMirror takes and tarnish refuses: a step's position that isn't a whole number from
-//! zero up, or a range that runs backwards, which gives JavaScript negative sizes.
+//! zero up, and a range that runs backwards or a slice open deeper than its content, which give
+//! JavaScript negative sizes.
 
 use tarnish::json::{self, Value};
 use tarnish::transform::Step;
@@ -40,6 +41,10 @@ fn steps_out_of_order_or_off_whole_positions_are_invalid_input() {
         (
             r#"{"stepType":"addMark","from":5,"to":3,"mark":{"type":"em"}}"#,
             "AddMarkStep",
+        ),
+        (
+            r#"{"stepType":"replace","from":1,"to":1,"slice":{"content":[{"type":"paragraph"}],"openStart":2,"openEnd":1}}"#,
+            "Slice",
         ),
     ] {
         let step = json::from_str(step).expect("JSON");
