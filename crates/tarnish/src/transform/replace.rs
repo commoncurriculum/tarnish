@@ -328,10 +328,7 @@ impl Fitter {
         let mut matched = self.frontier[frontier_depth].matched.clone();
         if let Some(inject) = &inject {
             add.extend(inject.children().iter().cloned());
-            matched = js::non_null(
-                matched.match_fragment(inject, 0, inject.child_count()),
-                "matchType",
-            )?;
+            matched = js::non_null(matched.match_fragment(inject), "matchType")?;
         }
         // How many nodes are open at the end of the fragment: at 0, only its parent is;
         // below 0, none are.
@@ -586,10 +583,7 @@ fn close_node_start(node: &Node, open_start: isize, open_end: isize) -> Result<N
     let start = node.node_type().content_match();
     fragment = js::non_null(start.fill_before(&fragment, false, 0)?, "append")?.append(&fragment);
     if open_end <= 0 {
-        let matched = js::non_null(
-            start.match_fragment(&fragment, 0, fragment.child_count()),
-            "fillBefore",
-        )?;
+        let matched = js::non_null(start.match_fragment(&fragment), "fillBefore")?;
         let end = js::non_null(matched.fill_before(&Fragment::empty(), true, 0)?, "size")?;
         fragment = fragment.append(&end);
     }
@@ -883,11 +877,11 @@ fn close_fragment(
         let matched = js::defined(parent, "contentMatchAt")?.content_match_at(0)?;
         let start =
             js::non_null(matched.fill_before(&fragment, false, 0)?, "append")?.append(&fragment);
-        let end = js::non_null(
-            matched.match_fragment(&start, 0, start.child_count()),
-            "fillBefore",
-        )?
-        .fill_before(&Fragment::empty(), true, 0)?;
+        let end = js::non_null(matched.match_fragment(&start), "fillBefore")?.fill_before(
+            &Fragment::empty(),
+            true,
+            0,
+        )?;
         fragment = start.append(&js::non_null(end, "size")?);
     }
     Ok(fragment)

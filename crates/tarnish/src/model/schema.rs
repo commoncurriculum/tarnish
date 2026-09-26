@@ -555,9 +555,7 @@ impl NodeType {
             };
             content = before.append(&content);
         }
-        let matched = self
-            .content_match()
-            .match_fragment(&content, 0, content.child_count());
+        let matched = self.content_match().match_fragment(&content);
         let after = match matched {
             Some(matched) => matched.fill_before(&Fragment::empty(), true, 0)?,
             None => None,
@@ -574,9 +572,7 @@ impl NodeType {
     }
 
     pub fn valid_content(&self, content: &Fragment) -> bool {
-        let result = self
-            .content_match()
-            .match_fragment(content, 0, content.child_count());
+        let result = self.content_match().match_fragment(content);
         if !result.is_some_and(|result| result.valid_end()) {
             return false;
         }

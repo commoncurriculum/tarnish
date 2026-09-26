@@ -72,9 +72,10 @@ impl ContentMatchHandle {
         start: u32,
         end: u32,
     ) -> Result<Unknown<'env>> {
-        let matched =
-            self.content_match
-                .match_fragment(&fragment.fragment, start as usize, end as usize);
+        let matched = self
+            .content_match
+            .match_fragment_range(&fragment.fragment, start as usize, end as usize)
+            .or_throw(env)?;
         wrap_option(env, matched)
     }
 

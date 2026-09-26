@@ -483,11 +483,11 @@ impl Node {
         Ok(())
     }
 
-    /// The content match after the child at `index`.
+    /// The content match after the children before `index`.
     pub fn content_match_at(&self, index: usize) -> Result<ContentMatch> {
         self.node_type()
             .content_match()
-            .match_fragment(self.content(), 0, index)
+            .match_fragment_range(self.content(), 0, index)?
             .ok_or_else(|| {
                 Error::Other("Called contentMatchAt on a node with invalid content".into())
             })
@@ -505,15 +505,23 @@ impl Node {
     ) -> Result<bool> {
         let one = self
             .content_match_at(from)?
-            .match_fragment(replacement, start, end);
-        let two = one.and_then(|one| one.match_fragment(self.content(), to, self.child_count()));
+            .match_fragment_range(replacement, start, end)?;
+        let Some(one) = one else {
+            return Ok(false);
+        };
+        let two = one.match_fragment_range(self.content(), to, self.child_count())?;
         if !two.is_some_and(|two| two.valid_end()) {
             return Ok(false);
         }
-        let end = end.min(replacement.child_count());
-        Ok(replacement.children()[start.min(end)..end]
-            .iter()
-            .all(|child| self.node_type().allows_marks(child.marks())))
+        for index in start..end {
+            if !self
+                .node_type()
+                .allows_marks(replacement.child(index)?.marks())
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     /// Whether replacing the children from index `from` to `to` with a node of this type, with
@@ -530,9 +538,10 @@ impl Node {
         {
             return Ok(false);
         }
-        let start = self.content_match_at(from)?.match_type(node_type);
-        let end =
-            start.and_then(|start| start.match_fragment(self.content(), to, self.child_count()));
+        let Some(start) = self.content_match_at(from)?.match_type(node_type) else {
+            return Ok(false);
+        };
+        let end = start.match_fragment_range(self.content(), to, self.child_count())?;
         Ok(end.is_some_and(|end| end.valid_end()))
     }
 

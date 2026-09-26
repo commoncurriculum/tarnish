@@ -88,7 +88,7 @@ impl NodeContext {
             let start = node_type.content_match();
             match start.fill_before(&Fragment::from_node(node.clone()), false, 0)? {
                 Some(fill) => {
-                    self.matched = start.match_fragment(&fill, 0, fill.child_count());
+                    self.matched = start.match_fragment(&fill);
                 }
                 None => {
                     let wrap = start.find_wrapping(node.node_type());

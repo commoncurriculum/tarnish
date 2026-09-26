@@ -165,20 +165,31 @@ impl ContentMatch {
             .map(|&(_, next)| next)
     }
 
-    /// Match the children of `fragment` from index `start` to `end`.
-    pub fn match_fragment(
+    /// The match after all of `fragment`'s children, `None` where they don't fit.
+    pub fn match_fragment(&self, fragment: &Fragment) -> Option<ContentMatch> {
+        let mut state = self.state;
+        for child in fragment.children() {
+            state = self.step(state, child.node_type())?;
+        }
+        Some(self.at(state))
+    }
+
+    /// `matchFragment(fragment, start, end)`: the match after the children from index `start` to
+    /// `end`. Reading past the last child is ProseMirror's RangeError, where they fit up to it.
+    pub fn match_fragment_range(
         &self,
         fragment: &Fragment,
         start: usize,
         end: usize,
-    ) -> Option<ContentMatch> {
-        let children = fragment.children();
-        let end = end.min(children.len());
+    ) -> Result<Option<ContentMatch>> {
         let mut state = self.state;
-        for child in &children[start.min(end)..end] {
-            state = self.step(state, child.node_type())?;
+        for index in start..end {
+            match self.step(state, fragment.child(index)?.node_type()) {
+                Some(next) => state = next,
+                None => return Ok(None),
+            }
         }
-        Some(self.at(state))
+        Ok(Some(self.at(state)))
     }
 
     pub fn inline_content(&self) -> bool {
@@ -257,7 +268,7 @@ impl ContentMatch {
         types: &mut Vec<usize>,
         seen: &mut [bool],
     ) -> Result<Option<Fragment>> {
-        let finished = current.match_fragment(after, start_index, after.child_count());
+        let finished = current.match_fragment_range(after, start_index, after.child_count())?;
         if finished.is_some_and(|finished| !to_end || finished.valid_end()) {
             let nodes = types
                 .iter()

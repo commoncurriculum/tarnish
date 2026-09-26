@@ -496,11 +496,7 @@ impl Transform {
         let mut content = Fragment::empty();
         for wrapper in wrappers.iter().rev() {
             if content.size() > 0 {
-                let matched = wrapper.node_type.content_match().match_fragment(
-                    &content,
-                    0,
-                    content.child_count(),
-                );
+                let matched = wrapper.node_type.content_match().match_fragment(&content);
                 if !matched.is_some_and(|matched| matched.valid_end()) {
                     return Err(Error::Range(
                         "Wrapper type given to Transform.wrap does not form valid content of its parent wrapper".into(),
