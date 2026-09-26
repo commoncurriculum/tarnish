@@ -5,7 +5,6 @@ pub mod json;
 
 use std::borrow::Cow;
 
-use crate::error::{Error, Result};
 use crate::json::{Map, Number, Value};
 
 /// `Number.MAX_SAFE_INTEGER`.
@@ -103,24 +102,24 @@ pub(crate) enum Nullish {
 
 /// The `TypeError` V8 throws reading `property` of `value`, as ProseMirror's code does where it
 /// takes a value to be there, often asserting so with `!`, and it isn't.
-pub(crate) fn type_error(value: Nullish, property: &str) -> Error {
+pub(crate) fn type_error(value: Nullish, property: &str) -> crate::Error {
     let value = match value {
         Nullish::Null => "null",
         Nullish::Undefined => "undefined",
     };
-    Error::Type(format!(
+    crate::Error::Type(format!(
         "Cannot read properties of {value} (reading '{property}')"
     ))
 }
 
 /// A value ProseMirror reads `property` of, which JavaScript has as `null` where it's missing.
-pub(crate) fn non_null<T>(value: Option<T>, property: &str) -> Result<T> {
+pub(crate) fn non_null<T>(value: Option<T>, property: &str) -> crate::Result<T> {
     value.ok_or_else(|| type_error(Nullish::Null, property))
 }
 
 /// A value ProseMirror reads `property` of, which JavaScript has as `undefined` where it's
 /// missing.
-pub(crate) fn defined<T>(value: Option<T>, property: &str) -> Result<T> {
+pub(crate) fn defined<T>(value: Option<T>, property: &str) -> crate::Result<T> {
     value.ok_or_else(|| type_error(Nullish::Undefined, property))
 }
 
