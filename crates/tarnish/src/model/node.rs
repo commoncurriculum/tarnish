@@ -585,30 +585,6 @@ impl Node {
             .try_for_each(|child| stack::grow(|| child.check()))
     }
 
-    pub fn to_json(&self) -> Value {
-        let mut json = Map::with_capacity(5);
-        json.push("type".into(), Value::String(self.node_type().name().into()));
-        if !self.attrs().is_empty() {
-            json.push("attrs".into(), Value::Object((**self.attrs()).clone()));
-        }
-        if self.content().size() > 0 {
-            json.push("content".into(), self.content().to_json());
-        }
-        if !self.marks().is_empty() {
-            json.push(
-                "marks".into(),
-                Value::Array(self.marks().iter().map(Mark::to_json).collect()),
-            );
-        }
-        if let Some(text) = &self.0.text {
-            json.push(
-                "text".into(),
-                Value::String(text.to_string_lossy().into_owned()),
-            );
-        }
-        Value::Object(json)
-    }
-
     pub fn from_json<'a>(schema: &Schema, json: impl Json<'a>) -> Result<Node> {
         if !json.truthy() {
             return Err(Error::Range("Invalid input for Node.fromJSON".into()));

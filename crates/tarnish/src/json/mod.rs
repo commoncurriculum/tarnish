@@ -10,8 +10,6 @@ mod index;
 mod macros;
 mod map;
 
-use std::fmt;
-
 pub use convert::IntoValue;
 pub use de::from_str;
 pub use deep::{Event, events};
@@ -27,7 +25,8 @@ pub static NULL: Value = Value::Null;
 /// An object without properties, to lend where one is needed.
 pub static EMPTY: Map = Map::new();
 
-#[derive(Debug, Default)]
+/// A JSON value. It displays, and debugs, as `JSON.stringify` writes it.
+#[derive(Default)]
 pub enum Value {
     #[default]
     Null,
@@ -168,56 +167,6 @@ impl Value {
         match &mut self {
             Value::Object(map) => Some(std::mem::take(map)),
             _ => None,
-        }
-    }
-}
-
-impl fmt::Display for Value {
-    /// Compact JSON, as serde_json writes it.
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fn write_string(out: &mut fmt::Formatter<'_>, text: &str) -> fmt::Result {
-            out.write_str("\"")?;
-            for character in text.chars() {
-                match character {
-                    '"' => out.write_str("\\\"")?,
-                    '\\' => out.write_str("\\\\")?,
-                    '\n' => out.write_str("\\n")?,
-                    '\r' => out.write_str("\\r")?,
-                    '\t' => out.write_str("\\t")?,
-                    '\u{08}' => out.write_str("\\b")?,
-                    '\u{0C}' => out.write_str("\\f")?,
-                    control if (control as u32) < 0x20 => write!(out, "\\u{:04x}", control as u32)?,
-                    other => write!(out, "{other}")?,
-                }
-            }
-            out.write_str("\"")
-        }
-        match self {
-            Value::Null => formatter.write_str("null"),
-            Value::Bool(value) => write!(formatter, "{value}"),
-            Value::Number(number) => write!(formatter, "{number}"),
-            Value::String(text) => write_string(formatter, text),
-            Value::Array(items) => {
-                formatter.write_str("[")?;
-                for (index, item) in items.iter().enumerate() {
-                    if index > 0 {
-                        formatter.write_str(",")?;
-                    }
-                    write!(formatter, "{item}")?;
-                }
-                formatter.write_str("]")
-            }
-            Value::Object(map) => {
-                formatter.write_str("{")?;
-                for (index, (key, item)) in map.iter().enumerate() {
-                    if index > 0 {
-                        formatter.write_str(",")?;
-                    }
-                    write_string(formatter, key)?;
-                    write!(formatter, ":{item}")?;
-                }
-                formatter.write_str("}")
-            }
         }
     }
 }

@@ -4,6 +4,7 @@ mod attrs;
 mod compare_deep;
 mod content;
 mod diff;
+mod fields;
 mod fragment;
 mod mark;
 mod node;
@@ -14,6 +15,7 @@ mod schema_json;
 
 pub use attrs::{AttributeSpec, Attrs, Validate, ValidateHook};
 pub use content::ContentMatch;
+pub(crate) use fields::{Field, Fields};
 pub use fragment::{Fragment, LeafTextHook, NodeVisitor};
 pub use mark::{Mark, Marks};
 pub use node::{ChildAt, Node};

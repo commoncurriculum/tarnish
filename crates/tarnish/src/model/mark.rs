@@ -8,7 +8,7 @@ use super::compare_deep::objects_equal;
 use super::schema::{MarkType, Schema};
 use crate::error::{Error, Result};
 use crate::js::{Given, Json};
-use crate::json::{Map, Value};
+use crate::json::Value;
 
 /// A set of marks, sorted by their types' rank.
 pub type Marks = Arc<[Mark]>;
@@ -113,15 +113,6 @@ impl Mark {
         let mut copy = marks.to_vec();
         copy.sort_by_key(|mark| mark.mark_type().rank());
         copy.into()
-    }
-
-    pub fn to_json(&self) -> Value {
-        let mut json = Map::with_capacity(2);
-        json.push("type".into(), Value::String(self.mark_type().name().into()));
-        if !self.attrs().is_empty() {
-            json.push("attrs".into(), Value::Object((**self.attrs()).clone()));
-        }
-        Value::Object(json)
     }
 
     pub fn from_json<'a>(schema: &Schema, json: impl Json<'a>) -> Result<Mark> {

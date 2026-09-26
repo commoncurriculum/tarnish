@@ -46,6 +46,7 @@ fn main() {
         drop(etf::Document::new(&term).unwrap())
     });
     time("toJSON", &mut || drop(node.to_json()));
+    time("JSON text of a node", &mut || drop(node.to_json_string()));
     time("term of a node", &mut || drop(etf::write_node(&node)));
     time("check", &mut || node.check().unwrap());
     time("apply 10 steps", &mut || {

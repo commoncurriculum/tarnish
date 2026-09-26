@@ -68,12 +68,18 @@ Give a schema's `"nodes"` and `"marks"` as lists of `{name, spec}` pairs, or as
 Documents nest as deeply as memory allows: a recursion that runs low on a dirty scheduler's
 small stack carries on in a new stack segment, so no document takes the VM down.
 
+A step that splits a surrogate pair, as a browser's can, leaves a lone surrogate in the text.
+A binary holds UTF-8, which can't, so `to_json` gives U+FFFD for it. That keeps every position
+where it was: both are one UTF-16 unit.
+
 ## C, and other languages through it
 
 `cargo build --release -p tarnish-c` builds `libtarnish_c` (`.so`/`.dylib` and `.a`).
 [`include/tarnish.h`](crates/tarnish-c/include/tarnish.h) declares the same operations as the
 Elixir package, with schemas and nodes as handles, and JSON strings in and out, read as
-`JSON.parse` reads them. Errors are `"Class: message"` strings.
+`JSON.parse` reads them. Errors are `"Class: message"` strings. A document's JSON is
+`JSON.stringify`'s text, a lone surrogate included. Other JSON is read and written as Rust
+strings, which can't hold one, so a lone surrogate in a step's slice becomes U+FFFD.
 
 ## Running the tests
 

@@ -170,7 +170,7 @@ impl Fragment {
         mut leaf_text: Option<&mut LeafTextHook>,
     ) -> Result<Text> {
         let separator = block_separator.filter(|separator| !separator.is_empty());
-        let mut text: Vec<u16> = Vec::new();
+        let mut parts: Vec<Text> = Vec::new();
         let mut first = true;
         self.nodes_between(
             from,
@@ -194,16 +194,16 @@ impl Fragment {
                     if first {
                         first = false;
                     } else {
-                        text.extend_from_slice(&separator.units());
+                        parts.push(separator.clone());
                     }
                 }
-                text.extend_from_slice(&node_text.units());
+                parts.push(node_text);
                 Ok(true)
             },
             0,
             None,
         )?;
-        Ok(text.into())
+        Ok(parts.iter().collect())
     }
 
     /// This fragment followed by `other`, joining the text at the seam when it has the same

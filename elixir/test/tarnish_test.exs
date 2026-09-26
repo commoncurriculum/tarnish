@@ -67,6 +67,23 @@ defmodule TarnishTest do
     end
   end
 
+  for {fixture, index} <- Enum.with_index(model["transforms"]) do
+    @fixture fixture
+    test "a step splitting a surrogate pair leaves U+FFFD for each half, #{index}",
+         %{model_schemas: schemas} do
+      %{"schema" => schema, "start" => start, "steps" => steps, "result" => result} = @fixture
+      {:ok, doc} = Tarnish.node_from_json(Enum.at(schemas, schema), start)
+      {:ok, changed} = Tarnish.apply_steps(doc, steps)
+      # JSON.stringify escapes a surrogate only when it's alone.
+      replaced = Regex.replace(~r/\\ud[89a-f][0-9a-f]{2}/i, result, "\\ufffd")
+      assert Tarnish.to_json(changed) == Jason.decode!(replaced)
+
+      {:ok, inverted} = Tarnish.invert_steps(doc, steps)
+      {:ok, undone} = Tarnish.apply_steps(changed, inverted)
+      assert Tarnish.to_json(undone) == start
+    end
+  end
+
   defp doc(schema, json) do
     {:ok, doc} = Tarnish.node_from_json(schema, json)
     doc

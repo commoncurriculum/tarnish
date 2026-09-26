@@ -1,5 +1,5 @@
-//! What the real prosemirror-model does with inputs its own tests don't give it, recorded by
-//! `harness/record-model.mjs`: tarnish must do the same, from JSON and from Erlang's external
+//! What the real ProseMirror packages do with inputs their own tests don't give them, recorded
+//! by `harness/record-model.mjs`: tarnish must do the same, from JSON and from Erlang's external
 //! term format.
 
 use tarnish::json::{self, Value};
@@ -64,5 +64,21 @@ fn filled_nodes_are_prosemirrors() {
             case,
             filled.map(|node| node.map_or(Value::Null, |node| node.to_json())),
         );
+    }
+}
+
+#[test]
+fn steps_that_split_a_surrogate_pair_leave_prosemirrors_text() {
+    let (schemas, fixtures) = fixtures();
+    for case in fixtures["transforms"].as_array().expect("cases") {
+        let doc = Node::from_json(schema(&schemas, case), &case["start"]).expect("a document");
+        let changed = api::apply_steps(&doc, &case["steps"]).expect("the steps");
+        assert_eq!(
+            Some(changed.to_json_string().as_str()),
+            case["result"].as_str()
+        );
+        let inverted = api::invert_steps(&doc, &case["steps"]).expect("their inverse");
+        let undone = api::apply_steps(&changed, &inverted).expect("the inverse");
+        assert!(undone == doc);
     }
 }

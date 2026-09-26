@@ -6,7 +6,7 @@ use std::borrow::Cow;
 
 use crate::js::{self, Given, Json};
 use crate::json::{self, Key, Map, Number, Value};
-use crate::model::Node;
+use crate::model::{Field, Fields, Node};
 use crate::stack;
 
 const VERSION: u8 = 131;
@@ -46,7 +46,7 @@ pub fn write(value: &Value) -> Vec<u8> {
 /// What [`write`] writes for the node's JSON, without making the JSON.
 pub fn write_node(node: &Node) -> Vec<u8> {
     let mut out = vec![VERSION];
-    write_node_value(&mut out, node);
+    write_fields(&mut out, node);
     out
 }
 
@@ -593,42 +593,21 @@ fn write_value(out: &mut Vec<u8>, value: &Value) {
     }
 }
 
-fn write_node_value(out: &mut Vec<u8>, node: &Node) {
-    let content = node.children();
-    let fields = 1
-        + usize::from(!node.attrs().is_empty())
-        + usize::from(!content.is_empty())
-        + usize::from(!node.marks().is_empty())
-        + usize::from(node.text().is_some());
-    map_header(out, fields);
-    binary(out, "type");
-    binary(out, node.node_type().name());
-    if !node.attrs().is_empty() {
-        binary(out, "attrs");
-        map(out, node.attrs());
-    }
-    if !content.is_empty() {
-        binary(out, "content");
-        list(out, content.len(), content, |out, child| {
-            stack::grow(|| write_node_value(out, child))
-        });
-    }
-    if !node.marks().is_empty() {
-        binary(out, "marks");
-        list(out, node.marks().len(), node.marks().iter(), |out, mark| {
-            map_header(out, 1 + usize::from(!mark.attrs().is_empty()));
-            binary(out, "type");
-            binary(out, mark.mark_type().name());
-            if !mark.attrs().is_empty() {
-                binary(out, "attrs");
-                map(out, mark.attrs());
-            }
-        });
-    }
-    if let Some(text) = node.text() {
-        binary(out, "text");
-        binary(out, &text.to_string_lossy());
-    }
+fn write_fields(out: &mut Vec<u8>, fields: &impl Fields) {
+    map_header(out, fields.field_count());
+    fields.fields(|field| {
+        binary(out, field.key());
+        match field {
+            Field::Type(name) => binary(out, name),
+            Field::Attrs(attrs) => map(out, attrs),
+            Field::Content(children) => list(out, children.len(), children, |out, child| {
+                stack::grow(|| write_fields(out, child))
+            }),
+            Field::Marks(marks) => list(out, marks.len(), marks, write_fields),
+            // A term's binary holds UTF-8, which has no lone surrogate.
+            Field::Text(text) => binary(out, &text.to_string_lossy()),
+        }
+    });
 }
 
 fn map_header(out: &mut Vec<u8>, arity: usize) {

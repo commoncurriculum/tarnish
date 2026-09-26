@@ -24,7 +24,8 @@ pub struct TarnishSchema(Schema);
 pub struct TarnishNode(Node);
 
 /// Where a function that can fail puts its error: "Class: message", the class naming the error
-/// ProseMirror throws (RangeError, SyntaxError, ReplaceError, TransformError or Error).
+/// ProseMirror throws (RangeError, SyntaxError, ReplaceError, TransformError, TypeError or
+/// Error).
 type ErrorOut<'a> = Option<Out<'a, Option<char_p::Box>>>;
 
 /// `JSON.parse` of the string.
@@ -98,7 +99,7 @@ fn tarnish_node_from_json(
 /// The node's JSON, which is what `JSON.stringify` writes for it, byte for byte.
 #[ffi_export]
 fn tarnish_node_to_json(node: &TarnishNode) -> char_p::Box {
-    string(stringify(&node.0.to_json()))
+    string(node.0.to_json_string())
 }
 
 /// Frees a node.

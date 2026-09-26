@@ -127,25 +127,7 @@ impl Text {
     }
 
     pub fn concat(&self, other: &Text) -> Text {
-        match (&self.0, &other.0) {
-            (
-                Repr::Utf8 {
-                    text: a,
-                    length: la,
-                },
-                Repr::Utf8 {
-                    text: b,
-                    length: lb,
-                },
-            ) => {
-                let mut text = String::with_capacity(a.len() + b.len());
-                text.push_str(a);
-                text.push_str(b);
-                Text::utf8(&text, la + lb)
-            }
-            // Two lone surrogates may pair up.
-            _ => Text::from_units(&[&*self.units(), &*other.units()].concat()),
-        }
+        [self, other].into_iter().collect()
     }
 
     pub fn ptr_eq(&self, other: &Text) -> bool {
@@ -158,31 +140,16 @@ impl Text {
 
     /// `JSON.stringify(text)`.
     pub fn to_json_string(&self) -> String {
-        let mut out = String::with_capacity(self.len() + 2);
-        match &self.0 {
-            Repr::Utf8 { text, .. } => crate::js::json::write_string(&mut out, text),
-            Repr::Utf16(units) => {
-                out.push('"');
-                for decoded in char::decode_utf16(units.iter().copied()) {
-                    match decoded {
-                        Ok('"') => out.push_str("\\\""),
-                        Ok('\\') => out.push_str("\\\\"),
-                        Ok('\u{8}') => out.push_str("\\b"),
-                        Ok('\u{c}') => out.push_str("\\f"),
-                        Ok('\n') => out.push_str("\\n"),
-                        Ok('\r') => out.push_str("\\r"),
-                        Ok('\t') => out.push_str("\\t"),
-                        Ok(control) if (control as u32) < 0x20 => {
-                            out.push_str(&format!("\\u{:04x}", control as u32));
-                        }
-                        Ok(character) => out.push(character),
-                        Err(lone) => out.push_str(&format!("\\u{:04x}", lone.unpaired_surrogate())),
-                    }
-                }
-                out.push('"');
-            }
-        }
+        let mut out = String::new();
+        self.write_json(&mut out);
         out
+    }
+
+    pub(crate) fn write_json(&self, out: &mut String) {
+        match &self.0 {
+            Repr::Utf8 { text, .. } => crate::js::json::write_string(out, text),
+            Repr::Utf16(units) => crate::js::json::write_units(out, units),
+        }
     }
 }
 
@@ -381,6 +348,31 @@ impl Default for Text {
     fn default() -> Self {
         static EMPTY: LazyLock<Text> = LazyLock::new(|| Text::utf8("", 0));
         EMPTY.clone()
+    }
+}
+
+/// The texts one after another, where lone surrogates at a seam may pair up.
+impl<'a> FromIterator<&'a Text> for Text {
+    fn from_iter<I: IntoIterator<Item = &'a Text>>(texts: I) -> Text {
+        let mut texts = texts.into_iter();
+        let (mut joined, mut length) = (String::new(), 0);
+        while let Some(text) = texts.next() {
+            match &text.0 {
+                Repr::Utf8 { text, length: more } => {
+                    joined.push_str(text);
+                    length += more;
+                }
+                Repr::Utf16(more) => {
+                    let mut units: Vec<u16> = joined.encode_utf16().collect();
+                    units.extend_from_slice(more);
+                    for rest in texts {
+                        units.extend_from_slice(&rest.units());
+                    }
+                    return Text::from_units(&units);
+                }
+            }
+        }
+        Text::utf8(&joined, length)
     }
 }
 

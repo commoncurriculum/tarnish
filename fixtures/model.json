@@ -79,6 +79,17 @@
         },
         "text": {}
       }
+    },
+    {
+      "nodes": {
+        "doc": {
+          "content": "paragraph+"
+        },
+        "paragraph": {
+          "content": "text*"
+        },
+        "text": {}
+      }
     }
   ],
   "fromJSON": [
@@ -1104,6 +1115,41 @@
           }
         ]
       }
+    }
+  ],
+  "transforms": [
+    {
+      "schema": 4,
+      "start": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "a😀b"
+              }
+            ]
+          }
+        ]
+      },
+      "steps": [
+        {
+          "stepType": "replace",
+          "from": 3,
+          "to": 3,
+          "slice": {
+            "content": [
+              {
+                "type": "text",
+                "text": "x"
+              }
+            ]
+          }
+        }
+      ],
+      "result": "{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"a\\ud83dx\\ude00b\"}]}]}"
     }
   ]
 }

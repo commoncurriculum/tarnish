@@ -1,8 +1,11 @@
-// Records what the real prosemirror-model does with inputs its own tests don't give it, to
-// fixtures/model.json, for the Rust and Elixir tests to expect: `Node.fromJSON` of attributes
-// that aren't objects, and `createAndFill` of types that need themselves or that nothing fills.
+// Records what the real ProseMirror packages do with inputs their own tests don't give them, to
+// fixtures/model.json, for the Rust, Elixir and C tests to expect: `Node.fromJSON` of attributes
+// that aren't objects, `createAndFill` of types that need themselves or that nothing fills, and
+// a step that splits a surrogate pair. What that step gives is recorded as its `JSON.stringify`
+// text, since some JSON readers, Jason among them, refuse a lone surrogate.
 import { writeFileSync } from "node:fs"
 import { Node, Schema } from "prosemirror-model"
+import { Transform } from "prosemirror-transform"
 
 const schemas = [
   {
@@ -25,6 +28,7 @@ const schemas = [
     },
   },
   { nodes: { doc: { content: "paragraph{3} quote?" }, paragraph: {}, quote: { content: "paragraph+" }, text: {} } },
+  { nodes: { doc: { content: "paragraph+" }, paragraph: { content: "text*" }, text: {} } },
 ]
 const built = schemas.map(spec => new Schema(spec))
 
@@ -54,7 +58,14 @@ const createAndFill = [1, 2, 3].map(schema => ({
   ...outcome(() => built[schema].topNodeType.createAndFill()?.toJSON() ?? null),
 }))
 
+const start = { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "a😀b" }] }] }
+const changes = [tr => tr.insert(3, built[4].text("x"))]
+const transforms = changes.map(change => {
+  const tr = change(new Transform(Node.fromJSON(built[4], start)))
+  return { schema: 4, start, steps: tr.steps.map(step => step.toJSON()), result: JSON.stringify(tr.doc.toJSON()) }
+})
+
 writeFileSync(
   new URL("../fixtures/model.json", import.meta.url),
-  JSON.stringify({ schemas, fromJSON, createAndFill }, null, 2) + "\n",
+  JSON.stringify({ schemas, fromJSON, createAndFill, transforms }, null, 2) + "\n",
 )
