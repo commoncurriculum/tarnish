@@ -114,9 +114,9 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
             if let Some(dom) = source.dom {
                 self.find_in_text(dom, &source.value)?;
             }
-        } else if let Some(dom) = source.dom {
-            self.find_inside(dom)?;
         }
+        // JavaScript looks for positions inside dropped text, which holds none, as only an
+        // element can.
         Ok(())
     }
 
@@ -405,21 +405,26 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
             Some(start) if start > 0 => dom.child(parent, start)?,
             _ => dom.first_child(parent)?,
         };
-        let end = match end {
+        let end_child = match end {
             Some(end) => dom.child(parent, end)?,
             None => None,
         };
         loop {
-            let at_end = match (&child, &end) {
-                (Some(child), Some(end)) => dom.same(child, end)?,
-                (None, None) => true,
-                (None, Some(_)) => true,
-                (Some(_), None) => false,
+            let Some(current) = child else {
+                // JavaScript reads on past the last child, and throws.
+                if let (Some(end), Some(_)) = (end, &end_child) {
+                    return Err(Error::Range(format!(
+                        "Child {end} of the parsed DOM node doesn't come after child {}",
+                        start.unwrap_or(0)
+                    )));
+                }
+                break;
             };
-            if at_end {
+            if let Some(end_child) = &end_child
+                && dom.same(&current, end_child)?
+            {
                 break;
             }
-            let current = child.expect("a child before the end");
             self.find_at_point(parent, index)?;
             stack::grow(|| self.add_dom(&current, marks))?;
             child = dom.next_sibling(&current)?;

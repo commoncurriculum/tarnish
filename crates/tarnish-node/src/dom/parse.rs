@@ -239,7 +239,7 @@ fn with_options<T>(
             node: JsNode::new(js::get(object, "node")?)?,
             offset: u32::from_unknown(js::get(object, "offset")?)? as usize,
             pos: match pos.get_type()? {
-                ValueType::Number => Some(u32::from_unknown(pos)? as usize),
+                ValueType::Number => Some(f64::from_unknown(pos)? as isize),
                 _ => None,
             },
         });
@@ -267,7 +267,7 @@ fn with_options<T>(
         .transpose()?;
     let parse_options = ParseOptions {
         preserve_whitespace: preserve_whitespace(js::get(&options, "preserveWhitespace")?)?,
-        find_positions: find_array.is_some().then_some(&mut find),
+        find_positions: find_array.is_some().then_some(&mut find[..]),
         from: index("from")?,
         to: index("to")?,
         top_node: top_node.map(|node| node.node.clone()),

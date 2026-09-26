@@ -26,13 +26,16 @@ pub use rule::{
 pub struct FindPosition<N> {
     pub node: N,
     pub offset: usize,
-    pub pos: Option<usize>,
+    /// The position found. In a text node, it counts back from where the text parsed from it
+    /// ends, so collapsing the whitespace before the offset moves it back, as far as below zero,
+    /// as in JavaScript.
+    pub pos: Option<isize>,
 }
 
 /// Options for [`DomParser::parse`] and [`DomParser::parse_slice`].
 pub struct ParseOptions<'a, N> {
     pub preserve_whitespace: Option<PreserveWhitespace>,
-    pub find_positions: Option<&'a mut Vec<FindPosition<N>>>,
+    pub find_positions: Option<&'a mut [FindPosition<N>]>,
     /// The index of the child to start parsing at.
     pub from: Option<usize>,
     /// The index of the child to stop parsing at.
