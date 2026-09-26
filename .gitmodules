@@ -1,0 +1,6 @@
+[submodule "upstream/prosemirror-model"]
+	path = upstream/prosemirror-model
+	url = https://code.haverbeke.berlin/prosemirror/prosemirror-model.git
+[submodule "upstream/prosemirror-transform"]
+	path = upstream/prosemirror-transform
+	url = https://code.haverbeke.berlin/prosemirror/prosemirror-transform.git

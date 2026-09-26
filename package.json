@@ -1,0 +1,22 @@
+{
+  "name": "tarnish-harness",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:bridge": "node harness/build.mjs",
+    "test:js": "TARNISH_TARGET=js node harness/run.mjs",
+    "test:rust": "node harness/build.mjs && TARNISH_TARGET=rust node harness/run.mjs"
+  },
+  "devDependencies": {
+    "ist": "1.1.7",
+    "jsdom": "20.0.3",
+    "mocha": "10.8.2",
+    "orderedmap": "2.1.1",
+    "prosemirror-model": "1.25.11",
+    "prosemirror-schema-basic": "1.2.4",
+    "prosemirror-schema-list": "1.5.1",
+    "prosemirror-test-builder": "1.1.1",
+    "prosemirror-transform": "1.12.0",
+    "tsx": "4.19.2"
+  }
+}
