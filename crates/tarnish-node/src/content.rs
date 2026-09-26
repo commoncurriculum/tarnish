@@ -1,49 +1,41 @@
 //! Content matches.
 
-use std::ptr;
-
-use napi::{Env, Result, sys};
+use napi::bindgen_prelude::{FnArgs, Null, ToNapiValue, Unknown};
+use napi::{Env, Result};
 use napi_derive::napi;
 use tarnish::ContentMatch;
 
-use crate::fragment::{self, FragmentArg};
-use crate::js::{self, Js, OrThrow};
-use crate::schema::{self, NodeTypeArg, SchemaHandle};
-
-pub struct ContentMatchArg(pub ContentMatch);
-
-crate::handle_arg!(ContentMatchArg, ContentMatchHandle, |handle| handle
-    .content_match
-    .clone());
+use crate::fragment::{self, FragmentHandle};
+use crate::js::{self, OrThrow};
+use crate::schema::{self, NodeTypeHandle, SchemaHandle};
 
 /// The wrapper of the match: one per state of an expression's automaton.
-pub fn wrap(env: sys::napi_env, content_match: &ContentMatch) -> Result<sys::napi_value> {
+pub fn wrap<'env>(env: &'env Env, content_match: &ContentMatch) -> Result<Unknown<'env>> {
     let (automaton, state) = content_match.id();
-    let key = js::string(env, &format!("{automaton}:{state}"))?;
     let handle = ContentMatchHandle {
         content_match: content_match.clone(),
     };
-    let handle = unsafe { napi::bindgen_prelude::ToNapiValue::to_napi_value(env, handle) }?;
-    js::call_registered(env, "wrapContentMatch", &[handle, key])
+    let key = format!("{automaton}:{state}");
+    js::call_registered(env, "wrapContentMatch", FnArgs::from((handle, key)))
 }
 
-fn wrap_option(env: sys::napi_env, content_match: Option<ContentMatch>) -> Result<Js> {
+fn wrap_option<'env>(env: &'env Env, content_match: Option<ContentMatch>) -> Result<Unknown<'env>> {
     match content_match {
-        Some(content_match) => wrap(env, &content_match).map(Js),
-        None => js::null(env).map(Js),
+        Some(content_match) => wrap(env, &content_match),
+        None => Null.into_unknown(env),
     }
 }
 
 #[napi(object)]
-pub struct Edge {
+pub struct Edge<'env> {
     #[napi(js_name = "type")]
-    pub node_type: Js,
-    pub next: Js,
+    pub node_type: Unknown<'env>,
+    pub next: Unknown<'env>,
 }
 
 #[napi]
 pub struct ContentMatchHandle {
-    content_match: ContentMatch,
+    pub(crate) content_match: ContentMatch,
 }
 
 #[napi]
@@ -64,76 +56,81 @@ impl ContentMatchHandle {
     }
 
     #[napi]
-    pub fn match_type(&self, env: Env, node_type: NodeTypeArg) -> Result<Js> {
-        wrap_option(env.raw(), self.content_match.match_type(&node_type.0))
+    pub fn match_type<'env>(
+        &self,
+        env: &'env Env,
+        node_type: &NodeTypeHandle,
+    ) -> Result<Unknown<'env>> {
+        wrap_option(env, self.content_match.match_type(&node_type.node_type))
     }
 
     #[napi]
-    pub fn match_fragment(
+    pub fn match_fragment<'env>(
         &self,
-        env: Env,
-        fragment: FragmentArg,
+        env: &'env Env,
+        fragment: &FragmentHandle,
         start: u32,
         end: u32,
-    ) -> Result<Js> {
-        let matched = self
-            .content_match
-            .match_fragment(&fragment.0, start as usize, end as usize);
-        wrap_option(env.raw(), matched)
+    ) -> Result<Unknown<'env>> {
+        let matched =
+            self.content_match
+                .match_fragment(&fragment.fragment, start as usize, end as usize);
+        wrap_option(env, matched)
     }
 
     #[napi]
-    pub fn default_type(&self, env: Env) -> Result<Js> {
+    pub fn default_type<'env>(&self, env: &'env Env) -> Result<Unknown<'env>> {
         match self.content_match.default_type() {
-            Some(node_type) => schema::wrap_node_type(env.raw(), &node_type).map(Js),
-            None => js::null(env.raw()).map(Js),
+            Some(node_type) => schema::wrap_node_type(env, &node_type),
+            None => Null.into_unknown(env),
         }
     }
 
     #[napi]
-    pub fn compatible(&self, other: ContentMatchArg) -> bool {
-        self.content_match.compatible(&other.0)
+    pub fn compatible(&self, other: &ContentMatchHandle) -> bool {
+        self.content_match.compatible(&other.content_match)
     }
 
     #[napi]
-    pub fn fill_before(
+    pub fn fill_before<'env>(
         &self,
-        env: Env,
-        after: FragmentArg,
+        env: &'env Env,
+        after: &FragmentHandle,
         to_end: bool,
         start_index: u32,
-    ) -> Result<Js> {
+    ) -> Result<Unknown<'env>> {
         let filled = self
             .content_match
-            .fill_before(&after.0, to_end, start_index as usize)
-            .or_throw(&env)?;
+            .fill_before(&after.fragment, to_end, start_index as usize)
+            .or_throw(env)?;
         match filled {
-            Some(filled) => fragment::wrap(env.raw(), &filled).map(Js),
-            None => js::null(env.raw()).map(Js),
+            Some(filled) => fragment::wrap(env, &filled),
+            None => Null.into_unknown(env),
         }
     }
 
     #[napi]
-    pub fn find_wrapping(&self, env: Env, target: NodeTypeArg) -> Result<Js> {
-        let env = env.raw();
-        let Some(wrapping) = self.content_match.find_wrapping(&target.0) else {
-            return js::null(env).map(Js);
+    pub fn find_wrapping<'env>(
+        &self,
+        env: &'env Env,
+        target: &NodeTypeHandle,
+    ) -> Result<Option<Vec<Unknown<'env>>>> {
+        let Some(wrapping) = self.content_match.find_wrapping(&target.node_type) else {
+            return Ok(None);
         };
-        let mut array = ptr::null_mut();
-        js::check(unsafe { sys::napi_create_array_with_length(env, wrapping.len(), &mut array) })?;
-        for (index, node_type) in wrapping.iter().enumerate() {
-            let node_type = schema::wrap_node_type(env, node_type)?;
-            js::check(unsafe { sys::napi_set_element(env, array, index as u32, node_type) })?;
-        }
-        Ok(Js(array))
+        let wrapping = wrapping
+            .iter()
+            .map(|node_type| schema::wrap_node_type(env, node_type))
+            .collect::<Result<_>>()?;
+        Ok(Some(wrapping))
     }
 
     #[napi]
-    pub fn edge(&self, env: Env, n: u32) -> Result<Edge> {
-        let (node_type, next) = self.content_match.edge(n as usize).or_throw(&env)?;
+    pub fn edge<'env>(&self, env: &'env Env, n: u32) -> Result<Edge<'env>> {
+        let (node_type, next) = self.content_match.edge(n as usize).or_throw(env)?;
         Ok(Edge {
-            node_type: Js(schema::wrap_node_type(env.raw(), &node_type)?),
-            next: Js(wrap(env.raw(), &next)?),
+            node_type: schema::wrap_node_type(env, &node_type)?,
+            next: wrap(env, &next)?,
         })
     }
 
@@ -144,7 +141,11 @@ impl ContentMatchHandle {
 }
 
 #[napi]
-pub fn content_match_parse(env: Env, schema: &SchemaHandle, expr: String) -> Result<Js> {
-    let parsed = ContentMatch::parse(&schema.schema, &expr).or_throw(&env)?;
-    wrap(env.raw(), &parsed).map(Js)
+pub fn content_match_parse<'env>(
+    env: &'env Env,
+    schema: &SchemaHandle,
+    expr: String,
+) -> Result<Unknown<'env>> {
+    let parsed = ContentMatch::parse(&schema.schema, &expr).or_throw(env)?;
+    wrap(env, &parsed)
 }

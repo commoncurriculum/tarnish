@@ -1,5 +1,6 @@
 // prosemirror-transform's API over tarnish. As in prosemirror-model.mjs, the classes pass calls
-// through to the native bridge; what's here is JavaScript's side of the boundary.
+// through to the native bridge with the handles of their arguments; what's here is JavaScript's
+// side of the boundary.
 import { Fragment, Slice } from "prosemirror-model"
 import native from "./native.mjs"
 
@@ -11,6 +12,15 @@ export let TransformError = function TransformError(message) {
 TransformError.prototype = Object.create(Error.prototype)
 TransformError.prototype.constructor = TransformError
 TransformError.prototype.name = "TransformError"
+
+function handles(wrappers) {
+  return wrappers.map(wrapper => wrapper.h)
+}
+
+// `{type, attrs}` wrappers with the handles of their types, `null` for an empty entry.
+function wrapperArgs(wrappers) {
+  return wrappers.map(wrapper => wrapper ? { type: wrapper.type.h, attrs: wrapper.attrs } : null)
+}
 
 export class MapResult {
   /// @internal
@@ -59,7 +69,7 @@ export class Mapping {
       this.h = mirror
       return
     }
-    this.h = new native.MappingHandle(maps || [], mirror, from, to)
+    this.h = new native.MappingHandle(maps ? handles(maps) : [], mirror, from, to)
   }
 
   get maps() { return this.h.maps() }
@@ -68,12 +78,12 @@ export class Mapping {
   get from() { return this.h.from }
   get to() { return this.h.to }
   slice(from = 0, to = this.maps.length) { return this.h.slice(from, to) }
-  appendMap(map, mirrors) { this.h.appendMap(map, mirrors) }
-  appendMapping(mapping) { this.h.appendMapping(mapping) }
+  appendMap(map, mirrors) { this.h.appendMap(map.h, mirrors) }
+  appendMapping(mapping) { this.h.appendMapping(mapping.h) }
   getMirror(n) { return this.h.getMirror(n) ?? undefined }
   /// @internal
   setMirror(n, m) { this.h.setMirror(n, m) }
-  appendMappingInverted(mapping) { this.h.appendMappingInverted(mapping) }
+  appendMappingInverted(mapping) { this.h.appendMappingInverted(mapping.h) }
   invert() { return this.h.invert() }
   map(pos, assoc = 1) { return this.h.map(pos, assoc) }
   mapResult(pos, assoc = 1) { return this.h.mapResult(pos, assoc) }
@@ -82,12 +92,16 @@ export class Mapping {
 const stepsByID = Object.create(null)
 
 export class Step {
-  getMap() { return native.stepGetMap(this) }
-  apply(doc) { return native.stepApply(this, doc) }
-  invert(doc) { return native.stepInvert(this, doc) }
-  map(mapping) { return native.stepMap(this, mapping) }
-  merge(other) { return native.stepMerge(this, other) }
-  toJSON() { return native.stepToJson(this) }
+  #h
+
+  /// @internal
+  get h() { return (this.#h ??= this.handle()) }
+  getMap() { return this.h.getMap() }
+  apply(doc) { return this.h.apply(doc.h) }
+  invert(doc) { return this.h.invert(doc.h) }
+  map(mapping) { return this.h.map(mapping.h) }
+  merge(other) { return this.h.merge(other.h) }
+  toJSON() { return this.h.toJson() }
 
   static fromJSON(schema, json) { return native.stepFromJson(schema.h, json) }
 
@@ -111,7 +125,7 @@ export class StepResult {
 
   static ok(doc) { return new StepResult(doc, null) }
   static fail(message) { return new StepResult(null, message) }
-  static fromReplace(doc, from, to, slice) { return native.stepResultFromReplace(doc, from, to, slice) }
+  static fromReplace(doc, from, to, slice) { return native.stepResultFromReplace(doc.h, from, to, slice.h) }
 }
 
 export class ReplaceStep extends Step {
@@ -123,6 +137,8 @@ export class ReplaceStep extends Step {
     this.structure = structure
   }
 
+  /// @internal
+  handle() { return native.StepHandle.replace(this.from, this.to, this.slice.h, !!this.structure) }
   static fromJSON(schema, json) { return Step.fromJSON(schema, { ...json, stepType: "replace" }) }
 }
 
@@ -138,6 +154,11 @@ export class ReplaceAroundStep extends Step {
     this.structure = structure
   }
 
+  /// @internal
+  handle() {
+    return native.StepHandle.replaceAround(this.from, this.to, this.gapFrom, this.gapTo, this.slice.h, this.insert, !!this.structure)
+  }
+
   static fromJSON(schema, json) { return Step.fromJSON(schema, { ...json, stepType: "replaceAround" }) }
 }
 
@@ -149,6 +170,8 @@ export class AddMarkStep extends Step {
     this.mark = mark
   }
 
+  /// @internal
+  handle() { return native.StepHandle.addMark(this.from, this.to, this.mark.h) }
   static fromJSON(schema, json) { return Step.fromJSON(schema, { ...json, stepType: "addMark" }) }
 }
 
@@ -160,6 +183,8 @@ export class RemoveMarkStep extends Step {
     this.mark = mark
   }
 
+  /// @internal
+  handle() { return native.StepHandle.removeMark(this.from, this.to, this.mark.h) }
   static fromJSON(schema, json) { return Step.fromJSON(schema, { ...json, stepType: "removeMark" }) }
 }
 
@@ -170,6 +195,8 @@ export class AddNodeMarkStep extends Step {
     this.mark = mark
   }
 
+  /// @internal
+  handle() { return native.StepHandle.addNodeMark(this.pos, this.mark.h) }
   static fromJSON(schema, json) { return Step.fromJSON(schema, { ...json, stepType: "addNodeMark" }) }
 }
 
@@ -180,6 +207,8 @@ export class RemoveNodeMarkStep extends Step {
     this.mark = mark
   }
 
+  /// @internal
+  handle() { return native.StepHandle.removeNodeMark(this.pos, this.mark.h) }
   static fromJSON(schema, json) { return Step.fromJSON(schema, { ...json, stepType: "removeNodeMark" }) }
 }
 
@@ -191,6 +220,8 @@ export class AttrStep extends Step {
     this.value = value
   }
 
+  /// @internal
+  handle() { return native.StepHandle.attr(this.pos, this.attr, this.value) }
   static fromJSON(schema, json) { return Step.fromJSON(schema, { ...json, stepType: "attr" }) }
 }
 
@@ -201,6 +232,8 @@ export class DocAttrStep extends Step {
     this.value = value
   }
 
+  /// @internal
+  handle() { return native.StepHandle.docAttr(this.attr, this.value) }
   static fromJSON(schema, json) { return Step.fromJSON(schema, { ...json, stepType: "docAttr" }) }
 }
 
@@ -219,7 +252,7 @@ export class Transform {
   #mapping
 
   constructor(doc) {
-    this.h = new native.TransformHandle(doc)
+    this.h = new native.TransformHandle(doc.h)
   }
 
   // The steps and documents the native transform added since they were last read.
@@ -239,7 +272,7 @@ export class Transform {
 
   step(step) {
     this.#sync()
-    this.h.step(step)
+    this.h.step(step.h)
     this.#steps.push(step)
     this.#docs.push(...this.h.docsFrom(this.#docs.length))
     return this
@@ -247,7 +280,7 @@ export class Transform {
 
   maybeStep(step) {
     this.#sync()
-    let result = this.h.maybeStep(step)
+    let result = this.h.maybeStep(step.h)
     if (!result.failed) {
       this.#steps.push(step)
       this.#docs.push(...this.h.docsFrom(this.#docs.length))
@@ -256,61 +289,54 @@ export class Transform {
   }
 
   changedRange() { return this.h.changedRange() }
-  replace(from, to = from, slice = Slice.empty) { this.h.replace(from, to, slice); return this }
-  replaceWith(from, to, content) { this.h.replaceWith(from, to, Fragment.from(content)); return this }
+  replace(from, to = from, slice = Slice.empty) { this.h.replace(from, to, slice.h); return this }
+  replaceWith(from, to, content) { this.h.replaceWith(from, to, Fragment.from(content).h); return this }
   delete(from, to) { this.h.delete(from, to); return this }
-  insert(pos, content) { this.h.insert(pos, Fragment.from(content)); return this }
-  replaceRange(from, to, slice) { this.h.replaceRange(from, to, slice); return this }
-  replaceRangeWith(from, to, node) { this.h.replaceRangeWith(from, to, node); return this }
+  insert(pos, content) { this.h.insert(pos, Fragment.from(content).h); return this }
+  replaceRange(from, to, slice) { this.h.replaceRange(from, to, slice.h); return this }
+  replaceRangeWith(from, to, node) { this.h.replaceRangeWith(from, to, node.h); return this }
   deleteRange(from, to) { this.h.deleteRange(from, to); return this }
-  lift(range, target) { this.h.lift(range, target); return this }
+  lift(range, target) { this.h.lift(range.h, target); return this }
   join(pos, depth = 1) { this.h.join(pos, depth); return this }
-  wrap(range, wrappers) { this.h.wrap(range, wrappers); return this }
-  setBlockType(from, to = from, type, attrs = null) { this.h.setBlockType(from, to, type, attrs); return this }
+  wrap(range, wrappers) { this.h.wrap(range.h, wrapperArgs(wrappers)); return this }
+  setBlockType(from, to = from, type, attrs = null) { this.h.setBlockType(from, to, type.h, attrs); return this }
 
   setNodeMarkup(pos, type, attrs = null, marks) {
-    this.h.setNodeMarkup(pos, type || null, attrs, marks || null)
+    this.h.setNodeMarkup(pos, type ? type.h : null, attrs, marks ? handles(marks) : null)
     return this
   }
 
   setNodeAttribute(pos, attr, value) { this.h.setNodeAttribute(pos, attr, value); return this }
   setDocAttribute(attr, value) { this.h.setDocAttribute(attr, value); return this }
-  addNodeMark(pos, mark) { this.h.addNodeMark(pos, mark); return this }
-  removeNodeMark(pos, mark) { this.h.removeNodeMark(pos, mark); return this }
-  split(pos, depth = 1, typesAfter) { this.h.split(pos, depth, typesAfter || null); return this }
-  addMark(from, to, mark) { this.h.addMark(from, to, mark); return this }
-  removeMark(from, to, mark) { this.h.removeMark(from, to, mark); return this }
-  clearIncompatible(pos, parentType, match) { this.h.clearIncompatible(pos, parentType, match || null); return this }
+  addNodeMark(pos, mark) { this.h.addNodeMark(pos, mark.h); return this }
+  removeNodeMark(pos, mark) { this.h.removeNodeMark(pos, mark.h); return this }
+  split(pos, depth = 1, typesAfter) { this.h.split(pos, depth, typesAfter ? wrapperArgs(typesAfter) : null); return this }
+  addMark(from, to, mark) { this.h.addMark(from, to, mark.h); return this }
+  removeMark(from, to, mark) { this.h.removeMark(from, to, mark?.h); return this }
+  clearIncompatible(pos, parentType, match) { this.h.clearIncompatible(pos, parentType.h, match ? match.h : null); return this }
 }
 
 export function replaceStep(doc, from, to = from, slice = Slice.empty) {
-  return native.replaceStep(doc, from, to, slice)
+  return native.replaceStep(doc.h, from, to, slice.h)
 }
 
-export function canJoin(doc, pos) { return native.canJoin(doc, pos) }
-export function canSplit(doc, pos, depth = 1, typesAfter) { return native.canSplit(doc, pos, depth, typesAfter || null) }
-export function joinPoint(doc, pos, dir = -1) { return native.joinPoint(doc, pos, dir) ?? undefined }
-export function insertPoint(doc, pos, nodeType) { return native.insertPoint(doc, pos, nodeType) }
-export function dropPoint(doc, pos, slice) { return native.dropPoint(doc, pos, slice) }
-export function liftTarget(range) { return native.liftTarget(range) }
+export function canJoin(doc, pos) { return native.canJoin(doc.h, pos) }
+
+export function canSplit(doc, pos, depth = 1, typesAfter) {
+  return native.canSplit(doc.h, pos, depth, typesAfter ? wrapperArgs(typesAfter) : null)
+}
+
+export function joinPoint(doc, pos, dir = -1) { return native.joinPoint(doc.h, pos, dir) ?? undefined }
+export function insertPoint(doc, pos, nodeType) { return native.insertPoint(doc.h, pos, nodeType.h) }
+export function dropPoint(doc, pos, slice) { return native.dropPoint(doc.h, pos, slice.h) }
+export function liftTarget(range) { return native.liftTarget(range.h) }
 
 export function findWrapping(range, nodeType, attrs = null, innerRange = range) {
-  return native.findWrapping(range, nodeType, attrs, innerRange)
-}
-
-const stepClasses = {
-  replace: ReplaceStep,
-  replaceAround: ReplaceAroundStep,
-  addMark: AddMarkStep,
-  removeMark: RemoveMarkStep,
-  addNodeMark: AddNodeMarkStep,
-  removeNodeMark: RemoveNodeMarkStep,
-  attr: AttrStep,
-  docAttr: DocAttrStep,
+  return native.findWrapping(range.h, nodeType.h, attrs, innerRange.h)
 }
 
 native.register({
-  makeStep: (id, ...args) => new stepClasses[id](...args),
+  makeStep: (id, ...args) => new stepsByID[id](...args),
   makeStepResult: (doc, failed) => new StepResult(doc, failed),
   wrapStepMap: h => (h.ranges.length ? new StepMap(HANDLE, h) : StepMap.empty),
   wrapMapping: h => new Mapping(HANDLE, h),

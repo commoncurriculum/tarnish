@@ -1,39 +1,31 @@
 //! Resolved positions and node ranges.
 
-use napi::{Env, Result, sys};
+use napi::bindgen_prelude::{FnArgs, Function, Null, ToNapiValue, Unknown};
+use napi::{Env, JsValue, Result};
 use napi_derive::napi;
 use tarnish::{NodeRange, ResolvedPos};
 
-use crate::js::{self, Js, OrThrow};
+use crate::js::{self, OrThrow};
 use crate::mark;
 use crate::node;
 
-/// A position from JavaScript. One that is negative or not whole can't be in a document; it
-/// becomes one past any document's end, so it is out of range.
-pub fn pos_arg(pos: f64) -> usize {
-    if pos >= 0.0 && pos.fract() == 0.0 {
-        pos as usize
-    } else {
-        usize::MAX
-    }
+pub fn wrap<'env>(env: &'env Env, pos: ResolvedPos) -> Result<Unknown<'env>> {
+    js::call_registered(env, "wrapResolvedPos", ResolvedPosHandle { pos })
 }
 
-pub struct ResolvedPosArg(pub ResolvedPos);
-
-crate::handle_arg!(ResolvedPosArg, ResolvedPosHandle, |handle| handle
-    .pos
-    .clone());
-
-pub fn wrap(env: sys::napi_env, pos: ResolvedPos) -> Result<sys::napi_value> {
-    let handle = unsafe {
-        napi::bindgen_prelude::ToNapiValue::to_napi_value(env, ResolvedPosHandle { pos })
-    }?;
-    js::call_registered(env, "wrapResolvedPos", &[handle])
+/// A node range as JavaScript's `NodeRange`, of wrappers of its positions.
+fn wrap_range<'env>(env: &'env Env, range: NodeRange) -> Result<Unknown<'env>> {
+    let args = (
+        wrap(env, range.resolved_from().clone())?,
+        wrap(env, range.resolved_to().clone())?,
+        range.depth() as f64,
+    );
+    js::call_registered(env, "wrapNodeRange", FnArgs::from(args))
 }
 
 #[napi]
 pub struct ResolvedPosHandle {
-    pos: ResolvedPos,
+    pub(crate) pos: ResolvedPos,
 }
 
 #[napi]
@@ -54,8 +46,8 @@ impl ResolvedPosHandle {
     }
 
     #[napi]
-    pub fn node(&self, env: Env, depth: u32) -> Result<Js> {
-        node::wrap(env.raw(), self.pos.node(depth as usize)).map(Js)
+    pub fn node<'env>(&self, env: &'env Env, depth: u32) -> Result<Unknown<'env>> {
+        node::wrap(env, self.pos.node(depth as usize))
     }
 
     #[napi]
@@ -79,19 +71,15 @@ impl ResolvedPosHandle {
     }
 
     #[napi]
-    pub fn before(&self, env: Env, depth: u32) -> Result<u32> {
-        self.pos
-            .before(depth as usize)
-            .map(|pos| pos as u32)
-            .or_throw(&env)
+    pub fn before(&self, env: &Env, depth: u32) -> Result<u32> {
+        let before = self.pos.before(depth as usize).or_throw(env)?;
+        Ok(before as u32)
     }
 
     #[napi]
-    pub fn after(&self, env: Env, depth: u32) -> Result<u32> {
-        self.pos
-            .after(depth as usize)
-            .map(|pos| pos as u32)
-            .or_throw(&env)
+    pub fn after(&self, env: &Env, depth: u32) -> Result<u32> {
+        let after = self.pos.after(depth as usize).or_throw(env)?;
+        Ok(after as u32)
     }
 
     #[napi(getter)]
@@ -100,19 +88,13 @@ impl ResolvedPosHandle {
     }
 
     #[napi]
-    pub fn node_after(&self, env: Env) -> Result<Js> {
-        match self.pos.node_after() {
-            Some(node) => node::wrap(env.raw(), &node).map(Js),
-            None => js::null(env.raw()).map(Js),
-        }
+    pub fn node_after<'env>(&self, env: &'env Env) -> Result<Unknown<'env>> {
+        node::wrap_option(env, self.pos.node_after().as_ref())
     }
 
     #[napi]
-    pub fn node_before(&self, env: Env) -> Result<Js> {
-        match self.pos.node_before() {
-            Some(node) => node::wrap(env.raw(), &node).map(Js),
-            None => js::null(env.raw()).map(Js),
-        }
+    pub fn node_before<'env>(&self, env: &'env Env) -> Result<Unknown<'env>> {
+        node::wrap_option(env, self.pos.node_before().as_ref())
     }
 
     #[napi]
@@ -121,46 +103,51 @@ impl ResolvedPosHandle {
     }
 
     #[napi]
-    pub fn marks(&self, env: Env) -> Result<Js> {
-        mark::wrap_set(env.raw(), &self.pos.marks()).map(Js)
+    pub fn marks<'env>(&self, env: &'env Env) -> Result<Unknown<'env>> {
+        mark::wrap_set(env, &self.pos.marks())
     }
 
     #[napi]
-    pub fn marks_across(&self, env: Env, end: ResolvedPosArg) -> Result<Js> {
-        match self.pos.marks_across(&end.0) {
-            Some(marks) => mark::wrap_set(env.raw(), &marks).map(Js),
-            None => js::null(env.raw()).map(Js),
+    pub fn marks_across<'env>(
+        &self,
+        env: &'env Env,
+        end: &ResolvedPosHandle,
+    ) -> Result<Unknown<'env>> {
+        match self.pos.marks_across(&end.pos) {
+            Some(marks) => mark::wrap_set(env, &marks),
+            None => Null.into_unknown(env),
         }
     }
 
     #[napi]
-    pub fn shared_depth(&self, pos: u32) -> u32 {
-        self.pos.shared_depth(pos as usize) as u32
+    pub fn shared_depth(&self, env: &Env, pos: f64) -> Result<u32> {
+        Ok(self.pos.shared_depth(js::pos(env, pos)?) as u32)
     }
 
     #[napi]
-    pub fn block_range(&self, env: Env, other: ResolvedPosArg, pred: Option<Js>) -> Result<Js> {
-        let raw = env.raw();
-        let mut call = pred.map(|Js(pred)| {
+    pub fn block_range<'env>(
+        &self,
+        env: &'env Env,
+        other: &ResolvedPosHandle,
+        pred: Option<Function>,
+    ) -> Result<Unknown<'env>> {
+        let mut call = pred.map(|pred| {
             move |node: &tarnish::Node| {
-                let result = (|| {
-                    let result =
-                        js::call(raw, js::undefined(raw)?, pred, &[node::wrap(raw, node)?])?;
-                    js::truthy(raw, result)
-                })();
-                result.map_err(|error| js::host_error(raw, error))
+                js::host(|env| {
+                    js::call(pred.to_unknown(), node::wrap(env, node)?)?.coerce_to_bool()
+                })
             }
         });
         let pred = call.as_mut().map(|f| f as &mut tarnish::NodePredicate);
-        match self.pos.block_range(&other.0, pred).or_throw(&env)? {
-            Some(range) => wrap_range(raw, range).map(Js),
-            None => js::null(raw).map(Js),
+        match self.pos.block_range(&other.pos, pred).or_throw(env)? {
+            Some(range) => wrap_range(env, range),
+            None => Null.into_unknown(env),
         }
     }
 
     #[napi]
-    pub fn same_parent(&self, other: ResolvedPosArg) -> bool {
-        self.pos.same_parent(&other.0)
+    pub fn same_parent(&self, other: &ResolvedPosHandle) -> bool {
+        self.pos.same_parent(&other.pos)
     }
 
     #[napi]
@@ -169,12 +156,19 @@ impl ResolvedPosHandle {
     }
 }
 
-/// A node range as JavaScript's `NodeRange`, of wrappers of its positions.
-pub fn wrap_range(env: sys::napi_env, range: NodeRange) -> Result<sys::napi_value> {
-    let args = [
-        wrap(env, range.resolved_from().clone())?,
-        wrap(env, range.resolved_to().clone())?,
-        js::number(env, range.depth() as f64)?,
-    ];
-    js::call_registered(env, "wrapNodeRange", &args)
+/// A node range, which JavaScript makes into a handle the first time it passes one to the
+/// bridge.
+#[napi]
+pub struct NodeRangeHandle {
+    pub(crate) range: NodeRange,
+}
+
+#[napi]
+impl NodeRangeHandle {
+    #[napi(constructor)]
+    pub fn new(from: &ResolvedPosHandle, to: &ResolvedPosHandle, depth: u32) -> Self {
+        NodeRangeHandle {
+            range: NodeRange::new(from.pos.clone(), to.pos.clone(), depth as usize),
+        }
+    }
 }
