@@ -5,6 +5,7 @@ use super::mark::{clear_incompatible, line_breaks};
 use super::step::Step;
 use super::transform::Transform;
 use crate::error::{Error, Result};
+use crate::js;
 use crate::json::Map;
 use crate::model::{
     Attrs, ContentMatch, Fragment, Mark, Node, NodeRange, NodeType, Slice, Whitespace,
@@ -221,6 +222,8 @@ pub fn can_split(
     let index = resolved.index_after(base);
     let base_type = match type_after(types_after, 0) {
         Some(wrapper) => wrapper.node_type.clone(),
+        // A `depth` of 0 leaves no node below `base`, whose type JavaScript reads.
+        None if base == resolved.depth() => return Err(js::type_error("type")),
         None => resolved.node(base + 1).node_type().clone(),
     };
     resolved
@@ -246,7 +249,7 @@ fn can_append_with_substituted_linebreaks(a: &Node, b: &Node) -> Result<bool> {
     let mut matched = a.content_match_at(a.child_count())?;
     for child in b.children() {
         let node_type = if Some(child.node_type()) == linebreak.as_ref() {
-            schema.node_type("text").expect("a text type")
+            schema.text_type()
         } else {
             child.node_type().clone()
         };
@@ -363,9 +366,7 @@ pub fn drop_point(doc: &Node, pos: usize, slice: &Slice) -> Result<Option<usize>
     }
     let mut content = slice.content().clone();
     for _ in 0..slice.open_start() {
-        content = content
-            .first_child()
-            .expect("an open node")
+        content = js::non_null(content.first_child(), "content")?
             .content()
             .clone();
     }
@@ -390,7 +391,9 @@ pub fn drop_point(doc: &Node, pos: usize, slice: &Slice) -> Result<Option<usize>
             let fits = if pass == 1 {
                 parent.can_replace(insert_pos, insert_pos, &content, 0, content.child_count())?
             } else {
-                let first = content.first_child().expect("content");
+                let first = content
+                    .first_child()
+                    .expect("a closed slice with a size has a first child");
                 match parent
                     .content_match_at(insert_pos)?
                     .find_wrapping(first.node_type())

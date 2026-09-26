@@ -401,9 +401,7 @@ impl Step {
                 _ => self.clone(),
             },
             Step::Attr { pos, attr, .. } => {
-                let node = doc.node_at(*pos)?.ok_or_else(|| {
-                    Error::Other(format!("No node at {pos} to invert an attribute step on"))
-                })?;
+                let node = js::non_null(doc.node_at(*pos)?, "attrs")?;
                 Step::Attr {
                     pos: *pos,
                     attr: attr.clone(),

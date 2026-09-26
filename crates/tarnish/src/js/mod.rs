@@ -1,10 +1,11 @@
 //! JavaScript's semantics for the values ProseMirror handles: its numbers, truthiness, `typeof`
-//! and `String()`, and `JSON` in the module.
+//! and `String()`, the `TypeError` of reading a property of nothing, and `JSON` in the module.
 
 pub mod json;
 
 use std::borrow::Cow;
 
+use crate::error::{Error, Result};
 use crate::json::{Map, Number, Value};
 
 /// `Number.MAX_SAFE_INTEGER`.
@@ -90,6 +91,21 @@ pub fn attrs(value: Option<&Value>) -> Option<&Map> {
         Some(Value::Object(object)) => Some(object),
         Some(_) => Some(&EMPTY),
     }
+}
+
+/// The `TypeError` JavaScript throws reading `property` of `null` or `undefined`, as
+/// ProseMirror's code does where it takes a value to be there, often asserting so with `!`, and
+/// it isn't. It is raised as a plain `Error`, having no class of its own here.
+pub(crate) fn type_error(property: &str) -> Error {
+    Error::Other(format!(
+        "Cannot read properties of null or undefined (reading '{property}')"
+    ))
+}
+
+/// A value ProseMirror takes to be there and reads `property` of: the value, or where it isn't,
+/// the [`type_error`] JavaScript throws.
+pub(crate) fn non_null<T>(value: Option<T>, property: &str) -> Result<T> {
+    value.ok_or_else(|| type_error(property))
 }
 
 /// A JSON value as JavaScript reads a node, a fragment or a mark from it: a [`Value`], or JSON

@@ -2,7 +2,8 @@
 
 use super::step::{MarkOp, Step};
 use super::transform::Transform;
-use crate::error::{Error, Result};
+use crate::error::Result;
+use crate::js;
 use crate::model::{ContentMatch, Fragment, Mark, MarkType, NodeType, Slice, Whitespace};
 
 /// A mark, or all marks of a type.
@@ -26,7 +27,7 @@ impl Transform {
                     return Ok(true);
                 }
                 let marks = node.marks();
-                let parent = parent.expect("an inline node's parent");
+                let parent = js::non_null(parent, "type")?;
                 if !mark.is_in_set(marks) && parent.node_type().allows_mark_type(mark.mark_type()) {
                     let start = pos.max(from);
                     let end = (pos + node.node_size()).min(to);
@@ -189,11 +190,7 @@ pub(super) fn clear_incompatible(
     start: Option<ContentMatch>,
     clear_newlines: bool,
 ) -> Result<()> {
-    let node = tr.doc().node_at(pos)?.cloned().ok_or_else(|| {
-        Error::Other(format!(
-            "No node at {pos} to clear incompatible content from"
-        ))
-    })?;
+    let node = js::non_null(tr.doc().node_at(pos)?, "childCount")?.clone();
     let mut matched = start.unwrap_or_else(|| parent_type.content_match());
     let mut replace_steps = Vec::new();
     let mut cur = pos + 1;
@@ -242,9 +239,7 @@ pub(super) fn clear_incompatible(
         cur = end;
     }
     if !matched.valid_end() {
-        let fill = matched
-            .fill_before(&Fragment::empty(), true, 0)?
-            .unwrap_or_else(Fragment::empty);
+        let fill = js::non_null(matched.fill_before(&Fragment::empty(), true, 0)?, "size")?;
         tr.replace(cur, cur, &Slice::new(fill, 0, 0))?;
     }
     for step in replace_steps.into_iter().rev() {
