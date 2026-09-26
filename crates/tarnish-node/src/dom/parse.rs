@@ -64,16 +64,16 @@ fn priority(rule: &Object) -> Result<Option<f64>> {
     }
 }
 
-/// The fields a rule of either kind has.
-fn rule<K>(rule: &Object, kind: K) -> Result<Rule<K>> {
-    let mut parsed = Rule::new(kind);
-    parsed.priority = priority(rule)?;
-    parsed.consuming = !js::is_false(&js::get(rule, "consuming")?)?;
-    parsed.context = truthy_string(rule, "context")?;
-    parsed.mark = truthy_string(rule, "mark")?;
-    parsed.ignore = truthy(rule, "ignore")?;
-    parsed.attrs = js::attrs_from_js(js::get(rule, "attrs")?)?;
-    Ok(parsed)
+/// A rule of this kind, with the fields a rule of either kind has.
+fn rule_of<K>(object: &Object, kind: K) -> Result<Rule<K>> {
+    let mut rule = Rule::new(kind);
+    rule.priority = priority(object)?;
+    rule.consuming = !js::is_false(&js::get(object, "consuming")?)?;
+    rule.context = truthy_string(object, "context")?;
+    rule.mark = truthy_string(object, "mark")?;
+    rule.ignore = truthy(object, "ignore")?;
+    rule.attrs = js::attrs_from_js(js::get(object, "attrs")?)?;
+    Ok(rule)
 }
 
 fn tag_rule(object: &Object, tag: String) -> Result<Rule<TagRule<JsNode>>> {
@@ -93,7 +93,7 @@ fn tag_rule(object: &Object, tag: String) -> Result<Rule<TagRule<JsNode>>> {
         get_attrs,
         element: element_rule(object)?,
     };
-    rule(object, kind)
+    rule_of(object, kind)
 }
 
 fn element_rule(rule: &Object) -> Result<ElementRule<JsNode>> {
@@ -154,7 +154,7 @@ fn style_rule(object: &Object, style: String) -> Result<Rule<StyleRule>> {
         get_attrs,
         clear_mark,
     };
-    rule(object, kind)
+    rule_of(object, kind)
 }
 
 #[napi]
@@ -252,7 +252,7 @@ fn with_options<T>(
                     return Ok(None);
                 }
                 let found = Object::from_unknown(found)?;
-                rule(&found, element_rule(&found)?).map(Some)
+                rule_of(&found, element_rule(&found)?).map(Some)
             })
         }
     });
