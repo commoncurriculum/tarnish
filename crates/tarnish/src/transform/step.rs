@@ -675,13 +675,18 @@ impl Step {
         };
         let invalid = || Error::Range(format!("Invalid input for {class}.fromJSON"));
         // JavaScript only checks that a position is a number: one that is negative, fractional
-        // or NaN is taken, where here it is invalid input, as a position that isn't a number is.
+        // or NaN is taken, and so is a range that runs backwards, giving negative sizes. Here
+        // each is invalid input, as a position that isn't a number is.
         let position = |key: &str| {
             json.get(key)
                 .and_then(Value::as_f64)
                 .filter(|n| *n >= 0.0 && n.fract() == 0.0)
                 .map(|n| n as usize)
                 .ok_or_else(invalid)
+        };
+        let forwards = |positions: &[usize]| match positions.is_sorted() {
+            true => Ok(()),
+            false => Err(invalid()),
         };
         let attr = || match json.get("attr") {
             Some(Value::String(attr)) => Ok(attr.clone()),
@@ -690,27 +695,43 @@ impl Step {
         let field = |key: &str| json.get(key).unwrap_or(&NULL);
         let structure = js::truthy(json.get("structure"));
         Ok(match kind {
-            Kind::Replace => Step::Replace {
-                from: position("from")?,
-                to: position("to")?,
-                slice: Slice::from_json(schema, field("slice"))?,
-                structure,
-            },
-            Kind::ReplaceAround => Step::ReplaceAround {
-                from: position("from")?,
-                to: position("to")?,
-                gap_from: position("gapFrom")?,
-                gap_to: position("gapTo")?,
-                insert: position("insert")?,
-                slice: Slice::from_json(schema, field("slice"))?,
-                structure,
-            },
-            Kind::Mark(op) => Step::Mark {
-                op,
-                from: position("from")?,
-                to: position("to")?,
-                mark: Mark::from_json(schema, field("mark"))?,
-            },
+            Kind::Replace => {
+                let (from, to) = (position("from")?, position("to")?);
+                forwards(&[from, to])?;
+                Step::Replace {
+                    from,
+                    to,
+                    slice: Slice::from_json(schema, field("slice"))?,
+                    structure,
+                }
+            }
+            Kind::ReplaceAround => {
+                let (from, to) = (position("from")?, position("to")?);
+                let (gap_from, gap_to) = (position("gapFrom")?, position("gapTo")?);
+                let insert = position("insert")?;
+                let slice = Slice::from_json(schema, field("slice"))?;
+                forwards(&[from, gap_from, gap_to, to])?;
+                forwards(&[insert, slice.size()])?;
+                Step::ReplaceAround {
+                    from,
+                    to,
+                    gap_from,
+                    gap_to,
+                    insert,
+                    slice,
+                    structure,
+                }
+            }
+            Kind::Mark(op) => {
+                let (from, to) = (position("from")?, position("to")?);
+                forwards(&[from, to])?;
+                Step::Mark {
+                    op,
+                    from,
+                    to,
+                    mark: Mark::from_json(schema, field("mark"))?,
+                }
+            }
             Kind::NodeMark(op) => Step::NodeMark {
                 op,
                 pos: position("pos")?,

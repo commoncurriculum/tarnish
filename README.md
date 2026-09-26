@@ -39,6 +39,19 @@ The proof doesn't depend on anyone reading the Rust. CI checks it:
      output byte for byte.
    - The Rust and Elixir tests read the recorded nodes and must get the same nodes or errors.
 
+## Where it differs
+
+Where ProseMirror takes input it can't make sense of, tarnish refuses it or gives what it can
+hold:
+
+- A step's position must be a whole number from zero up, and its ranges must run forwards.
+  ProseMirror takes any number, and gives a backwards range a negative size. tarnish raises the
+  `RangeError` its `fromJSON` raises for a position that isn't a number.
+- A JSON value holds strings as Rust does, which can't hold a lone surrogate, so one read or
+  written as a value is U+FFFD. A document written as JSON text keeps it.
+- An attribute whose spec's default is `undefined` is left out. ProseMirror keeps its name with
+  no value, so `toJSON` writes `"attrs": {}` and `hasMarkup` sees the name.
+
 ## Elixir
 
 The package builds its NIF from `crates/`, so depend on the whole repository:
