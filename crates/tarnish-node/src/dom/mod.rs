@@ -257,4 +257,8 @@ impl Dom for JsDom<'_> {
             Ok(true)
         })
     }
+
+    fn stringify(&self, node: &JsNode) -> tarnish::Result<String> {
+        js::host(|env| js::coerce_to_string(&node.value(env)?))
+    }
 }

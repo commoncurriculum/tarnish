@@ -7,6 +7,7 @@ use napi::bindgen_prelude::{FnArgs, FromNapiValue, Object, Unknown};
 use napi::{Env, JsValue, Result, ValueType};
 use napi_derive::napi;
 use tarnish::dom::{DomSerializer, DomSpec, MarkToDom, NodeToDom, Rendered};
+use tarnish::{Map, Value};
 
 use super::{JsDom, JsNode, dom_node};
 use crate::fragment::FragmentHandle;
@@ -21,10 +22,18 @@ fn spec(value: Unknown) -> Result<DomSpec<JsNode>> {
     }
     if value.get_type()? == ValueType::Object {
         if value.is_array()? {
-            let items = Vec::<Unknown>::from_unknown(value)?
-                .into_iter()
-                .map(spec)
-                .collect::<Result<_>>()?;
+            let mut items = Vec::new();
+            for (index, item) in Vec::<Unknown>::from_unknown(value)?.into_iter().enumerate() {
+                items.push(
+                    if index == 1
+                        && let Some(attrs) = attributes(item)?
+                    {
+                        DomSpec::Value(Value::Object(attrs))
+                    } else {
+                        spec(item)?
+                    },
+                );
+            }
             let origin = js::array_origin(value);
             return Ok(DomSpec::Array { items, origin });
         }
@@ -35,6 +44,27 @@ fn spec(value: Unknown) -> Result<DomSpec<JsNode>> {
         }
     }
     Ok(DomSpec::Value(js::json_from_js(value)?))
+}
+
+/// The attributes an array spec's second item sets, when it is an object that is neither an
+/// array nor a DOM node, even one with a `dom`. Each value is taken as the string that setting
+/// an attribute turns it into, as it may be one JSON can't hold, such as a DOM node.
+fn attributes(value: Unknown) -> Result<Option<Map>> {
+    if value.get_type()? != ValueType::Object || value.is_array()? {
+        return Ok(None);
+    }
+    let object = Object::from_unknown(value)?;
+    if !js::is_nullish(&js::get(&object, "nodeType")?)? {
+        return Ok(None);
+    }
+    let mut attrs = Map::new();
+    for name in Object::keys(&object)? {
+        let value = js::get(&object, &name)?;
+        if !js::is_nullish(&value)? {
+            attrs.insert(name.into(), Value::String(js::coerce_to_string(&value)?));
+        }
+    }
+    Ok(Some(attrs))
 }
 
 #[napi(object)]
