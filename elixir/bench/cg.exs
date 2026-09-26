@@ -1,5 +1,0 @@
-fixtures = Path.expand("../../fixtures/transform.json", __DIR__)
-document = Path.expand("../../target/bench/document.json", __DIR__)
-{:ok, schema} = fixtures |> File.read!() |> Jason.decode!(objects: :ordered_objects) |> Access.get("schemas") |> hd() |> Tarnish.schema()
-%{"doc" => json} = document |> File.read!() |> Jason.decode!()
-for _ <- 1..20, do: Tarnish.node_from_json(schema, json)
