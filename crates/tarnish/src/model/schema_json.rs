@@ -1,4 +1,7 @@
-//! Schema specs as data: what a spec written in JSON, or in another language's values, holds.
+//! Schema specs as data: what a spec written in JSON, or in another language's values, holds,
+//! read as ProseMirror reads a spec object.
+
+use std::sync::Arc;
 
 use super::schema::{AttributeSpec, MarkSpec, NodeSpec, SchemaSpec, Validate, Whitespace};
 use crate::error::{Error, Result};
@@ -9,12 +12,47 @@ fn invalid(what: &str) -> Error {
     Error::Range(format!("Invalid schema spec: {what}"))
 }
 
-/// A property that, when set, must be a string.
-fn string(spec: &Map, key: &str) -> Result<Option<String>> {
-    match spec.get(key) {
-        None | Some(Value::Null) => Ok(None),
+/// JavaScript's `value == text`, for a `text` that as a number is `0` when empty and `NaN`
+/// otherwise.
+fn loosely_equals(value: &Value, text: &str) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(value) => !value && text.is_empty(),
+        Value::Number(number) => text.is_empty() && number.as_f64() == Some(0.0),
+        Value::String(value) => value == text,
+        Value::Array(_) | Value::Object(_) => js::to_string(value) == text,
+    }
+}
+
+/// A property that ProseMirror splits or parses as a string when it is truthy, and passes over
+/// when it isn't.
+fn truthy_string(spec: &Map, key: &str) -> Result<Option<String>> {
+    match spec.get(key).filter(|value| js::truthy(Some(value))) {
+        None => Ok(None),
         Some(Value::String(value)) => Ok(Some(value.clone())),
         Some(_) => Err(invalid(&format!("{key} must be a string"))),
+    }
+}
+
+/// `marks`, which ProseMirror compares with `"_"`, then splits when truthy, and otherwise
+/// compares with `""`.
+fn marks(spec: &Map) -> Result<Option<String>> {
+    match spec.get("marks") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(expr)) => Ok(Some(expr.clone())),
+        Some(value) if loosely_equals(value, "_") => Ok(Some("_".into())),
+        Some(value) if !js::truthy(Some(value)) => Ok(Some(String::new())),
+        Some(_) => Err(invalid("marks must be a string")),
+    }
+}
+
+/// `excludes`, which ProseMirror compares with `null` and then `""` before it splits it.
+fn excludes(spec: &Map) -> Result<Option<String>> {
+    match spec.get("excludes") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(expr)) => Ok(Some(expr.clone())),
+        Some(value) if loosely_equals(value, "") => Ok(Some(String::new())),
+        Some(_) => Err(invalid("excludes must be a string")),
     }
 }
 
@@ -22,30 +60,65 @@ fn flag(spec: &Map, key: &str) -> bool {
     js::truthy(spec.get(key))
 }
 
-fn optional_flag(spec: &Map, key: &str) -> Option<bool> {
-    spec.get(key).map(|value| js::truthy(Some(value)))
+/// A flag that only `false` turns off, as ProseMirror compares it with `=== false`.
+fn unless_false(spec: &Map, key: &str) -> Option<bool> {
+    match spec.get(key) {
+        Some(Value::Bool(value)) => Some(*value),
+        _ => None,
+    }
 }
 
-fn object<'a>(value: &'a Value, what: &str) -> Result<&'a Map> {
-    value
-        .as_object()
-        .ok_or_else(|| invalid(&format!("{what} must be an object")))
+/// The properties of a type's or an attribute's spec. ProseMirror finds none it reads in a
+/// value that isn't an object, and throws on `null`.
+fn properties<'a>(value: &'a Value, what: &str) -> Result<&'a Map> {
+    static NONE: Map = Map::new();
+    match value {
+        Value::Object(properties) => Ok(properties),
+        Value::Null => Err(invalid(&format!("{what} must not be null"))),
+        _ => Ok(&NONE),
+    }
+}
+
+/// The object under `key`, whose properties ProseMirror visits with `for...in`. That finds none
+/// in other values but a string's or an array's indexes, which a spec can't mean as names, so
+/// those are refused.
+fn entries<'a>(spec: &'a Map, key: &str) -> Result<Option<&'a Map>> {
+    match spec.get(key) {
+        Some(Value::Object(entries)) => Ok(Some(entries)),
+        Some(Value::String(_) | Value::Array(_)) => {
+            Err(invalid(&format!("{key} must be an object")))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn validate(attr: &Map, name: &str) -> Option<Validate> {
+    match attr.get("validate") {
+        Some(Value::String(types)) => Some(Validate::Types(types.clone())),
+        // ProseMirror calls any other truthy value when it checks the attribute, which throws.
+        Some(value) if js::truthy(Some(value)) => {
+            let message = format!("The validate of attribute {name} is not a function");
+            Some(Validate::Hook(Arc::new(move |_| {
+                Err(Error::Other(message.clone()))
+            })))
+        }
+        _ => None,
+    }
 }
 
 fn attributes(spec: &Map) -> Result<Vec<(String, AttributeSpec)>> {
-    let attrs = match spec.get("attrs") {
-        None | Some(Value::Null) => return Ok(Vec::new()),
-        Some(attrs) => object(attrs, "attrs")?,
+    let Some(attrs) = entries(spec, "attrs")? else {
+        return Ok(Vec::new());
     };
     attrs
         .iter()
         .map(|(name, attr)| {
-            let attr = object(attr, &format!("attribute {name}"))?;
+            let attr = properties(attr, &format!("attribute {name}"))?;
             Ok((
                 name.to_string(),
                 AttributeSpec {
                     default: attr.get("default").cloned().map(Some),
-                    validate: string(attr, "validate")?.map(Validate::Types),
+                    validate: validate(attr, name),
                 },
             ))
         })
@@ -54,20 +127,21 @@ fn attributes(spec: &Map) -> Result<Vec<(String, AttributeSpec)>> {
 
 fn node_spec(spec: &Map) -> Result<NodeSpec> {
     Ok(NodeSpec {
-        content: string(spec, "content")?,
-        marks: string(spec, "marks")?,
-        group: string(spec, "group")?,
+        content: truthy_string(spec, "content")?,
+        marks: marks(spec)?,
+        group: truthy_string(spec, "group")?,
         inline: flag(spec, "inline"),
         atom: flag(spec, "atom"),
         attrs: attributes(spec)?,
-        selectable: optional_flag(spec, "selectable"),
+        selectable: unless_false(spec, "selectable"),
         draggable: flag(spec, "draggable"),
         code: flag(spec, "code"),
-        whitespace: match string(spec, "whitespace")?.as_deref() {
-            None => None,
-            Some("pre") => Some(Whitespace::Pre),
-            Some("normal") => Some(Whitespace::Normal),
-            Some(_) => return Err(invalid("whitespace must be \"pre\" or \"normal\"")),
+        // ProseMirror keeps any truthy value, which parses as `"normal"` does unless it is
+        // `"pre"`.
+        whitespace: match spec.get("whitespace") {
+            value if !js::truthy(value) => None,
+            Some(value) if loosely_equals(value, "pre") => Some(Whitespace::Pre),
+            _ => Some(Whitespace::Normal),
         },
         defining_as_context: flag(spec, "definingAsContext"),
         defining_for_content: flag(spec, "definingForContent"),
@@ -82,13 +156,10 @@ fn node_spec(spec: &Map) -> Result<NodeSpec> {
 fn mark_spec(spec: &Map) -> Result<MarkSpec> {
     Ok(MarkSpec {
         attrs: attributes(spec)?,
-        inclusive: match spec.get("inclusive") {
-            Some(Value::Bool(inclusive)) => Some(*inclusive),
-            _ => None,
-        },
-        excludes: string(spec, "excludes")?,
-        group: string(spec, "group")?,
-        spanning: optional_flag(spec, "spanning"),
+        inclusive: unless_false(spec, "inclusive"),
+        excludes: excludes(spec)?,
+        group: truthy_string(spec, "group")?,
+        spanning: unless_false(spec, "spanning"),
         code: flag(spec, "code"),
     })
 }
@@ -97,9 +168,8 @@ fn mark_spec(spec: &Map) -> Result<MarkSpec> {
 /// data can't keep an object's order, an array of `[name, spec]` pairs.
 fn types<T>(spec: &Map, key: &str, read: fn(&Map) -> Result<T>) -> Result<Vec<(String, T)>> {
     let read_type =
-        |name: &str, type_spec: &Value| Ok((name.to_owned(), read(object(type_spec, name)?)?));
+        |name: &str, type_spec: &Value| Ok((name.to_owned(), read(properties(type_spec, name)?)?));
     match spec.get(key) {
-        None | Some(Value::Null) => Ok(Vec::new()),
         Some(Value::Array(pairs)) => pairs
             .iter()
             .map(|pair| match pair.as_array().map(Vec::as_slice) {
@@ -107,10 +177,15 @@ fn types<T>(spec: &Map, key: &str, read: fn(&Map) -> Result<T>) -> Result<Vec<(S
                 _ => Err(invalid(&format!("{key} must hold [name, spec] pairs"))),
             })
             .collect(),
-        Some(types) => object(types, key)?
-            .iter()
-            .map(|(name, type_spec)| read_type(name, type_spec))
-            .collect(),
+        _ => {
+            let Some(types) = entries(spec, key)? else {
+                return Ok(Vec::new());
+            };
+            types
+                .iter()
+                .map(|(name, type_spec)| read_type(name, type_spec))
+                .collect()
+        }
     }
 }
 
@@ -120,11 +195,16 @@ impl SchemaSpec {
     /// Functions a spec can hold in JavaScript, such as `toDOM` and `leafText`, have no place
     /// here, and other properties are ignored.
     pub fn from_json(json: &Value) -> Result<SchemaSpec> {
-        let spec = object(json, "the spec")?;
+        let spec = json
+            .as_object()
+            .ok_or_else(|| invalid("the spec must be an object"))?;
         Ok(SchemaSpec {
             nodes: types(spec, "nodes", node_spec)?,
             marks: types(spec, "marks", mark_spec)?,
-            top_node: string(spec, "topNode")?,
+            top_node: spec
+                .get("topNode")
+                .filter(|name| js::truthy(Some(name)))
+                .map(js::to_string),
         })
     }
 }

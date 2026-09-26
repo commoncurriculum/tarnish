@@ -1,10 +1,14 @@
 //! The Node.js bridge that runs ProseMirror's own test suites against tarnish.
 //!
 //! JavaScript code never sees this crate's handles: `js/` wraps each in the class ProseMirror
-//! exports, and every call returns the wrapper, which the bridge asks the JavaScript side for so
-//! that one node is always one object. All of ProseMirror's logic runs in tarnish; the bridge
-//! and `js/` only convert arguments and results.
+//! exports and passes the bridge the handle a wrapper keeps in `h`. Every call returns the
+//! wrapper, which the bridge asks the JavaScript side for so that one node is always one
+//! object. All of ProseMirror's logic runs in tarnish; the bridge and `js/` only convert
+//! arguments and results.
 
+// Not `forbid`: every `#[napi]` item registers itself through the ctor crate, whose expansion
+// has an `allow` for this lint that `forbid` rejects.
+#![deny(unsafe_code)]
 // napi registers exported functions only outside test builds, which leaves them unused there.
 #![cfg_attr(test, allow(dead_code))]
 
@@ -19,45 +23,12 @@ mod schema;
 mod slice;
 mod transform;
 
+use napi::bindgen_prelude::Object;
 use napi::{Env, Result};
 use napi_derive::napi;
 
 /// Give the bridge the JavaScript side's wrapping functions and error classes, by name.
 #[napi]
-pub fn register(env: Env, functions: js::Js) -> Result<()> {
-    js::register(env.raw(), functions.0)
-}
-
-/// `FromNapiValue` for an argument that is one of `js/`'s wrappers, read through the handle
-/// in its `h` property. The handle is read as a class instance, not a borrow, which napi only
-/// hands out while it converts a call's own arguments.
-#[macro_export]
-macro_rules! handle_arg {
-    ($arg:ident, $handle:ty, |$h:ident| $extract:expr) => {
-        impl napi::bindgen_prelude::FromNapiValue for $arg {
-            unsafe fn from_napi_value(
-                env: napi::sys::napi_env,
-                value: napi::sys::napi_value,
-            ) -> napi::Result<Self> {
-                let handle = $crate::js::get(env, value, "h")?;
-                let instance = unsafe {
-                    <napi::bindgen_prelude::ClassInstance<$handle> as napi::bindgen_prelude::FromNapiValue>::from_napi_value(env, handle)
-                }?;
-                let $h: &$handle = &instance;
-                Ok($arg($extract))
-            }
-        }
-
-        impl napi::bindgen_prelude::TypeName for $arg {
-            fn type_name() -> &'static str {
-                stringify!($arg)
-            }
-
-            fn value_type() -> napi::ValueType {
-                napi::ValueType::Object
-            }
-        }
-
-        impl napi::bindgen_prelude::ValidateNapiValue for $arg {}
-    };
+pub fn register(env: Env, functions: Object) -> Result<()> {
+    js::register(env, functions)
 }
