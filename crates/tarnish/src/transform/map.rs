@@ -125,7 +125,9 @@ impl StepMap {
         let (old_index, new_index) = if self.inverted { (2, 1) } else { (1, 2) };
         let mut diff = 0;
         self.ranges
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .enumerate()
             .map(move |(index, range)| {
                 let start = range[0] as isize;
