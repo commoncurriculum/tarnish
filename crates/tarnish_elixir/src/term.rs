@@ -4,6 +4,7 @@
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
+use std::ops::Range;
 
 use rustler::types::atom;
 use rustler::types::map::MapIterator;
@@ -49,6 +50,7 @@ pub fn read_json<'a, T>(
         open: RefCell::new(Vec::new()),
         irregular: Cell::new(0),
         irregular_nodes: RefCell::new(HashSet::new()),
+        given: RefCell::new(Vec::new()),
     };
     let read = read(Json {
         term,
@@ -92,6 +94,8 @@ pub struct Reading<'a> {
     irregular: Cell<usize>,
     /// The nodes read from maps that aren't what `toJSON` writes for them, by their ids.
     irregular_nodes: RefCell<HashSet<usize>>,
+    /// The keys of the attributes given the nodes and marks being read.
+    given: RefCell<Vec<Key>>,
 }
 
 /// A map being read as a node or mark, until the reader says what it read.
@@ -106,8 +110,8 @@ struct Open {
     /// The rank of the last mark read, and whether the marks came in order of rank.
     rank: usize,
     sorted: bool,
-    /// The keys of the map read as its `attrs`.
-    attrs: Option<Vec<Key>>,
+    /// Where the keys of the map read as its `attrs` are in [`Reading::given`].
+    attrs: Option<Range<usize>>,
 }
 
 impl<'a> Reading<'a> {
@@ -133,12 +137,19 @@ impl<'a> Reading<'a> {
         if let Some(open) = open.last_mut() {
             parent(open);
         }
-        let given = |given: &Vec<Key>| {
-            given.len() == attrs.len() && attrs.keys().all(|key| given.contains(key))
+        let mut given = self.given.borrow_mut();
+        let given = match closed.attrs.clone() {
+            Some(range) => {
+                let keys = &given[range.clone()];
+                let same = keys.len() == attrs.len() && attrs.keys().all(|key| keys.contains(key));
+                given.truncate(range.start);
+                same
+            }
+            None => attrs.is_empty(),
         };
         closed.size == Some(fields)
             && closed.irregular == self.irregular.get()
-            && (attrs.is_empty() || closed.attrs.as_ref().is_some_and(given))
+            && given
             && more(&closed)
     }
 
@@ -324,7 +335,7 @@ impl<'a, 'r> Json<'a, 'r> {
     }
 
     fn object(self) -> Map {
-        let mut object = Map::new();
+        let mut object = Map::with_capacity(self.term.map_size().unwrap_or(0));
         if !self.reading.count(1) {
             return object;
         }
@@ -489,7 +500,10 @@ impl<'a> js::Json<'a> for Json<'a, '_> {
             Kind::Object => {
                 let attrs = self.object();
                 if let Some(open) = self.reading.open.borrow_mut().last_mut() {
-                    open.attrs = Some(attrs.keys().cloned().collect());
+                    let mut given = self.reading.given.borrow_mut();
+                    let start = given.len();
+                    given.extend(attrs.keys().cloned());
+                    open.attrs = Some(start..given.len());
                 }
                 Given::Object(Cow::Owned(attrs))
             }

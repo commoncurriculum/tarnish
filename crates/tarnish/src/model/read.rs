@@ -33,13 +33,14 @@ impl<'s> Reader<'s> {
     }
 
     pub fn node<'a>(&mut self, json: impl Json<'a>) -> Result<Node> {
-        if !json.truthy() {
-            return Err(Error::Range("Invalid input for Node.fromJSON".into()));
-        }
         // The likeliest first, for a reader that looks each up and stops once it has found as
         // many as the object has.
-        let [name, text, content, marks, attrs] =
-            json.fields(["type", "text", "content", "marks", "attrs"]);
+        let fields = json.fields(["type", "text", "content", "marks", "attrs"]);
+        // Only a value without these fields can be falsy, which ProseMirror refuses first.
+        if fields.iter().all(Option::is_none) && !json.truthy() {
+            return Err(Error::Range("Invalid input for Node.fromJSON".into()));
+        }
+        let [name, text, content, marks, attrs] = fields;
         let marks = match marks.filter(|marks| marks.truthy()) {
             None => Mark::none(),
             Some(marks) => self.marks(marks)?,
