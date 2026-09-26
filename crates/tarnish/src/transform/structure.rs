@@ -252,7 +252,9 @@ pub fn can_split(
     let base_type = match type_after(0) {
         Some(wrapper) => &wrapper.node_type,
         // A `depth` of 0 leaves no node below `base`, whose type JavaScript reads.
-        None if base == resolved.depth() => return Err(js::type_error("type")),
+        None if base == resolved.depth() => {
+            return Err(js::type_error(js::Nullish::Undefined, "type"));
+        }
         None => resolved.node(base + 1).node_type(),
     };
     resolved

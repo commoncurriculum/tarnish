@@ -488,8 +488,8 @@ impl Fitter {
         let to = close.move_to;
         for d in close.depth + 1..=to.depth() {
             let node = to.node(d);
-            // Where nothing fills, JavaScript passes `undefined` on as the node's content,
-            // which `create` takes as empty.
+            // Where nothing fills, JavaScript passes the `null` on as the node's content, which
+            // `create` takes as empty.
             let add = node
                 .node_type()
                 .content_match()
@@ -880,7 +880,7 @@ fn close_fragment(
         fragment = fragment.replace_child(0, first.copy(closed));
     }
     if depth > new_open {
-        let matched = js::non_null(parent, "contentMatchAt")?.content_match_at(0)?;
+        let matched = js::defined(parent, "contentMatchAt")?.content_match_at(0)?;
         let start =
             js::non_null(matched.fill_before(&fragment, false, 0)?, "append")?.append(&fragment);
         let end = js::non_null(

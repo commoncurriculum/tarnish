@@ -1,10 +1,10 @@
-//! Transforms the upstream suites don't reach, each expected to give what prosemirror-transform
-//! 1.12.0 gives.
+//! Transforms the upstream suites don't reach, each expected to give or throw what
+//! prosemirror-transform 1.12.0 gives or throws.
 
 use tarnish::js::json::stringify;
 use tarnish::json;
-use tarnish::transform::{Transform, Wrapper, can_split, replace_step};
-use tarnish::{Node, Schema, Slice, api};
+use tarnish::transform::{Step, Transform, Wrapper, can_split, drop_point, replace_step};
+use tarnish::{Fragment, Node, Schema, Slice, Value, api};
 
 /// A figure's title can't be made up, having an attribute with no default, so nothing fills
 /// the start of a figure before its paragraph.
@@ -46,16 +46,69 @@ fn a_fit_opens_a_node_nothing_fills_empty() {
 }
 
 #[test]
-fn splitting_no_levels_reads_the_type_of_a_node_that_isnt_there() {
+fn reading_what_isnt_there_throws_javascripts_type_error() {
     let schema = schema();
     let doc = doc(&schema);
-    let error = can_split(&doc, 2, 0, &[]).expect_err("a TypeError");
-    assert_eq!(error.class(), "Error");
-    let paragraph = Wrapper {
-        node_type: schema.node_type("paragraph").expect("paragraph"),
+    let end = doc.content().size();
+    let paragraph = schema.node_type("paragraph").expect("paragraph");
+    let text = schema.text("ab", &[]).expect("text");
+    let ab = paragraph
+        .create(None, Fragment::from_node(text), &[])
+        .expect("a paragraph");
+    // Open three levels deep around a paragraph, which has two.
+    let deep = Slice::new(Fragment::from_node(ab), 3, 0);
+    let attr = Step::Attr {
+        pos: end,
+        attr: "level".into(),
+        value: Some(Value::from(2)),
+    };
+    let null = |property: &str| {
+        format!("TypeError: Cannot read properties of null (reading '{property}')")
+    };
+    let cases = [
+        (
+            "canSplit(doc, 2, 0)",
+            can_split(&doc, 2, 0, &[]).map(drop),
+            "TypeError: Cannot read properties of undefined (reading 'type')".to_string(),
+        ),
+        (
+            "tr.clearIncompatible(end, paragraph)",
+            Transform::new(doc.clone())
+                .clear_incompatible(end, &paragraph, None)
+                .map(drop),
+            null("childCount"),
+        ),
+        (
+            "new AttrStep(end, 'level', 2).invert(doc)",
+            attr.invert(&doc).map(drop),
+            null("attrs"),
+        ),
+        (
+            "replaceStep(doc, 1, 1, deep)",
+            replace_step(&doc, 1, 1, &deep).map(drop),
+            null("type"),
+        ),
+        (
+            "dropPoint(doc, 1, deep)",
+            drop_point(&doc, 1, &deep).map(drop),
+            null("content"),
+        ),
+        (
+            "tr.replaceRange(1, 1, deep)",
+            Transform::new(doc.clone())
+                .replace_range(1, 1, &deep)
+                .map(drop),
+            null("content"),
+        ),
+    ];
+    for (call, result, thrown) in cases {
+        assert_eq!(result.expect_err(call).to_string(), thrown, "{call}");
+    }
+    let wrapper = Wrapper {
+        node_type: paragraph,
         attrs: None,
     };
-    assert!(!can_split(&doc, 2, 0, &[Some(paragraph)]).expect("an answer"));
+    assert!(!can_split(&doc, 2, 0, &[Some(wrapper)]).expect("an answer"));
 }
 
 #[test]

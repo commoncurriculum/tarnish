@@ -13,6 +13,7 @@ defmodule Tarnish do
     * `:syntax_error`
     * `:replace_error`
     * `:transform_error`
+    * `:type_error`
     * `:js_error`, for a plain `Error`
 
   A term Jason couldn't encode, such as a tuple, raises `ArgumentError`.

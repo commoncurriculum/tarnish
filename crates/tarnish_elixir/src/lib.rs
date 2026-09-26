@@ -15,6 +15,7 @@ rustler::atoms! {
     syntax_error,
     replace_error,
     transform_error,
+    type_error,
     js_error,
 }
 
@@ -38,6 +39,7 @@ fn failure(env: Env, failed: Error) -> Term {
         Error::Syntax(_) => syntax_error(),
         Error::Replace(_) => replace_error(),
         Error::Transform(_) => transform_error(),
+        Error::Type(_) => type_error(),
         Error::Other(_) | Error::Host => js_error(),
     };
     (error(), (kind, failed.message())).encode(env)
