@@ -84,12 +84,12 @@ pub fn slice_to_debug_string(env: Env, slice: SliceArg) -> Result<String> {
 
 #[napi]
 pub fn slice_to_json(slice: SliceArg) -> Data {
-    Data(slice.0.to_json())
+    Data::of(slice.0.to_json())
 }
 
 #[napi]
 pub fn slice_from_json(env: Env, schema: &SchemaHandle, json: Data) -> Result<Js> {
-    let slice = Slice::from_json(&schema.schema, &json.0).or_throw(&env)?;
+    let slice = Slice::from_json(&schema.schema, json.value()).or_throw(&env)?;
     wrap(env.raw(), &slice).map(Js)
 }
 

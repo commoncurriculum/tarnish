@@ -211,7 +211,7 @@ impl FragmentHandle {
 
     #[napi]
     pub fn to_json(&self) -> Data {
-        Data(self.fragment.to_json())
+        Data::of(self.fragment.to_json())
     }
 }
 
@@ -228,6 +228,6 @@ pub fn fragment_from_array(env: Env, nodes: Vec<NodeArg>) -> Result<Js> {
 
 #[napi]
 pub fn fragment_from_json(env: Env, schema: &SchemaHandle, json: Data) -> Result<Js> {
-    let fragment = Fragment::from_json(&schema.schema, &json.0).or_throw(&env)?;
+    let fragment = Fragment::from_json(&schema.schema, json.value()).or_throw(&env)?;
     wrap(env.raw(), &fragment).map(Js)
 }

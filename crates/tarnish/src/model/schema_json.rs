@@ -2,53 +2,49 @@
 
 use super::schema::{AttributeSpec, MarkSpec, NodeSpec, SchemaSpec, Validate, Whitespace};
 use crate::error::{Error, Result};
-use crate::value::{Object, Value};
+use crate::js;
+use crate::json::{Map, Value};
 
 fn invalid(what: &str) -> Error {
     Error::Range(format!("Invalid schema spec: {what}"))
 }
 
 /// A property that, when set, must be a string.
-fn string(spec: &Object, key: &str) -> Result<Option<String>> {
+fn string(spec: &Map, key: &str) -> Result<Option<String>> {
     match spec.get(key) {
-        None | Some(Value::Undefined | Value::Null) => Ok(None),
-        Some(Value::String(value)) => Ok(Some(value.to_string())),
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value.clone())),
         Some(_) => Err(invalid(&format!("{key} must be a string"))),
     }
 }
 
-fn flag(spec: &Object, key: &str) -> bool {
-    spec.get(key).is_some_and(Value::is_truthy)
+fn flag(spec: &Map, key: &str) -> bool {
+    js::truthy(spec.get(key))
 }
 
-fn optional_flag(spec: &Object, key: &str) -> Option<bool> {
-    match spec.get(key) {
-        None | Some(Value::Undefined) => None,
-        Some(value) => Some(value.is_truthy()),
-    }
+fn optional_flag(spec: &Map, key: &str) -> Option<bool> {
+    spec.get(key).map(|value| js::truthy(Some(value)))
 }
 
-fn object<'a>(value: &'a Value, what: &str) -> Result<&'a Object> {
+fn object<'a>(value: &'a Value, what: &str) -> Result<&'a Map> {
     value
         .as_object()
         .ok_or_else(|| invalid(&format!("{what} must be an object")))
 }
 
-fn attributes(spec: &Object) -> Result<Vec<(String, AttributeSpec)>> {
-    let Some(attrs) = spec.get("attrs") else {
-        return Ok(Vec::new());
+fn attributes(spec: &Map) -> Result<Vec<(String, AttributeSpec)>> {
+    let attrs = match spec.get("attrs") {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(attrs) => object(attrs, "attrs")?,
     };
-    if matches!(attrs, Value::Undefined | Value::Null) {
-        return Ok(Vec::new());
-    }
-    object(attrs, "attrs")?
+    attrs
         .iter()
         .map(|(name, attr)| {
             let attr = object(attr, &format!("attribute {name}"))?;
             Ok((
                 name.to_string(),
                 AttributeSpec {
-                    default: attr.get("default").cloned(),
+                    default: attr.get("default").cloned().map(Some),
                     validate: string(attr, "validate")?.map(Validate::Types),
                 },
             ))
@@ -56,7 +52,7 @@ fn attributes(spec: &Object) -> Result<Vec<(String, AttributeSpec)>> {
         .collect()
 }
 
-fn node_spec(spec: &Object) -> Result<NodeSpec> {
+fn node_spec(spec: &Map) -> Result<NodeSpec> {
     Ok(NodeSpec {
         content: string(spec, "content")?,
         marks: string(spec, "marks")?,
@@ -83,7 +79,7 @@ fn node_spec(spec: &Object) -> Result<NodeSpec> {
     })
 }
 
-fn mark_spec(spec: &Object) -> Result<MarkSpec> {
+fn mark_spec(spec: &Map) -> Result<MarkSpec> {
     Ok(MarkSpec {
         attrs: attributes(spec)?,
         inclusive: match spec.get("inclusive") {
@@ -97,21 +93,32 @@ fn mark_spec(spec: &Object) -> Result<MarkSpec> {
     })
 }
 
-fn types<T>(spec: &Object, key: &str, read: fn(&Object) -> Result<T>) -> Result<Vec<(String, T)>> {
+/// The node or mark types under `key`, in order: an object of each type's spec, or, where the
+/// data can't keep an object's order, an array of `[name, spec]` pairs.
+fn types<T>(spec: &Map, key: &str, read: fn(&Map) -> Result<T>) -> Result<Vec<(String, T)>> {
+    let read_type =
+        |name: &str, type_spec: &Value| Ok((name.to_owned(), read(object(type_spec, name)?)?));
     match spec.get(key) {
-        None | Some(Value::Undefined | Value::Null) => Ok(Vec::new()),
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(pairs)) => pairs
+            .iter()
+            .map(|pair| match pair.as_array().map(Vec::as_slice) {
+                Some([Value::String(name), type_spec]) => read_type(name, type_spec),
+                _ => Err(invalid(&format!("{key} must hold [name, spec] pairs"))),
+            })
+            .collect(),
         Some(types) => object(types, key)?
             .iter()
-            .map(|(name, type_spec)| Ok((name.to_string(), read(object(type_spec, name)?)?)))
+            .map(|(name, type_spec)| read_type(name, type_spec))
             .collect(),
     }
 }
 
 impl SchemaSpec {
-    /// A spec from data: `nodes` and `marks` objects of each type's spec, in order, and
-    /// `topNode`, as ProseMirror's `SchemaSpec` holds them. Functions a spec can hold in
-    /// JavaScript, such as `toDOM` and `leafText`, have no place here, and other properties are
-    /// ignored.
+    /// A spec from data: `nodes` and `marks`, each an object of the types' specs in order or an
+    /// array of `[name, spec]` pairs, and `topNode`, as ProseMirror's `SchemaSpec` holds them.
+    /// Functions a spec can hold in JavaScript, such as `toDOM` and `leafText`, have no place
+    /// here, and other properties are ignored.
     pub fn from_json(json: &Value) -> Result<SchemaSpec> {
         let spec = object(json, "the spec")?;
         Ok(SchemaSpec {

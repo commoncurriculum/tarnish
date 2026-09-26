@@ -7,7 +7,7 @@ use napi::{Env, Result, ValueType, sys};
 use napi_derive::napi;
 use tarnish::{Mark, Marks};
 
-use crate::js::{self, Data, Js};
+use crate::js::{self, AttrsData, Data, Js};
 use crate::schema;
 
 pub struct MarkArg(pub Mark);
@@ -100,8 +100,8 @@ impl MarkHandle {
     }
 
     #[napi]
-    pub fn attrs(&self) -> Data {
-        Data(tarnish::Value::Object(self.mark.attrs().clone()))
+    pub fn attrs(&self) -> AttrsData {
+        AttrsData(self.mark.attrs().clone())
     }
 
     #[napi]
@@ -126,7 +126,7 @@ impl MarkHandle {
 
     #[napi]
     pub fn to_json(&self) -> Data {
-        Data(self.mark.to_json())
+        Data::of(self.mark.to_json())
     }
 }
 

@@ -1,13 +1,12 @@
 //! Slices, and replacing a range of a document with one.
 
-use std::sync::Arc;
-
 use super::fragment::Fragment;
 use super::node::Node;
 use super::resolved_pos::ResolvedPos;
 use super::schema::Schema;
 use crate::error::{Error, Result};
-use crate::value::{Object, Value};
+use crate::js;
+use crate::json::{Map, NULL, Value};
 
 /// A piece cut out of a document: its content, and how deep it is cut open at each end.
 #[derive(Clone, Debug, PartialEq)]
@@ -84,26 +83,27 @@ impl Slice {
         if self.content.size() == 0 {
             return Value::Null;
         }
-        let mut json = Object::with_capacity(3);
-        json.insert("content", self.content.to_json());
+        let mut json = Map::with_capacity(3);
+        json.push("content".into(), self.content.to_json());
         if self.open_start > 0 {
-            json.insert("openStart", Value::Number(self.open_start as f64));
+            json.push("openStart".into(), self.open_start.into());
         }
         if self.open_end > 0 {
-            json.insert("openEnd", Value::Number(self.open_end as f64));
+            json.push("openEnd".into(), self.open_end.into());
         }
-        Value::Object(Arc::new(json))
+        Value::Object(json)
     }
 
     pub fn from_json(schema: &Schema, json: &Value) -> Result<Slice> {
-        if !json.is_truthy() {
+        if !js::truthy(Some(json)) {
             return Ok(Slice::empty());
         }
-        let depth = |value: &Value| match value {
-            value if !value.is_truthy() => Some(0),
-            Value::Number(number) if number.fract() == 0.0 && *number >= 0.0 => {
-                Some(*number as usize)
-            }
+        let depth = |value: Option<&Value>| match value {
+            value if !js::truthy(value) => Some(0),
+            Some(Value::Number(number)) => number
+                .as_f64()
+                .filter(|number| number.fract() == 0.0 && *number >= 0.0)
+                .map(|number| number as usize),
             _ => None,
         };
         let (Some(open_start), Some(open_end)) =
@@ -112,7 +112,7 @@ impl Slice {
             return Err(Error::Range("Invalid input for Slice.fromJSON".into()));
         };
         Ok(Slice::new(
-            Fragment::from_json(schema, json.get("content"))?,
+            Fragment::from_json(schema, json.get("content").unwrap_or(&NULL))?,
             open_start,
             open_end,
         ))
@@ -237,6 +237,7 @@ fn replace_outer(
     slice: &Slice,
     depth: usize,
 ) -> Result<Node> {
+    crate::stack::check()?;
     let index = from.index(depth);
     let node = from.node(depth);
     if index == to.index(depth) && depth < from.depth() - slice.open_start {
@@ -381,6 +382,7 @@ fn replace_three_way(
 }
 
 fn replace_two_way(from: &ResolvedPos, to: &ResolvedPos, depth: usize) -> Result<Fragment> {
+    crate::stack::check()?;
     let mut content = Vec::new();
     add_range(None, Some(from), depth, &mut content);
     if from.depth() > depth {

@@ -114,7 +114,7 @@ static void run_errors(const TarnishSchema *schema) {
 
     error = NULL;
     valid = tarnish_check(schema, "{\"type\":", &error);
-    expect_error("text that isn't JSON", !valid, error, "Error: Invalid JSON");
+    expect_error("text that isn't JSON", !valid, error, "SyntaxError: Invalid JSON");
 
     error = NULL;
     valid = tarnish_map_position(schema, "[]", 0, 1, NULL, &error);

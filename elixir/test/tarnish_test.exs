@@ -7,22 +7,30 @@ defmodule TarnishTest do
   @fixtures Path.expand("../../fixtures/transform.json", __DIR__)
   @external_resource @fixtures
 
-  # A schema's node and mark types are in order, so the specs are read keeping their keys'
-  # order, as lists of pairs.
-  defp ordered(%Jason.OrderedObject{values: []}), do: %{}
+  # A schema's node and mark types are in order, so its spec is read keeping the order of
+  # "nodes" and "marks", as lists of {name, spec} pairs.
+  defp schema_spec(%Jason.OrderedObject{values: values}) do
+    Map.new(values, fn
+      {key, %Jason.OrderedObject{values: types}} when key in ["nodes", "marks"] ->
+        {key, Enum.map(types, fn {name, spec} -> {name, plain(spec)} end)}
 
-  defp ordered(%Jason.OrderedObject{values: values}),
-    do: Enum.map(values, fn {key, value} -> {key, ordered(value)} end)
+      {key, value} ->
+        {key, plain(value)}
+    end)
+  end
 
-  defp ordered(list) when is_list(list), do: Enum.map(list, &ordered/1)
-  defp ordered(other), do: other
+  defp plain(%Jason.OrderedObject{values: values}),
+    do: Map.new(values, fn {key, value} -> {key, plain(value)} end)
+
+  defp plain(list) when is_list(list), do: Enum.map(list, &plain/1)
+  defp plain(other), do: other
 
   setup_all do
     specs = @fixtures |> File.read!() |> Jason.decode!(objects: :ordered_objects)
 
     schemas =
       for spec <- specs["schemas"] do
-        {:ok, schema} = Tarnish.schema(ordered(spec))
+        {:ok, schema} = Tarnish.schema(schema_spec(spec))
         schema
       end
 
@@ -81,6 +89,30 @@ defmodule TarnishTest do
 
     test "a term that isn't JSON", %{schema: schema} do
       assert_raise ArgumentError, fn -> Tarnish.check(schema, {:not, :json}) end
+    end
+  end
+
+  # A dirty scheduler's stack is far too small for these; each call runs on a stack of its own.
+  describe "deeply nested documents" do
+    setup %{schemas: [schema | _]}, do: %{schema: schema}
+
+    defp nested(depth) do
+      quote =
+        Enum.reduce(1..depth, %{"type" => "paragraph"}, fn _, inner ->
+          %{"type" => "blockquote", "content" => [inner]}
+        end)
+
+      %{"type" => "doc", "content" => [quote]}
+    end
+
+    test "convert far deeper than JavaScript's stack takes them", %{schema: schema} do
+      doc = nested(100_000)
+      assert Tarnish.apply_steps(schema, doc, []) == {:ok, doc}
+    end
+
+    test "throw, as JavaScript does, past the stack", %{schema: schema} do
+      assert Tarnish.apply_steps(schema, nested(1_000_000), []) ==
+               {:error, {:range_error, "Maximum call stack size exceeded"}}
     end
   end
 end

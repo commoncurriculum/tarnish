@@ -8,3 +8,10 @@ repository.workspace = true
 
 [dependencies]
 ryu-js = "1"
+compact_str = "0.9"
+json-event-parser = "0.2"
+serde = "1"
+# JSON.parse rounds every number correctly; serde_json does only with float_roundtrip.
+serde_json = { version = "1", features = ["float_roundtrip"] }
+libc = "0.2"
+psm = "0.1"

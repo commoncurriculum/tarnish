@@ -5,10 +5,10 @@ use super::mark::{clear_incompatible, line_breaks};
 use super::step::Step;
 use super::transform::{BlockAttrs, Transform};
 use crate::error::{Error, Result};
+use crate::json::Map;
 use crate::model::{
     Attrs, ContentMatch, Fragment, Mark, Node, NodeRange, NodeType, Slice, Whitespace,
 };
-use crate::value::Object;
 
 /// A node type to wrap content in, and its attributes.
 #[derive(Clone, Debug)]
@@ -297,7 +297,7 @@ pub(crate) fn set_node_markup(
     tr: &mut Transform,
     pos: usize,
     node_type: Option<&NodeType>,
-    attrs: Option<&Object>,
+    attrs: Option<&Map>,
     marks: Option<&[Mark]>,
 ) -> Result<()> {
     let node = tr

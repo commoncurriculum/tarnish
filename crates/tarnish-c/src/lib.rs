@@ -10,12 +10,13 @@
 use std::ffi::{CStr, CString, c_char, c_int};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr;
-use std::sync::Arc;
 
-use tarnish::{Error, Object, Result, Schema, Value, json};
+use tarnish::js::json::stringify;
+use tarnish::{Error, Result, Schema, Value, api, stack};
 
 pub struct TarnishSchema(Schema);
 
+/// `JSON.parse` of the string.
 fn parse(json: *const c_char) -> Result<Value> {
     if json.is_null() {
         return Err(Error::Other("A JSON string was NULL".into()));
@@ -23,34 +24,16 @@ fn parse(json: *const c_char) -> Result<Value> {
     let text = unsafe { CStr::from_ptr(json) }
         .to_str()
         .map_err(|_| Error::Other("A JSON string wasn't UTF-8".into()))?;
-    let parsed: serde_json::Value = serde_json::from_str(text)
-        .map_err(|error| Error::Other(format!("Invalid JSON: {error}")))?;
-    Ok(value(parsed))
-}
-
-fn value(json: serde_json::Value) -> Value {
-    match json {
-        serde_json::Value::Null => Value::Null,
-        serde_json::Value::Bool(value) => Value::Bool(value),
-        serde_json::Value::Number(number) => Value::Number(number.as_f64().unwrap_or(f64::NAN)),
-        serde_json::Value::String(text) => Value::String(text.into()),
-        serde_json::Value::Array(items) => Value::Array(items.into_iter().map(value).collect()),
-        serde_json::Value::Object(entries) => Value::Object(Arc::new(
-            entries
-                .into_iter()
-                .map(|(key, item)| (Arc::from(key), value(item)))
-                .collect::<Object>(),
-        )),
-    }
+    tarnish::json::from_str(text).map_err(|_| Error::Syntax("Invalid JSON".into()))
 }
 
 fn string(text: String) -> *mut c_char {
     CString::new(text).map_or(ptr::null_mut(), CString::into_raw)
 }
 
-/// Run `f`, catching panics, and report an error through `error`.
+/// Run `f` on a stack of its own, catching panics, and report an error through `error`.
 fn run<T>(error: *mut *mut c_char, failed: T, f: impl FnOnce() -> Result<T>) -> T {
-    let outcome = catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| {
+    let outcome = catch_unwind(AssertUnwindSafe(|| stack::run(f))).unwrap_or_else(|_| {
         Err(Error::Other(
             "tarnish panicked; this is a bug in tarnish".into(),
         ))
@@ -81,7 +64,7 @@ pub unsafe extern "C" fn tarnish_schema_new(
     error: *mut *mut c_char,
 ) -> *mut TarnishSchema {
     run(error, ptr::null_mut(), || {
-        let schema = json::schema(&parse(spec_json)?)?;
+        let schema = api::schema(&parse(spec_json)?)?;
         Ok(Box::into_raw(Box::new(TarnishSchema(schema))))
     })
 }
@@ -106,7 +89,7 @@ pub unsafe extern "C" fn tarnish_check(
     error: *mut *mut c_char,
 ) -> bool {
     run(error, false, || {
-        json::check(schema(schema_ptr)?, &parse(doc_json)?)?;
+        api::check(schema(schema_ptr)?, &parse(doc_json)?)?;
         Ok(true)
     })
 }
@@ -122,8 +105,8 @@ pub unsafe extern "C" fn tarnish_apply_steps(
     error: *mut *mut c_char,
 ) -> *mut c_char {
     run(error, ptr::null_mut(), || {
-        let doc = json::apply_steps(schema(schema_ptr)?, &parse(doc_json)?, &parse(steps_json)?)?;
-        Ok(string(doc.to_json_string()))
+        let doc = api::apply_steps(schema(schema_ptr)?, &parse(doc_json)?, &parse(steps_json)?)?;
+        Ok(string(stringify(&doc)))
     })
 }
 
@@ -138,9 +121,8 @@ pub unsafe extern "C" fn tarnish_invert_steps(
     error: *mut *mut c_char,
 ) -> *mut c_char {
     run(error, ptr::null_mut(), || {
-        let steps =
-            json::invert_steps(schema(schema_ptr)?, &parse(doc_json)?, &parse(steps_json)?)?;
-        Ok(string(steps.to_json_string()))
+        let steps = api::invert_steps(schema(schema_ptr)?, &parse(doc_json)?, &parse(steps_json)?)?;
+        Ok(string(stringify(&steps)))
     })
 }
 
@@ -160,7 +142,7 @@ pub unsafe extern "C" fn tarnish_map_position(
         if mapped.is_null() {
             return Err(Error::Other("The pointer to map into was NULL".into()));
         }
-        let pos = json::map_position(schema(schema_ptr)?, &parse(steps_json)?, pos, assoc)?;
+        let pos = api::map_position(schema(schema_ptr)?, &parse(steps_json)?, pos, assoc)?;
         unsafe { *mapped = pos };
         Ok(true)
     })

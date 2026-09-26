@@ -2,12 +2,12 @@
 //! values into [`Value`]s and back.
 
 use crate::error::{Error, Result};
+use crate::json::Value;
 use crate::model::{Node, Schema, SchemaSpec};
 use crate::transform::{Mappable, Mapping, Step, Transform};
-use crate::value::Value;
 
-/// A schema from its spec: `nodes` and `marks`, each an object of the types' specs in order,
-/// and `topNode`.
+/// A schema from its spec: `nodes` and `marks`, each an object of the types' specs in order or
+/// an array of `[name, spec]` pairs, and `topNode`.
 pub fn schema(spec: &Value) -> Result<Schema> {
     Schema::new(SchemaSpec::from_json(spec)?)
 }
@@ -32,7 +32,7 @@ pub fn invert_steps(schema: &Schema, doc: &Value, steps: &Value) -> Result<Value
         .rev()
         .map(|(step, before)| Ok(step.invert(before)?.to_json()))
         .collect::<Result<Vec<_>>>()?;
-    Ok(Value::Array(inverted.into()))
+    Ok(Value::Array(inverted))
 }
 
 /// A position mapped through the changes the steps make. With `assoc` below zero, a position

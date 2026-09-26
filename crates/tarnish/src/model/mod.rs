@@ -1,5 +1,6 @@
 //! ProseMirror's document model: schemas, nodes, marks, fragments, slices and positions.
 
+mod compare_deep;
 mod content;
 mod diff;
 mod fragment;

@@ -9,17 +9,19 @@ use super::fragment::Fragment;
 use super::mark::{Mark, Marks};
 use super::node::Node;
 use crate::error::{Error, Result};
+use crate::js;
+use crate::json::{Key, Map, Value};
 use crate::text::Text;
-use crate::value::{Object, Value};
 
-/// A node's or mark's attributes.
-pub type Attrs = Arc<Object>;
+/// A node's or mark's attributes, shared by the nodes and marks that have the same ones.
+pub type Attrs = Arc<Map>;
 
 /// A function the host gives a node spec, such as `leafText`.
 pub type NodeHook<T> = Arc<dyn Fn(&Node) -> Result<T> + Send + Sync>;
 
-/// A function that raises an error for an attribute value it doesn't accept.
-pub type ValidateHook = Arc<dyn Fn(&Value) -> Result<()> + Send + Sync>;
+/// A function that raises an error for an attribute value it doesn't accept, `None` being
+/// `undefined`.
+pub type ValidateHook = Arc<dyn Fn(Option<&Value>) -> Result<()> + Send + Sync>;
 
 /// What [`Schema::new`] builds a schema from. Its node and mark types are in order: the order
 /// decides which comes first in a group, and how marks sort in a set.
@@ -65,8 +67,9 @@ pub struct MarkSpec {
 
 #[derive(Clone, Default)]
 pub struct AttributeSpec {
-    /// The default, when the spec has one. `Some(Value::Undefined)` is a default of `undefined`.
-    pub default: Option<Value>,
+    /// The default, when the spec has one. `Some(None)` is a default of `undefined`, which
+    /// leaves the attribute out, as `JSON.stringify` does.
+    pub default: Option<Option<Value>>,
     pub validate: Option<Validate>,
 }
 
@@ -86,7 +89,7 @@ pub enum Whitespace {
 /// An attribute of a node or mark type.
 #[derive(Clone)]
 pub(crate) struct Attribute {
-    pub default: Option<Value>,
+    pub default: Option<Option<Value>>,
     pub validate: Option<ValidateHook>,
 }
 
@@ -106,8 +109,8 @@ impl Attribute {
 fn validate_type(type_name: &str, attr_name: &str, types: &str) -> ValidateHook {
     let types: Vec<String> = types.split('|').map(str::to_owned).collect();
     let (type_name, attr_name) = (type_name.to_owned(), attr_name.to_owned());
-    Arc::new(move |value: &Value| {
-        let name = value.type_name();
+    Arc::new(move |value: Option<&Value>| {
+        let name = js::type_of(value);
         if types.iter().any(|allowed| allowed == name) {
             return Ok(());
         }
@@ -118,12 +121,12 @@ fn validate_type(type_name: &str, attr_name: &str, types: &str) -> ValidateHook 
     })
 }
 
-fn init_attrs(type_name: &str, specs: &[(String, AttributeSpec)]) -> Vec<(Arc<str>, Attribute)> {
+fn init_attrs(type_name: &str, specs: &[(String, AttributeSpec)]) -> Vec<(Key, Attribute)> {
     specs
         .iter()
         .map(|(name, spec)| {
             (
-                Arc::from(name.as_str()),
+                Key::from(name.as_str()),
                 Attribute::new(type_name, name, spec),
             )
         })
@@ -131,23 +134,25 @@ fn init_attrs(type_name: &str, specs: &[(String, AttributeSpec)]) -> Vec<(Arc<st
 }
 
 /// The attributes' defaults, when every attribute has one.
-fn default_attrs(attrs: &[(Arc<str>, Attribute)]) -> Option<Attrs> {
-    let mut defaults = Object::with_capacity(attrs.len());
+fn default_attrs(attrs: &[(Key, Attribute)]) -> Option<Attrs> {
+    let mut defaults = Map::with_capacity(attrs.len());
     for (name, attr) in attrs {
-        defaults.insert(name.clone(), attr.default.clone()?);
+        if let Some(value) = attr.default.clone()? {
+            defaults.push(name.clone(), value);
+        }
     }
     Some(Arc::new(defaults))
 }
 
 /// `given` of `None` is JavaScript's `null`, and `null && null[name]` is `null`: every attribute
 /// then gets `null`, required or not.
-fn compute_attrs(attrs: &[(Arc<str>, Attribute)], given: Option<&Object>) -> Result<Attrs> {
-    let mut built = Object::with_capacity(attrs.len());
+fn compute_attrs(attrs: &[(Key, Attribute)], given: Option<&Map>) -> Result<Attrs> {
+    let mut built = Map::with_capacity(attrs.len());
     for (name, attr) in attrs {
         let value = match given.map(|given| given.get(name)) {
-            None => Value::Null,
-            Some(Some(value)) if !matches!(value, Value::Undefined) => value.clone(),
-            Some(_) => match &attr.default {
+            None => Some(Value::Null),
+            Some(Some(value)) => Some(value.clone()),
+            Some(None) => match &attr.default {
                 Some(default) => default.clone(),
                 None => {
                     return Err(Error::Range(format!(
@@ -156,18 +161,15 @@ fn compute_attrs(attrs: &[(Arc<str>, Attribute)], given: Option<&Object>) -> Res
                 }
             },
         };
-        built.insert(name.clone(), value);
+        if let Some(value) = value {
+            built.push(name.clone(), value);
+        }
     }
     Ok(Arc::new(built))
 }
 
-fn check_attrs(
-    attrs: &[(Arc<str>, Attribute)],
-    values: &Object,
-    kind: &str,
-    name: &str,
-) -> Result<()> {
-    for (attr, _) in values.iter() {
+fn check_attrs(attrs: &[(Key, Attribute)], values: &Map, kind: &str, name: &str) -> Result<()> {
+    for attr in values.keys() {
         if !attrs.iter().any(|(known, _)| known == attr) {
             return Err(Error::Range(format!(
                 "Unsupported attribute {attr} for {kind} of type {name}"
@@ -176,7 +178,7 @@ fn check_attrs(
     }
     for (attr_name, attr) in attrs {
         if let Some(validate) = &attr.validate {
-            validate(values.get(attr_name).unwrap_or(&Value::Undefined))?;
+            validate(values.get(attr_name))?;
         }
     }
     Ok(())
@@ -186,7 +188,7 @@ pub(crate) struct NodeTypeData {
     pub name: Arc<str>,
     pub spec: NodeSpec,
     pub groups: Vec<String>,
-    pub attrs: Vec<(Arc<str>, Attribute)>,
+    pub attrs: Vec<(Key, Attribute)>,
     pub default_attrs: Option<Attrs>,
     pub is_block: bool,
     pub is_text: bool,
@@ -209,7 +211,7 @@ impl NodeTypeData {
 pub(crate) struct MarkTypeData {
     pub name: Arc<str>,
     pub spec: MarkSpec,
-    pub attrs: Vec<(Arc<str>, Attribute)>,
+    pub attrs: Vec<(Key, Attribute)>,
     pub default_attrs: Option<Attrs>,
     pub excluded: Vec<usize>,
 }
@@ -444,7 +446,7 @@ impl Schema {
     pub fn node(
         &self,
         node_type: &NodeType,
-        attrs: Option<&Object>,
+        attrs: Option<&Map>,
         content: Fragment,
         marks: &[Mark],
     ) -> Result<Node> {
@@ -469,7 +471,7 @@ impl Schema {
     }
 
     /// Create a mark, as `schema.mark(type, attrs)`.
-    pub fn mark(&self, mark_type: &MarkType, attrs: Option<&Object>) -> Result<Mark> {
+    pub fn mark(&self, mark_type: &MarkType, attrs: Option<&Map>) -> Result<Mark> {
         mark_type.create(attrs)
     }
 }
@@ -621,19 +623,19 @@ impl NodeType {
         self.data().default_attrs.as_ref()
     }
 
-    /// The names of the type's attributes, and their defaults.
-    pub fn attr_defaults(&self) -> impl Iterator<Item = (&str, Option<&Value>)> {
+    /// The names of the type's attributes, and their defaults as [`AttributeSpec`] holds them.
+    pub fn attr_defaults(&self) -> impl Iterator<Item = (&str, Option<Option<&Value>>)> {
         self.data()
             .attrs
             .iter()
-            .map(|(name, attr)| (&**name, attr.default.as_ref()))
+            .map(|(name, attr)| (name.as_str(), attr.default.as_ref().map(Option::as_ref)))
     }
 
     pub fn compatible_content(&self, other: &NodeType) -> bool {
         self == other || self.content_match().compatible(&other.content_match())
     }
 
-    pub fn compute_attrs(&self, attrs: Option<&Object>) -> Result<Attrs> {
+    pub fn compute_attrs(&self, attrs: Option<&Map>) -> Result<Attrs> {
         match (attrs, &self.data().default_attrs) {
             (None, Some(defaults)) => Ok(defaults.clone()),
             _ => compute_attrs(&self.data().attrs, attrs),
@@ -641,12 +643,7 @@ impl NodeType {
     }
 
     /// Create a node of this type, as `NodeType.create`.
-    pub fn create(
-        &self,
-        attrs: Option<&Object>,
-        content: Fragment,
-        marks: &[Mark],
-    ) -> Result<Node> {
+    pub fn create(&self, attrs: Option<&Map>, content: Fragment, marks: &[Mark]) -> Result<Node> {
         if self.is_text() {
             return Err(Error::Other(
                 "NodeType.create can't construct text nodes".into(),
@@ -663,7 +660,7 @@ impl NodeType {
     /// [`create`](Self::create), checking the content fits the type.
     pub fn create_checked(
         &self,
-        attrs: Option<&Object>,
+        attrs: Option<&Map>,
         content: Fragment,
         marks: &[Mark],
     ) -> Result<Node> {
@@ -680,7 +677,7 @@ impl NodeType {
     /// them to fit. `None` when no such nodes make it fit.
     pub fn create_and_fill(
         &self,
-        attrs: Option<&Object>,
+        attrs: Option<&Map>,
         content: Fragment,
         marks: &[Mark],
     ) -> Result<Option<Node>> {
@@ -735,7 +732,7 @@ impl NodeType {
         )))
     }
 
-    pub fn check_attrs(&self, attrs: &Object) -> Result<()> {
+    pub fn check_attrs(&self, attrs: &Map) -> Result<()> {
         check_attrs(&self.data().attrs, attrs, "node", self.name())
     }
 
@@ -828,15 +825,15 @@ impl MarkType {
         self.data().default_attrs.as_ref()
     }
 
-    pub fn attr_defaults(&self) -> impl Iterator<Item = (&str, Option<&Value>)> {
+    pub fn attr_defaults(&self) -> impl Iterator<Item = (&str, Option<Option<&Value>>)> {
         self.data()
             .attrs
             .iter()
-            .map(|(name, attr)| (&**name, attr.default.as_ref()))
+            .map(|(name, attr)| (name.as_str(), attr.default.as_ref().map(Option::as_ref)))
     }
 
     /// Create a mark of this type, filling in attributes' defaults.
-    pub fn create(&self, attrs: Option<&Object>) -> Result<Mark> {
+    pub fn create(&self, attrs: Option<&Map>) -> Result<Mark> {
         let attrs = match (attrs, &self.data().default_attrs) {
             (None, Some(defaults)) => defaults.clone(),
             _ => compute_attrs(&self.data().attrs, attrs)?,
@@ -866,7 +863,7 @@ impl MarkType {
         set.iter().find(|mark| mark.mark_type() == self)
     }
 
-    pub fn check_attrs(&self, attrs: &Object) -> Result<()> {
+    pub fn check_attrs(&self, attrs: &Map) -> Result<()> {
         check_attrs(&self.data().attrs, attrs, "mark", self.name())
     }
 

@@ -8,6 +8,9 @@
  * `error` isn't NULL, sets `*error` to "Class: message", the class naming the error
  * ProseMirror throws (RangeError, SyntaxError, ReplaceError, TransformError or Error). Free
  * every string the library returns, errors included, with tarnish_free.
+ *
+ * Each call runs on a stack of its own, so a caller's stack size doesn't matter: a document
+ * nested too deeply for even that fails with "RangeError: Maximum call stack size exceeded".
  */
 #ifndef TARNISH_H
 #define TARNISH_H
@@ -23,7 +26,8 @@ typedef struct TarnishSchema TarnishSchema;
 
 /*
  * A schema from its spec: an object of "nodes" and "marks", each an object of the types'
- * specs in order, and "topNode". Free it with tarnish_schema_free.
+ * specs in order or an array of [name, spec] pairs, and "topNode". Free it with
+ * tarnish_schema_free.
  */
 TarnishSchema *tarnish_schema_new(const char *spec_json, char **error);
 

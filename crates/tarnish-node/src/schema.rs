@@ -10,7 +10,7 @@ use tarnish::{
 };
 
 use crate::fragment::FragmentArg;
-use crate::js::{self, Data, Hook, Js, OrThrow};
+use crate::js::{self, AttrsData, Data, Hook, Js, OrThrow};
 use crate::mark::{self, MarkArg, MarkSetArg};
 use crate::node;
 
@@ -57,8 +57,8 @@ fn attributes(env: sys::napi_env, spec: sys::napi_value) -> Result<Vec<(String, 
             let validate = match js::get_string(env, attr, "validate")? {
                 Some(types) => Some(Validate::Types(types)),
                 None => hook(env, attr, "validate")?.map(|hook| {
-                    Validate::Hook(Arc::new(move |value: &tarnish::Value| {
-                        hook.call(|env| Ok(vec![js::value_to_js(env, value)?]))
+                    Validate::Hook(Arc::new(move |value: Option<&tarnish::Value>| {
+                        hook.call(|env| Ok(vec![js::optional_to_js(env, value)?]))
                             .map(|_| ())
                     }))
                 }),
@@ -197,13 +197,13 @@ impl SchemaHandle {
 
     #[napi]
     pub fn node_from_json(&self, env: Env, json: Data) -> Result<Js> {
-        let node = tarnish::Node::from_json(&self.schema, &json.0).or_throw(&env)?;
+        let node = tarnish::Node::from_json(&self.schema, json.value()).or_throw(&env)?;
         node::wrap(env.raw(), &node).map(Js)
     }
 
     #[napi]
     pub fn mark_from_json(&self, env: Env, json: Data) -> Result<Js> {
-        let mark = tarnish::Mark::from_json(&self.schema, &json.0).or_throw(&env)?;
+        let mark = tarnish::Mark::from_json(&self.schema, json.value()).or_throw(&env)?;
         mark::wrap(env.raw(), &mark).map(Js)
     }
 
@@ -246,10 +246,6 @@ crate::handle_arg!(NodeTypeArg, NodeTypeHandle, |handle| handle
 #[napi]
 pub struct NodeTypeHandle {
     pub(crate) node_type: NodeType,
-}
-
-fn attrs_arg(attrs: Option<Data>) -> Option<tarnish::Value> {
-    attrs.map(|attrs| attrs.0)
 }
 
 #[napi]
@@ -298,9 +294,9 @@ impl NodeTypeHandle {
     }
 
     #[napi(getter)]
-    pub fn default_attrs(&self) -> Option<Data> {
+    pub fn default_attrs(&self) -> Option<AttrsData> {
         let defaults = self.node_type.default_attrs()?;
-        Some(Data(tarnish::Value::Object(defaults.clone())))
+        Some(AttrsData(defaults.clone()))
     }
 
     /// The indexes of the marks allowed in the type's nodes, `null` for all.
@@ -321,13 +317,12 @@ impl NodeTypeHandle {
     }
 
     #[napi]
-    pub fn compute_attrs(&self, env: Env, attrs: Option<Data>) -> Result<Data> {
-        let attrs = attrs_arg(attrs);
+    pub fn compute_attrs(&self, env: Env, attrs: Option<Data>) -> Result<AttrsData> {
         let computed = self
             .node_type
-            .compute_attrs(attrs.as_ref().and_then(|a| a.as_attrs()))
+            .compute_attrs(attrs.as_ref().and_then(Data::attrs))
             .or_throw(&env)?;
-        Ok(Data(tarnish::Value::Object(computed)))
+        Ok(AttrsData(computed))
     }
 
     #[napi]
@@ -338,8 +333,7 @@ impl NodeTypeHandle {
         content: FragmentArg,
         marks: Option<Vec<MarkArg>>,
     ) -> Result<Js> {
-        let attrs = attrs_arg(attrs);
-        let attrs = attrs.as_ref().and_then(|a| a.as_attrs());
+        let attrs = attrs.as_ref().and_then(Data::attrs);
         let node = self
             .node_type
             .create(attrs, content.0, &mark::list(marks))
@@ -355,8 +349,7 @@ impl NodeTypeHandle {
         content: FragmentArg,
         marks: Option<Vec<MarkArg>>,
     ) -> Result<Js> {
-        let attrs = attrs_arg(attrs);
-        let attrs = attrs.as_ref().and_then(|a| a.as_attrs());
+        let attrs = attrs.as_ref().and_then(Data::attrs);
         let node = self
             .node_type
             .create_checked(attrs, content.0, &mark::list(marks))
@@ -372,8 +365,7 @@ impl NodeTypeHandle {
         content: FragmentArg,
         marks: Option<Vec<MarkArg>>,
     ) -> Result<Option<Js>> {
-        let attrs = attrs_arg(attrs);
-        let attrs = attrs.as_ref().and_then(|a| a.as_attrs());
+        let attrs = attrs.as_ref().and_then(Data::attrs);
         let node = self
             .node_type
             .create_and_fill(attrs, content.0, &mark::list(marks))
@@ -394,7 +386,7 @@ impl NodeTypeHandle {
 
     #[napi]
     pub fn check_attrs(&self, env: Env, attrs: Data) -> Result<()> {
-        let attrs = attrs.0.as_attrs().cloned().unwrap_or_default();
+        let attrs = attrs.attrs().cloned().unwrap_or_default();
         self.node_type.check_attrs(&attrs).or_throw(&env)
     }
 
@@ -439,9 +431,9 @@ impl MarkTypeHandle {
     }
 
     #[napi(getter)]
-    pub fn default_attrs(&self) -> Option<Data> {
+    pub fn default_attrs(&self) -> Option<AttrsData> {
         let defaults = self.mark_type.default_attrs()?;
-        Some(Data(tarnish::Value::Object(defaults.clone())))
+        Some(AttrsData(defaults.clone()))
     }
 
     /// The indexes of the mark types this one excludes.
@@ -456,10 +448,9 @@ impl MarkTypeHandle {
 
     #[napi]
     pub fn create(&self, env: Env, attrs: Option<Data>) -> Result<Js> {
-        let attrs = attrs_arg(attrs);
         let mark = self
             .mark_type
-            .create(attrs.as_ref().and_then(|a| a.as_attrs()))
+            .create(attrs.as_ref().and_then(Data::attrs))
             .or_throw(&env)?;
         mark::wrap(env.raw(), &mark).map(Js)
     }
@@ -480,7 +471,7 @@ impl MarkTypeHandle {
 
     #[napi]
     pub fn check_attrs(&self, env: Env, attrs: Data) -> Result<()> {
-        let attrs = attrs.0.as_attrs().cloned().unwrap_or_default();
+        let attrs = attrs.attrs().cloned().unwrap_or_default();
         self.mark_type.check_attrs(&attrs).or_throw(&env)
     }
 

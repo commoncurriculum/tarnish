@@ -11,7 +11,7 @@ use tarnish::transform::{
     BlockAttrs, MapResult, Mappable, Mapping, MarkMatch, Step, StepMap, StepResult, Transform,
     Wrapper,
 };
-use tarnish::{Attrs, Mark, MarkType, NodeRange, Value};
+use tarnish::{Attrs, Mark, MarkType, NodeRange};
 
 use crate::content::ContentMatchArg;
 use crate::fragment::FragmentArg;
@@ -121,11 +121,12 @@ pub fn wrap_step(env: sys::napi_env, step: &Step) -> Result<sys::napi_value> {
         Step::Attr { pos, attr, value } => args.extend([
             number(env, *pos)?,
             js::string(env, attr)?,
-            js::value_to_js(env, value)?,
+            js::optional_to_js(env, value.as_ref())?,
         ]),
-        Step::DocAttr { attr, value } => {
-            args.extend([js::string(env, attr)?, js::value_to_js(env, value)?])
-        }
+        Step::DocAttr { attr, value } => args.extend([
+            js::string(env, attr)?,
+            js::optional_to_js(env, value.as_ref())?,
+        ]),
     }
     js::call_registered(env, "makeStep", &args)
 }
@@ -518,12 +519,12 @@ pub fn step_merge(env: Env, step: StepArg, other: Js) -> Result<Js> {
 
 #[napi]
 pub fn step_to_json(step: StepArg) -> Data {
-    Data(step.0.to_json())
+    Data::of(step.0.to_json())
 }
 
 #[napi]
 pub fn step_from_json(env: Env, schema: &SchemaHandle, json: Data) -> Result<Js> {
-    let step = Step::from_json(&schema.schema, &json.0).or_throw(&env)?;
+    let step = Step::from_json(&schema.schema, json.value()).or_throw(&env)?;
     wrap_step(env.raw(), &step).map(Js)
 }
 
@@ -549,9 +550,7 @@ fn node_range(env: sys::napi_env, value: sys::napi_value) -> Result<NodeRange> {
 
 fn attrs_of(env: sys::napi_env, value: sys::napi_value) -> Result<Option<Attrs>> {
     let value = js::value_from_js(env, value)?;
-    Ok(value
-        .as_attrs()
-        .map(|attrs| std::sync::Arc::new(attrs.clone())))
+    Ok(tarnish::js::attrs(value.as_ref()).map(|attrs| std::sync::Arc::new(attrs.clone())))
 }
 
 /// A `{type, attrs}` wrapper of JavaScript's, `None` for a falsy entry.
@@ -985,7 +984,7 @@ pub fn find_wrapping(
         js::check(unsafe { sys::napi_create_object(raw, &mut object) })?;
         let node_type = crate::schema::wrap_node_type(raw, &wrapper.node_type)?;
         let attrs = match &wrapper.attrs {
-            Some(attrs) => js::value_to_js(raw, &Value::Object(attrs.clone()))?,
+            Some(attrs) => js::attrs_to_js(raw, attrs)?,
             None => js::null(raw)?,
         };
         for (key, value) in [("type", node_type), ("attrs", attrs)] {

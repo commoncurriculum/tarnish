@@ -5,10 +5,10 @@ use super::step::{Step, StepResult};
 use super::structure::{self, Wrapper};
 use super::{mark, replace};
 use crate::error::{Error, Result};
+use crate::json::{Map, Value};
 use crate::model::{
     Attrs, ContentMatch, Fragment, Mark, MarkType, Node, NodeRange, NodeType, Slice,
 };
-use crate::value::{Object, Value};
 
 /// A mark, or all marks of a type.
 #[derive(Clone, Copy)]
@@ -20,7 +20,7 @@ pub enum MarkMatch<'a> {
 /// The attributes `set_block_type` gives each textblock: the same for all, or from a function
 /// of the old block.
 pub enum BlockAttrs<'a> {
-    Fixed(Option<&'a Object>),
+    Fixed(Option<&'a Map>),
     Hook(&'a mut dyn FnMut(&Node) -> Result<Option<Attrs>>),
 }
 
@@ -190,18 +190,19 @@ impl Transform {
         &mut self,
         pos: usize,
         node_type: Option<&NodeType>,
-        attrs: Option<&Object>,
+        attrs: Option<&Map>,
         marks: Option<&[Mark]>,
     ) -> Result<&mut Self> {
         structure::set_node_markup(self, pos, node_type, attrs, marks)?;
         Ok(self)
     }
 
+    /// Sets an attribute of the node at `pos`, `None` being `undefined`.
     pub fn set_node_attribute(
         &mut self,
         pos: usize,
         attr: &str,
-        value: Value,
+        value: Option<Value>,
     ) -> Result<&mut Self> {
         self.step(Step::Attr {
             pos,
@@ -210,7 +211,7 @@ impl Transform {
         })
     }
 
-    pub fn set_doc_attribute(&mut self, attr: &str, value: Value) -> Result<&mut Self> {
+    pub fn set_doc_attribute(&mut self, attr: &str, value: Option<Value>) -> Result<&mut Self> {
         self.step(Step::DocAttr {
             attr: attr.to_owned(),
             value,

@@ -5,7 +5,7 @@ use napi_derive::napi;
 use tarnish::{ChildAt, Node, Text};
 
 use crate::fragment::{self, FragmentArg};
-use crate::js::{self, Data, Js, JsText, OrThrow};
+use crate::js::{self, AttrsData, Data, Js, JsText, OrThrow};
 use crate::mark::{self, MarkArg};
 use crate::schema::{self, MarkTypeArg, NodeTypeArg};
 use crate::slice::{self, SliceArg};
@@ -115,8 +115,8 @@ impl NodeHandle {
     }
 
     #[napi]
-    pub fn attrs(&self) -> Data {
-        Data(tarnish::Value::Object(self.node.attrs().clone()))
+    pub fn attrs(&self) -> AttrsData {
+        AttrsData(self.node.attrs().clone())
     }
 
     #[napi]
@@ -192,8 +192,7 @@ impl NodeHandle {
         attrs: Option<Data>,
         marks: Option<Vec<MarkArg>>,
     ) -> bool {
-        let attrs = attrs.map(|attrs| attrs.0);
-        let attrs = attrs.as_ref().and_then(|attrs| attrs.as_attrs());
+        let attrs = attrs.as_ref().and_then(Data::attrs);
         let marks = marks.map(|marks| mark::list(Some(marks)));
         self.node.has_markup(&node_type.0, attrs, marks.as_deref())
     }
@@ -344,6 +343,6 @@ impl NodeHandle {
 
     #[napi]
     pub fn to_json(&self) -> Data {
-        Data(self.node.to_json())
+        Data::of(self.node.to_json())
     }
 }

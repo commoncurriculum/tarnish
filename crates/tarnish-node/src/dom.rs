@@ -329,13 +329,15 @@ fn attrs_result(env: sys::napi_env, result: sys::napi_value) -> Result<Option<Op
     }
     let value = js::value_from_js(env, result)?;
     Ok(Some(Some(Arc::new(
-        value.as_attrs().cloned().unwrap_or_default(),
+        tarnish::js::attrs(value.as_ref())
+            .cloned()
+            .unwrap_or_default(),
     ))))
 }
 
 fn attrs(env: sys::napi_env, rule: sys::napi_value) -> Result<Option<Attrs>> {
     let value = js::value_from_js(env, js::get(env, rule, "attrs")?)?;
-    Ok(value.as_attrs().map(|attrs| Arc::new(attrs.clone())))
+    Ok(tarnish::js::attrs(value.as_ref()).map(|attrs| Arc::new(attrs.clone())))
 }
 
 /// A parse rule of JavaScript's, `None` when it is neither a tag rule nor a style rule.
@@ -700,7 +702,9 @@ fn spec(env: sys::napi_env, value: sys::napi_value) -> Result<DomSpec<JsNode>> {
             }));
         }
     }
-    Ok(DomSpec::Value(js::value_from_js(env, value)?))
+    Ok(DomSpec::Value(
+        js::value_from_js(env, value)?.unwrap_or(Value::Null),
+    ))
 }
 
 #[napi(object)]

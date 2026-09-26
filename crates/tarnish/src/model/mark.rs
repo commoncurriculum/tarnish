@@ -3,9 +3,11 @@
 use std::fmt;
 use std::sync::{Arc, LazyLock};
 
+use super::compare_deep::objects_equal;
 use super::schema::{Attrs, MarkType, Schema};
 use crate::error::{Error, Result};
-use crate::value::{Object, Value, objects_equal};
+use crate::js;
+use crate::json::{Map, Value};
 
 /// A set of marks, sorted by their types' rank.
 pub type Marks = Arc<[Mark]>;
@@ -110,23 +112,23 @@ impl Mark {
     }
 
     pub fn to_json(&self) -> Value {
-        let mut json = Object::with_capacity(2);
-        json.insert("type", Value::String(self.mark_type().name().into()));
+        let mut json = Map::with_capacity(2);
+        json.push("type".into(), Value::String(self.mark_type().name().into()));
         if !self.attrs().is_empty() {
-            json.insert("attrs", Value::Object(self.attrs().clone()));
+            json.push("attrs".into(), Value::Object((**self.attrs()).clone()));
         }
-        Value::Object(Arc::new(json))
+        Value::Object(json)
     }
 
     pub fn from_json(schema: &Schema, json: &Value) -> Result<Mark> {
-        if !json.is_truthy() {
+        if !js::truthy(Some(json)) {
             return Err(Error::Range("Invalid input for Mark.fromJSON".into()));
         }
-        let name = json.get("type").to_string();
+        let name = js::string(json.get("type"));
         let mark_type = schema
             .mark_type(&name)
             .ok_or_else(|| Error::Range(format!("There is no mark type {name} in this schema")))?;
-        let mark = mark_type.create(json.get("attrs").as_attrs())?;
+        let mark = mark_type.create(js::attrs(json.get("attrs")))?;
         mark_type.check_attrs(mark.attrs())?;
         Ok(mark)
     }

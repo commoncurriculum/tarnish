@@ -14,5 +14,4 @@ test = false
 doctest = false
 
 [dependencies]
-serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 tarnish = { path = "../tarnish" }

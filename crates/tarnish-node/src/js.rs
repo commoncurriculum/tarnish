@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use napi::bindgen_prelude::{FromNapiValue, ToNapiValue, TypeName, ValidateNapiValue};
 use napi::{Env, Error, Result, Status, ValueType, sys};
-use tarnish::{Object, Text, Value};
+use tarnish::{Attrs, Map, Text, Value};
 
 /// A JavaScript value, as napi hands it over and takes it back.
 #[derive(Clone, Copy)]
@@ -185,8 +185,8 @@ impl TypeName for JsText {
 
 impl ValidateNapiValue for JsText {}
 
-/// An attribute value, or a document's JSON.
-pub struct Data(pub Value);
+/// An attribute value, or a document's JSON: `None` is `undefined`.
+pub struct Data(pub Option<Value>);
 
 impl FromNapiValue for Data {
     unsafe fn from_napi_value(env: sys::napi_env, value: sys::napi_value) -> Result<Self> {
@@ -196,7 +196,45 @@ impl FromNapiValue for Data {
 
 impl ToNapiValue for Data {
     unsafe fn to_napi_value(env: sys::napi_env, value: Self) -> Result<sys::napi_value> {
-        value_to_js(env, &value.0)
+        match &value.0 {
+            Some(value) => value_to_js(env, value),
+            None => undefined(env),
+        }
+    }
+}
+
+impl Data {
+    pub fn of(value: Value) -> Data {
+        Data(Some(value))
+    }
+
+    /// The value, with `undefined` read as `null`, for functions that treat the two alike.
+    pub fn value(&self) -> &Value {
+        self.0.as_ref().unwrap_or(&tarnish::json::NULL)
+    }
+
+    /// The attributes a type's `create` reads from the value.
+    pub fn attrs(&self) -> Option<&Map> {
+        tarnish::js::attrs(self.0.as_ref())
+    }
+}
+
+/// A node's or mark's attributes, whose arrays keep their identity.
+pub struct AttrsData(pub Attrs);
+
+impl ToNapiValue for AttrsData {
+    unsafe fn to_napi_value(env: sys::napi_env, value: Self) -> Result<sys::napi_value> {
+        attrs_to_js(env, &value.0)
+    }
+}
+
+impl TypeName for AttrsData {
+    fn type_name() -> &'static str {
+        "object"
+    }
+
+    fn value_type() -> ValueType {
+        ValueType::Object
     }
 }
 
@@ -212,14 +250,18 @@ impl TypeName for Data {
 
 impl ValidateNapiValue for Data {}
 
-pub fn value_from_js(env: sys::napi_env, value: sys::napi_value) -> Result<Value> {
-    Ok(match type_of(env, value)? {
-        sys::ValueType::napi_undefined => Value::Undefined,
+/// A JavaScript value as JSON holds it, `None` for `undefined`: inside it, an object's property
+/// that is `undefined` is left out, and an array's item is `null`, as `JSON.stringify` has them.
+pub fn value_from_js(env: sys::napi_env, value: sys::napi_value) -> Result<Option<Value>> {
+    Ok(Some(match type_of(env, value)? {
+        sys::ValueType::napi_undefined => return Ok(None),
         sys::ValueType::napi_null => Value::Null,
         sys::ValueType::napi_boolean => Value::Bool(unsafe { bool::from_napi_value(env, value) }?),
-        sys::ValueType::napi_number => Value::Number(unsafe { f64::from_napi_value(env, value) }?),
+        sys::ValueType::napi_number => {
+            tarnish::js::number(unsafe { f64::from_napi_value(env, value) }?)
+        }
         sys::ValueType::napi_string => {
-            Value::String(unsafe { String::from_napi_value(env, value) }?.into())
+            Value::String(unsafe { String::from_napi_value(env, value) }?)
         }
         sys::ValueType::napi_object => {
             let mut is_array = false;
@@ -231,16 +273,18 @@ pub fn value_from_js(env: sys::napi_env, value: sys::napi_value) -> Result<Value
                 for index in 0..length {
                     let mut item = ptr::null_mut();
                     check(unsafe { sys::napi_get_element(env, value, index, &mut item) })?;
-                    items.push(value_from_js(env, item)?);
+                    items.push(value_from_js(env, item)?.unwrap_or(Value::Null));
                 }
-                Value::Array(items.into())
+                Value::Array(items)
             } else {
-                let mut object = Object::new();
+                let mut object = Map::new();
                 for key in property_names(env, value)? {
                     let item = get(env, value, &key)?;
-                    object.insert(key, value_from_js(env, item)?);
+                    if let Some(item) = value_from_js(env, item)? {
+                        object.insert(key.into(), item);
+                    }
                 }
-                Value::Object(Arc::new(object))
+                Value::Object(object)
             }
         }
         _ => {
@@ -249,7 +293,7 @@ pub fn value_from_js(env: sys::napi_env, value: sys::napi_value) -> Result<Value
                 "tarnish holds attribute values that JSON can, and undefined",
             ));
         }
-    })
+    }))
 }
 
 /// The names of an object's enumerable string properties, as `for...in` visits them.
@@ -267,17 +311,24 @@ pub fn property_names(env: sys::napi_env, object: sys::napi_value) -> Result<Vec
     Ok(result)
 }
 
-/// Keep the tarnish array a JavaScript array was made from on it, so that a DOM spec that is
-/// an attribute's array can be told from one that equals it, as ProseMirror tells them apart.
-fn mark_origin(env: sys::napi_env, array: sys::napi_value, items: &Arc<[Value]>) -> Result<()> {
+/// Where a JavaScript array made from an attribute's array came from: the attributes, kept
+/// alive so that the array's address stays theirs, and that address.
+struct Origin {
+    _attrs: Attrs,
+    address: usize,
+}
+
+/// Tags a JavaScript array with the attribute array it was made from, so that a DOM spec that
+/// is an attribute's array can be told from one that equals it, as ProseMirror tells them apart.
+fn mark_origin(env: sys::napi_env, array: sys::napi_value, origin: Origin) -> Result<()> {
     unsafe extern "C" fn release(
         _env: sys::napi_env,
         data: *mut std::ffi::c_void,
         _hint: *mut std::ffi::c_void,
     ) {
-        drop(unsafe { Box::from_raw(data as *mut Arc<[Value]>) });
+        drop(unsafe { Box::from_raw(data as *mut Origin) });
     }
-    let data = Box::into_raw(Box::new(items.clone()));
+    let data = Box::into_raw(Box::new(origin));
     let status = unsafe {
         sys::napi_wrap(
             env,
@@ -294,34 +345,62 @@ fn mark_origin(env: sys::napi_env, array: sys::napi_value, items: &Arc<[Value]>)
     check(status)
 }
 
-/// The identity of the tarnish array a JavaScript array was made from, if it was.
+/// The address of the attribute array a JavaScript array was made from, if it was.
 pub fn array_origin(env: sys::napi_env, array: sys::napi_value) -> Option<usize> {
     let mut data = ptr::null_mut();
     let status = unsafe { sys::napi_unwrap(env, array, &mut data) };
     (status == sys::Status::napi_ok && !data.is_null())
-        .then(|| unsafe { (*(data as *const Arc<[Value]>)).as_ptr() } as usize)
+        .then(|| unsafe { (*(data as *const Origin)).address })
 }
 
 pub fn value_to_js(env: sys::napi_env, value: &Value) -> Result<sys::napi_value> {
+    to_js(env, value, None)
+}
+
+/// [`value_to_js`], `None` being `undefined`.
+pub fn optional_to_js(env: sys::napi_env, value: Option<&Value>) -> Result<sys::napi_value> {
+    match value {
+        Some(value) => value_to_js(env, value),
+        None => undefined(env),
+    }
+}
+
+/// A node's or mark's attributes, each array in them tagged with where it came from.
+pub fn attrs_to_js(env: sys::napi_env, attrs: &Attrs) -> Result<sys::napi_value> {
+    let mut result = ptr::null_mut();
+    check(unsafe { sys::napi_create_object(env, &mut result) })?;
+    for (key, item) in attrs.iter() {
+        let (key, item) = (string(env, key)?, to_js(env, item, Some(attrs))?);
+        check(unsafe { sys::napi_set_property(env, result, key, item) })?;
+    }
+    Ok(result)
+}
+
+fn to_js(env: sys::napi_env, value: &Value, attrs: Option<&Attrs>) -> Result<sys::napi_value> {
     let mut result = ptr::null_mut();
     match value {
-        Value::Undefined => return undefined(env),
         Value::Null => return null(env),
         Value::Bool(value) => check(unsafe { sys::napi_get_boolean(env, *value, &mut result) })?,
-        Value::Number(value) => return number(env, *value),
+        Value::Number(value) => return number(env, value.as_f64().unwrap_or(f64::NAN)),
         Value::String(value) => return string(env, value),
         Value::Array(items) => {
             check(unsafe { sys::napi_create_array_with_length(env, items.len(), &mut result) })?;
             for (index, item) in items.iter().enumerate() {
-                let item = value_to_js(env, item)?;
+                let item = to_js(env, item, attrs)?;
                 check(unsafe { sys::napi_set_element(env, result, index as u32, item) })?;
             }
-            mark_origin(env, result, items)?;
+            if let Some(attrs) = attrs {
+                let origin = Origin {
+                    _attrs: attrs.clone(),
+                    address: items.as_ptr() as usize,
+                };
+                mark_origin(env, result, origin)?;
+            }
         }
         Value::Object(object) => {
             check(unsafe { sys::napi_create_object(env, &mut result) })?;
             for (key, item) in object.iter() {
-                let (key, item) = (string(env, key)?, value_to_js(env, item)?);
+                let (key, item) = (string(env, key)?, to_js(env, item, attrs)?);
                 check(unsafe { sys::napi_set_property(env, result, key, item) })?;
             }
         }

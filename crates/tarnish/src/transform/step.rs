@@ -1,11 +1,10 @@
 //! Steps: the atomic changes a transform is made of.
 
-use std::sync::Arc;
-
 use super::map::{Mappable, StepMap};
 use crate::error::{Error, Result};
+use crate::js;
+use crate::json::{Map, NULL, Value};
 use crate::model::{Fragment, Mark, Node, Schema, Slice};
-use crate::value::{Object, Value};
 
 /// A step's outcome: the changed document, or why the step can't apply to the document.
 #[derive(Clone, Debug)]
@@ -81,16 +80,17 @@ pub enum Step {
         pos: usize,
         mark: Mark,
     },
-    /// Set an attribute of the node at `pos`.
+    /// Set an attribute of the node at `pos`. A `value` of `None` is `undefined`, which gives
+    /// the attribute its default.
     Attr {
         pos: usize,
         attr: String,
-        value: Value,
+        value: Option<Value>,
     },
     /// Set an attribute of the document's top node.
     DocAttr {
         attr: String,
-        value: Value,
+        value: Option<Value>,
     },
 }
 
@@ -145,9 +145,16 @@ fn node_slice(node: Node, leaf: bool) -> Slice {
     Slice::new(Fragment::from_node(node), 0, if leaf { 0 } else { 1 })
 }
 
-fn attrs_with(attrs: &Object, attr: &str, value: &Value) -> Object {
+fn attrs_with(attrs: &Map, attr: &str, value: &Option<Value>) -> Map {
     let mut copy = attrs.clone();
-    copy.insert(attr, value.clone());
+    match value {
+        Some(value) => {
+            copy.insert(attr.into(), value.clone());
+        }
+        None => {
+            copy.shift_remove(attr);
+        }
+    }
     copy
 }
 
@@ -352,12 +359,12 @@ impl Step {
                 Step::Attr {
                     pos: *pos,
                     attr: attr.clone(),
-                    value: node.attrs().get(attr).cloned().unwrap_or(Value::Undefined),
+                    value: node.attrs().get(attr).cloned(),
                 }
             }
             Step::DocAttr { attr, .. } => Step::DocAttr {
                 attr: attr.clone(),
-                value: doc.attrs().get(attr).cloned().unwrap_or(Value::Undefined),
+                value: doc.attrs().get(attr).cloned(),
             },
         })
     }
@@ -552,9 +559,9 @@ impl Step {
     }
 
     pub fn to_json(&self) -> Value {
-        let mut json = Object::new();
-        json.insert("stepType", Value::String(self.json_id().into()));
-        let number = |n: usize| Value::Number(n as f64);
+        let mut json = Map::new();
+        json.push("stepType".into(), Value::String(self.json_id().into()));
+        let number = Value::from;
         match self {
             Step::Replace {
                 from,
@@ -562,13 +569,13 @@ impl Step {
                 slice,
                 structure,
             } => {
-                json.insert("from", number(*from));
-                json.insert("to", number(*to));
+                json.push("from".into(), number(*from));
+                json.push("to".into(), number(*to));
                 if slice.size() > 0 {
-                    json.insert("slice", slice.to_json());
+                    json.push("slice".into(), slice.to_json());
                 }
                 if *structure {
-                    json.insert("structure", Value::Bool(true));
+                    json.push("structure".into(), Value::Bool(true));
                 }
             }
             Step::ReplaceAround {
@@ -580,55 +587,63 @@ impl Step {
                 insert,
                 structure,
             } => {
-                json.insert("from", number(*from));
-                json.insert("to", number(*to));
-                json.insert("gapFrom", number(*gap_from));
-                json.insert("gapTo", number(*gap_to));
-                json.insert("insert", number(*insert));
+                json.push("from".into(), number(*from));
+                json.push("to".into(), number(*to));
+                json.push("gapFrom".into(), number(*gap_from));
+                json.push("gapTo".into(), number(*gap_to));
+                json.push("insert".into(), number(*insert));
                 if slice.size() > 0 {
-                    json.insert("slice", slice.to_json());
+                    json.push("slice".into(), slice.to_json());
                 }
                 if *structure {
-                    json.insert("structure", Value::Bool(true));
+                    json.push("structure".into(), Value::Bool(true));
                 }
             }
             Step::AddMark { from, to, mark } | Step::RemoveMark { from, to, mark } => {
-                json.insert("mark", mark.to_json());
-                json.insert("from", number(*from));
-                json.insert("to", number(*to));
+                json.push("mark".into(), mark.to_json());
+                json.push("from".into(), number(*from));
+                json.push("to".into(), number(*to));
             }
             Step::AddNodeMark { pos, mark } | Step::RemoveNodeMark { pos, mark } => {
-                json.insert("pos", number(*pos));
-                json.insert("mark", mark.to_json());
+                json.push("pos".into(), number(*pos));
+                json.push("mark".into(), mark.to_json());
             }
             Step::Attr { pos, attr, value } => {
-                json.insert("pos", number(*pos));
-                json.insert("attr", Value::String(attr.as_str().into()));
-                json.insert("value", value.clone());
+                json.push("pos".into(), number(*pos));
+                json.push("attr".into(), Value::String(attr.clone()));
+                if let Some(value) = value {
+                    json.push("value".into(), value.clone());
+                }
             }
             Step::DocAttr { attr, value } => {
-                json.insert("attr", Value::String(attr.as_str().into()));
-                json.insert("value", value.clone());
+                json.push("attr".into(), Value::String(attr.clone()));
+                if let Some(value) = value {
+                    json.push("value".into(), value.clone());
+                }
             }
         }
-        Value::Object(Arc::new(json))
+        Value::Object(json)
     }
 
     pub fn from_json(schema: &Schema, json: &Value) -> Result<Step> {
-        if !json.is_truthy() || !json.get("stepType").is_truthy() {
+        if !js::truthy(Some(json)) || !js::truthy(json.get("stepType")) {
             return Err(Error::Range("Invalid input for Step.fromJSON".into()));
         }
-        let step_type = json.get("stepType").to_string();
+        let step_type = js::string(json.get("stepType"));
         let invalid = |class: &str| Error::Range(format!("Invalid input for {class}.fromJSON"));
-        let position = |key: &str, class: &str| match json.get(key) {
-            Value::Number(n) if *n >= 0.0 && n.fract() == 0.0 => Ok(*n as usize),
-            _ => Err(invalid(class)),
+        let position = |key: &str, class: &str| {
+            json.get(key)
+                .and_then(Value::as_f64)
+                .filter(|n| *n >= 0.0 && n.fract() == 0.0)
+                .map(|n| n as usize)
+                .ok_or_else(|| invalid(class))
         };
         let attr = |class: &str| match json.get("attr") {
-            Value::String(attr) => Ok(attr.to_string()),
+            Some(Value::String(attr)) => Ok(attr.clone()),
             _ => Err(invalid(class)),
         };
-        let structure = json.get("structure").is_truthy();
+        let field = |key: &str| json.get(key).unwrap_or(&NULL);
+        let structure = js::truthy(json.get("structure"));
         Ok(match step_type.as_str() {
             "replace" => {
                 let (from, to) = (
@@ -638,7 +653,7 @@ impl Step {
                 Step::Replace {
                     from,
                     to,
-                    slice: Slice::from_json(schema, json.get("slice"))?,
+                    slice: Slice::from_json(schema, field("slice"))?,
                     structure,
                 }
             }
@@ -652,7 +667,7 @@ impl Step {
                     to,
                     gap_from,
                     gap_to,
-                    slice: Slice::from_json(schema, json.get("slice"))?,
+                    slice: Slice::from_json(schema, field("slice"))?,
                     insert,
                     structure,
                 }
@@ -664,7 +679,7 @@ impl Step {
                     "RemoveMarkStep"
                 };
                 let (from, to) = (position("from", class)?, position("to", class)?);
-                let mark = Mark::from_json(schema, json.get("mark"))?;
+                let mark = Mark::from_json(schema, field("mark"))?;
                 if step_type == "addMark" {
                     Step::AddMark { from, to, mark }
                 } else {
@@ -678,7 +693,7 @@ impl Step {
                     "RemoveNodeMarkStep"
                 };
                 let pos = position("pos", class)?;
-                let mark = Mark::from_json(schema, json.get("mark"))?;
+                let mark = Mark::from_json(schema, field("mark"))?;
                 if step_type == "addNodeMark" {
                     Step::AddNodeMark { pos, mark }
                 } else {
@@ -690,12 +705,12 @@ impl Step {
                 Step::Attr {
                     pos,
                     attr: attr("AttrStep")?,
-                    value: json.get("value").clone(),
+                    value: json.get("value").cloned(),
                 }
             }
             "docAttr" => Step::DocAttr {
                 attr: attr("DocAttrStep")?,
-                value: json.get("value").clone(),
+                value: json.get("value").cloned(),
             },
             _ => return Err(Error::Range(format!("No step type {step_type} defined"))),
         })

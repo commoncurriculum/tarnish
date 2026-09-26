@@ -7,8 +7,9 @@ use super::diff;
 use super::node::Node;
 use super::schema::Schema;
 use crate::error::{Error, Result};
+use crate::js;
+use crate::json::Value;
 use crate::text::Text;
-use crate::value::Value;
 
 /// What [`Fragment::nodes_between`] calls for each node: the node, its position, its parent,
 /// and its index in the parent. Returning `false` skips the node's children.
@@ -139,6 +140,7 @@ impl Fragment {
         node_start: usize,
         parent: Option<&Node>,
     ) -> Result<()> {
+        crate::stack::check()?;
         let mut pos = 0;
         for (index, child) in self.children.iter().enumerate() {
             if pos >= to {
@@ -382,7 +384,7 @@ impl Fragment {
     }
 
     pub fn from_json(schema: &Schema, json: &Value) -> Result<Fragment> {
-        if !json.is_truthy() {
+        if !js::truthy(Some(json)) {
             return Ok(Fragment::empty());
         }
         let Value::Array(nodes) = json else {

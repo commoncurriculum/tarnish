@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use super::{Dom, NodeKind};
 use crate::error::{Error, Result};
+use crate::json::{Map, Value};
 use crate::model::{Fragment, Mark, Node};
-use crate::value::{Object, Value};
 
 /// What a node's or mark's `toDOM` gives: ProseMirror's `DOMOutputSpec`.
 #[derive(Clone)]
@@ -195,7 +195,7 @@ fn render<D: Dom>(
     dom: &D,
     structure: &DomSpec<D::Node>,
     xml_ns: Option<&str>,
-    block_arrays_in: Option<&Object>,
+    block_arrays_in: Option<&Map>,
 ) -> Result<Rendered<D::Node>> {
     let (items, origin): (Vec<Item<D::Node>>, Option<usize>) = match structure {
         DomSpec::Node(node) if dom.kind(node)? == NodeKind::Element => {
@@ -226,21 +226,21 @@ fn render<D: Dom>(
     }
     let (namespace, tag) = match tag.find(' ') {
         Some(space) if space > 0 => (Some(&tag[..space]), &tag[space + 1..]),
-        _ => (xml_ns, &**tag),
+        _ => (xml_ns, tag.as_str()),
     };
     let element = dom.create_element(namespace, tag)?;
     let mut start = 1;
     if let Some(Value::Object(attrs)) = items.get(1).and_then(Item::value) {
         start = 2;
         for (name, value) in attrs.iter() {
-            if matches!(value, Value::Null | Value::Undefined) {
+            if matches!(value, Value::Null) {
                 continue;
             }
             match name.find(' ') {
                 Some(space) if space > 0 => {
                     dom.set_attribute(&element, Some(&name[..space]), &name[space + 1..], value)?
                 }
-                _ if &**name == "style" && dom.set_style(&element, value)? => {}
+                _ if name == "style" && dom.set_style(&element, value)? => {}
                 _ => dom.set_attribute(&element, None, name, value)?,
             }
         }
@@ -248,7 +248,7 @@ fn render<D: Dom>(
     let mut content_dom = None;
     for (index, child) in items.iter().enumerate().skip(start) {
         match child.value() {
-            Some(Value::Number(number)) if *number == 0.0 => {
+            Some(Value::Number(number)) if number.as_f64() == Some(0.0) => {
                 if index < items.len() - 1 || index > start {
                     return Err(Error::Range(
                         "Content hole must be the only child of its parent node".into(),
@@ -260,7 +260,7 @@ fn render<D: Dom>(
                 });
             }
             Some(Value::String(text)) => {
-                let text = dom.create_text(&(**text).into())?;
+                let text = dom.create_text(&text.as_str().into())?;
                 dom.append_child(&element, &text)?;
             }
             _ => {
@@ -282,7 +282,7 @@ fn render<D: Dom>(
 }
 
 /// The arrays in attribute values that start with a string, and so could be taken for specs.
-fn suspicious_arrays(attrs: &Object) -> Vec<usize> {
+fn suspicious_arrays(attrs: &Map) -> Vec<usize> {
     fn scan(value: &Value, found: &mut Vec<usize>) {
         match value {
             Value::Array(items) if matches!(items.first(), Some(Value::String(_))) => {

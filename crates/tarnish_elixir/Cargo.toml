@@ -9,10 +9,9 @@ description = "The Elixir binding of tarnish: a Rustler NIF that takes and retur
 
 [lib]
 crate-type = ["cdylib"]
-# The binding's tests are the Elixir package's; Rustler registers nothing in a Rust test build.
-test = false
 doctest = false
 
 [dependencies]
-rustler = "0.38"
+rustler = { version = "0.38", features = ["big_integer"] }
+ryu-js = "1"
 tarnish = { path = "../tarnish" }

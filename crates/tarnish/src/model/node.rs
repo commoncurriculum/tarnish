@@ -3,6 +3,7 @@
 use std::fmt;
 use std::sync::Arc;
 
+use super::compare_deep::objects_equal;
 use super::content::ContentMatch;
 use super::fragment::{Fragment, LeafTextHook, NodeVisitor};
 use super::mark::{Mark, Marks};
@@ -10,8 +11,9 @@ use super::replace::{self, Slice};
 use super::resolved_pos::ResolvedPos;
 use super::schema::{Attrs, MarkType, NodeType, Schema};
 use crate::error::{Error, Result};
+use crate::js;
+use crate::json::{Map, NULL, Value};
 use crate::text::Text;
-use crate::value::{Object, Value, objects_equal};
 
 /// A node of a document. Nodes are persistent: changing one makes a new one, sharing what it
 /// can with the old.
@@ -188,10 +190,10 @@ impl Node {
     pub fn has_markup(
         &self,
         node_type: &NodeType,
-        attrs: Option<&Object>,
+        attrs: Option<&Map>,
         marks: Option<&[Mark]>,
     ) -> bool {
-        static EMPTY: Object = Object::new();
+        static EMPTY: Map = Map::new();
         let attrs = attrs.unwrap_or_else(|| {
             node_type
                 .default_attrs()
@@ -434,6 +436,7 @@ impl Node {
     /// `toString`: the node described for debugging, by its spec's `to_debug_string` when it
     /// has one.
     pub fn to_debug_string(&self) -> Result<String> {
+        crate::stack::check()?;
         if let Some(hook) = &self.node_type().spec().to_debug_string {
             return hook(self);
         }
@@ -521,6 +524,7 @@ impl Node {
 
     /// Raise an error if this node or a descendant doesn't fit the schema.
     pub fn check(&self) -> Result<()> {
+        crate::stack::check()?;
         self.node_type().check_content(self.content())?;
         self.node_type().check_attrs(self.attrs())?;
         let mut copy = Mark::none();
@@ -544,33 +548,34 @@ impl Node {
     }
 
     pub fn to_json(&self) -> Value {
-        let mut json = Object::with_capacity(5);
-        json.insert("type", Value::String(self.node_type().name().into()));
+        let mut json = Map::with_capacity(5);
+        json.push("type".into(), Value::String(self.node_type().name().into()));
         if !self.attrs().is_empty() {
-            json.insert("attrs", Value::Object(self.attrs().clone()));
+            json.push("attrs".into(), Value::Object((**self.attrs()).clone()));
         }
         if self.content().size() > 0 {
-            json.insert("content", self.content().to_json());
+            json.push("content".into(), self.content().to_json());
         }
         if !self.marks().is_empty() {
-            json.insert(
-                "marks",
+            json.push(
+                "marks".into(),
                 Value::Array(self.marks().iter().map(Mark::to_json).collect()),
             );
         }
         if let Some(text) = &self.0.text {
-            json.insert("text", Value::String(text.to_string_lossy().into()));
+            json.push("text".into(), Value::String(text.to_string_lossy()));
         }
-        Value::Object(Arc::new(json))
+        Value::Object(json)
     }
 
     pub fn from_json(schema: &Schema, json: &Value) -> Result<Node> {
-        if !json.is_truthy() {
+        crate::stack::check()?;
+        if !js::truthy(Some(json)) {
             return Err(Error::Range("Invalid input for Node.fromJSON".into()));
         }
         let marks = match json.get("marks") {
-            marks if !marks.is_truthy() => None,
-            Value::Array(marks) => Some(
+            marks if !js::truthy(marks) => None,
+            Some(Value::Array(marks)) => Some(
                 marks
                     .iter()
                     .map(|mark| Mark::from_json(schema, mark))
@@ -579,18 +584,18 @@ impl Node {
             _ => return Err(Error::Range("Invalid mark data for Node.fromJSON".into())),
         };
         let marks = marks.as_deref().unwrap_or(&[]);
-        let name = json.get("type").to_string();
+        let name = js::string(json.get("type"));
         if name == "text" {
-            let Value::String(text) = json.get("text") else {
+            let Some(Value::String(text)) = json.get("text") else {
                 return Err(Error::Range("Invalid text node in JSON".into()));
             };
-            return schema.text(&**text, marks);
+            return schema.text(text.as_str(), marks);
         }
-        let content = Fragment::from_json(schema, json.get("content"))?;
+        let content = Fragment::from_json(schema, json.get("content").unwrap_or(&NULL))?;
         let node =
             schema
                 .expect_node_type(&name)?
-                .create(json.get("attrs").as_attrs(), content, marks)?;
+                .create(js::attrs(json.get("attrs")), content, marks)?;
         node.node_type().check_attrs(node.attrs())?;
         Ok(node)
     }

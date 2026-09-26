@@ -29,7 +29,18 @@ defmodule Tarnish do
   keep their order where a map doesn't.
   """
   @spec schema(map()) :: {:ok, schema()} | error()
-  def schema(spec), do: Native.schema(spec)
+  def schema(spec), do: spec |> pairs("nodes") |> pairs("marks") |> Native.schema()
+
+  # The pairs as lists, which the NIF reads as JSON arrays, in order.
+  defp pairs(%{} = spec, key) do
+    case spec do
+      %{^key => types} when is_list(types) ->
+        Map.put(spec, key, Enum.map(types, fn {name, type_spec} -> [name, type_spec] end))
+
+      _ ->
+        spec
+    end
+  end
 
   @doc "Checks that a document conforms to the schema."
   @spec check(schema(), json()) :: :ok | error()

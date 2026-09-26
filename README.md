@@ -44,17 +44,23 @@ The proof doesn't depend on anyone reading the Rust. CI checks it:
 :ok = Tarnish.check(schema, doc)
 ```
 
-Documents and steps are maps as Jason decodes ProseMirror's JSON. Errors come back as
+Documents and steps are maps as Jason decodes ProseMirror's JSON: the NIF reads exactly the
+terms Jason can encode, and returns what Jason would decode. Errors come back as
 `{:error, {kind, message}}`, where the kind names the class ProseMirror throws. Give a schema's
 `"nodes"` and `"marks"` as lists of `{name, spec}` pairs, because their order matters and a map
 doesn't keep it.
 
+Each call runs on a stack of its own, because a dirty scheduler's stack is too small for a
+deeply nested document. A document 100,000 levels deep converts. One nested too deeply for even
+that stack fails with `{:range_error, "Maximum call stack size exceeded"}` and never takes the
+VM down.
+
 ## C, and other languages through it
 
-`cargo build --release -p tarnish-c` builds `libtarnish_c` (`.so`/`.dylib`/`.dll` and `.a`).
+`cargo build --release -p tarnish-c` builds `libtarnish_c` (`.so`/`.dylib` and `.a`).
 [`include/tarnish.h`](crates/tarnish-c/include/tarnish.h) declares the same five operations,
-taking and returning JSON strings. Errors are `"Class: message"` strings. Free every string
-the library returns with `tarnish_free`.
+taking and returning JSON strings, read as `JSON.parse` reads them. Errors are
+`"Class: message"` strings. Free every string the library returns with `tarnish_free`.
 
 ## Running the tests
 
