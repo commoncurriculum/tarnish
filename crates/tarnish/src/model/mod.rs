@@ -15,6 +15,7 @@ mod schema;
 mod schema_json;
 
 pub use attrs::{AttributeSpec, Attrs, Validate, ValidateHook};
+pub use compare_deep::{compare_deep, objects_equal};
 pub use content::ContentMatch;
 pub use fields::{Field, Fields};
 pub use fragment::{Fragment, LeafTextHook, NodeVisitor};

@@ -53,14 +53,8 @@ impl PartialEq for Value {
 impl Drop for Value {
     fn drop(&mut self) {
         match self {
-            Value::Array(items) if !items.is_empty() => {
-                let items = std::mem::take(items);
-                stack::grow(|| drop(items));
-            }
-            Value::Object(map) if !map.is_empty() => {
-                let entries = std::mem::take(&mut map.entries);
-                stack::grow(|| drop(entries));
-            }
+            Value::Array(items) => stack::drop_nested(items),
+            Value::Object(map) => stack::drop_nested(&mut map.entries),
             _ => {}
         }
     }

@@ -24,7 +24,8 @@ pub fn write_object(out: &mut String, object: &Map) {
     out.push('}');
 }
 
-fn write_value(out: &mut String, value: &Value) {
+/// `JSON.stringify(value)`, written onto `out`.
+pub fn write_value(out: &mut String, value: &Value) {
     let mut comma = false;
     for event in events(value) {
         if comma && !matches!(event, Event::Close(_)) {

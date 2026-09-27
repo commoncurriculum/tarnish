@@ -13,3 +13,11 @@ const SEGMENT: usize = 8 << 20;
 pub fn grow<R>(f: impl FnOnce() -> R) -> R {
     stacker::maybe_grow(RED_ZONE, SEGMENT, f)
 }
+
+/// Drops the items of a vector whose items nest, as deeply as they do.
+pub fn drop_nested<T>(items: &mut Vec<T>) {
+    if !items.is_empty() {
+        let items = std::mem::take(items);
+        grow(|| drop(items));
+    }
+}
