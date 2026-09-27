@@ -4,6 +4,11 @@ ProseMirror's document model and transforms (`prosemirror-model` and `prosemirro
 in Rust, for servers that need to read and change ProseMirror documents without running
 JavaScript. For example, an Elixir backend can apply the steps an editor sends.
 
+The contract is ProseMirror's public API: what schemas, nodes, marks, slices, resolved
+positions, steps, step maps, mappings and transforms do for their callers. ProseMirror's own
+test suites check that API, and tarnish is held to them. Behind it, tarnish takes whatever
+shape is fastest and clearest.
+
 ## What's here
 
 | Path                    | What it is                                                                                                                                      |
