@@ -9,30 +9,36 @@ pub struct Map {
 }
 
 impl Map {
+    #[inline]
     pub const fn new() -> Self {
         Map {
             entries: Vec::new(),
         }
     }
 
+    #[inline]
     pub fn with_capacity(capacity: usize) -> Self {
         Map {
             entries: Vec::with_capacity(capacity),
         }
     }
 
+    #[inline]
     fn position(&self, key: &str) -> Option<usize> {
         self.entries.iter().position(|(entry, _)| entry == key)
     }
 
+    #[inline]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
+    #[inline]
     pub fn get(&self, key: &str) -> Option<&Value> {
         self.entries
             .iter()
@@ -42,6 +48,7 @@ impl Map {
 
     /// `get`, looking first at the entry `next` points to, and leaving `next` after the entry
     /// found: keys looked up in the order the entries have take one comparison each.
+    #[inline]
     pub fn get_from(&self, key: &str, next: &mut usize) -> Option<&Value> {
         let index = match self.entries.get(*next) {
             Some((entry, _)) if entry == key => *next,
@@ -51,6 +58,7 @@ impl Map {
         Some(&self.entries[index].1)
     }
 
+    #[inline]
     pub fn get_mut(&mut self, key: &str) -> Option<&mut Value> {
         self.entries
             .iter_mut()
@@ -58,11 +66,13 @@ impl Map {
             .map(|(_, value)| value)
     }
 
+    #[inline]
     pub fn contains_key(&self, key: &str) -> bool {
         self.position(key).is_some()
     }
 
     /// Replaces the value of a key already there, where it is, or adds the key at the end.
+    #[inline]
     pub fn insert(&mut self, key: Key, value: Value) -> Option<Value> {
         match self.position(&key) {
             Some(index) => Some(std::mem::replace(&mut self.entries[index].1, value)),
@@ -74,31 +84,37 @@ impl Map {
     }
 
     /// Adds a key known not to be there yet.
+    #[inline]
     pub fn push(&mut self, key: Key, value: Value) {
         debug_assert!(!self.contains_key(&key), "{key:?} is already a key");
         self.entries.push((key, value));
     }
 
     /// Removes a key, moving the last entry into its place, as serde_json's `remove` does.
+    #[inline]
     pub fn remove(&mut self, key: &str) -> Option<Value> {
         self.swap_remove(key)
     }
 
+    #[inline]
     pub fn swap_remove(&mut self, key: &str) -> Option<Value> {
         let index = self.position(key)?;
         Some(self.entries.swap_remove(index).1)
     }
 
     /// Removes a key, keeping the order of the others.
+    #[inline]
     pub fn shift_remove(&mut self, key: &str) -> Option<Value> {
         let index = self.position(key)?;
         Some(self.entries.remove(index).1)
     }
 
+    #[inline]
     pub fn retain(&mut self, mut keep: impl FnMut(&Key, &mut Value) -> bool) {
         self.entries.retain_mut(|(key, value)| keep(key, value));
     }
 
+    #[inline]
     pub fn entry(&mut self, key: impl Into<Key>) -> Entry<'_> {
         let key = key.into();
         let index = match self.position(&key) {
@@ -117,24 +133,29 @@ impl Map {
         }
     }
 
+    #[inline]
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = (&Key, &Value)> + ExactSizeIterator {
         self.entries.iter().map(|(key, value)| (key, value))
     }
 
+    #[inline]
     pub fn iter_mut(
         &mut self,
     ) -> impl DoubleEndedIterator<Item = (&Key, &mut Value)> + ExactSizeIterator {
         self.entries.iter_mut().map(|(key, value)| (&*key, value))
     }
 
+    #[inline]
     pub fn keys(&self) -> impl DoubleEndedIterator<Item = &Key> + ExactSizeIterator {
         self.entries.iter().map(|(key, _)| key)
     }
 
+    #[inline]
     pub fn values(&self) -> impl DoubleEndedIterator<Item = &Value> + ExactSizeIterator {
         self.entries.iter().map(|(_, value)| value)
     }
 
+    #[inline]
     pub fn values_mut(
         &mut self,
     ) -> impl DoubleEndedIterator<Item = &mut Value> + ExactSizeIterator {

@@ -11,14 +11,17 @@ pub trait JsonIndex {
 }
 
 impl JsonIndex for str {
+    #[inline]
     fn index_into<'v>(&self, value: &'v Value) -> Option<&'v Value> {
         value.as_object()?.get(self)
     }
 
+    #[inline]
     fn index_into_mut<'v>(&self, value: &'v mut Value) -> Option<&'v mut Value> {
         value.as_object_mut()?.get_mut(self)
     }
 
+    #[inline]
     fn index_or_insert<'v>(&self, value: &'v mut Value) -> &'v mut Value {
         if value.is_null() {
             *value = Value::Object(Map::new());
@@ -31,28 +34,34 @@ impl JsonIndex for str {
 }
 
 impl JsonIndex for String {
+    #[inline]
     fn index_into<'v>(&self, value: &'v Value) -> Option<&'v Value> {
         self.as_str().index_into(value)
     }
 
+    #[inline]
     fn index_into_mut<'v>(&self, value: &'v mut Value) -> Option<&'v mut Value> {
         self.as_str().index_into_mut(value)
     }
 
+    #[inline]
     fn index_or_insert<'v>(&self, value: &'v mut Value) -> &'v mut Value {
         self.as_str().index_or_insert(value)
     }
 }
 
 impl JsonIndex for usize {
+    #[inline]
     fn index_into<'v>(&self, value: &'v Value) -> Option<&'v Value> {
         value.as_array()?.get(*self)
     }
 
+    #[inline]
     fn index_into_mut<'v>(&self, value: &'v mut Value) -> Option<&'v mut Value> {
         value.as_array_mut()?.get_mut(*self)
     }
 
+    #[inline]
     fn index_or_insert<'v>(&self, value: &'v mut Value) -> &'v mut Value {
         match value {
             Value::Array(items) => {
@@ -67,14 +76,17 @@ impl JsonIndex for usize {
 }
 
 impl<T: JsonIndex + ?Sized> JsonIndex for &T {
+    #[inline]
     fn index_into<'v>(&self, value: &'v Value) -> Option<&'v Value> {
         (**self).index_into(value)
     }
 
+    #[inline]
     fn index_into_mut<'v>(&self, value: &'v mut Value) -> Option<&'v mut Value> {
         (**self).index_into_mut(value)
     }
 
+    #[inline]
     fn index_or_insert<'v>(&self, value: &'v mut Value) -> &'v mut Value {
         (**self).index_or_insert(value)
     }
@@ -83,54 +95,63 @@ impl<T: JsonIndex + ?Sized> JsonIndex for &T {
 impl<I: JsonIndex> std::ops::Index<I> for Value {
     type Output = Value;
 
+    #[inline]
     fn index(&self, index: I) -> &Value {
         index.index_into(self).unwrap_or(&NULL)
     }
 }
 
 impl<I: JsonIndex> std::ops::IndexMut<I> for Value {
+    #[inline]
     fn index_mut(&mut self, index: I) -> &mut Value {
         index.index_or_insert(self)
     }
 }
 
 impl PartialEq<str> for Value {
+    #[inline]
     fn eq(&self, other: &str) -> bool {
         self.as_str() == Some(other)
     }
 }
 
 impl PartialEq<&str> for Value {
+    #[inline]
     fn eq(&self, other: &&str) -> bool {
         self.as_str() == Some(*other)
     }
 }
 
 impl PartialEq<String> for Value {
+    #[inline]
     fn eq(&self, other: &String) -> bool {
         self.as_str() == Some(other.as_str())
     }
 }
 
 impl PartialEq<Value> for str {
+    #[inline]
     fn eq(&self, other: &Value) -> bool {
         other == self
     }
 }
 
 impl PartialEq<Value> for &str {
+    #[inline]
     fn eq(&self, other: &Value) -> bool {
         other == *self
     }
 }
 
 impl PartialEq<Value> for String {
+    #[inline]
     fn eq(&self, other: &Value) -> bool {
         other == self
     }
 }
 
 impl PartialEq<bool> for Value {
+    #[inline]
     fn eq(&self, other: &bool) -> bool {
         self.as_bool() == Some(*other)
     }
@@ -140,6 +161,7 @@ macro_rules! number_equality {
     ($($integer:ty => $as:ident as $target:ty),*) => {
         $(
             impl PartialEq<$integer> for Value {
+                #[inline]
                 fn eq(&self, other: &$integer) -> bool {
                     self.$as().is_some_and(|value| value == *other as $target)
                 }

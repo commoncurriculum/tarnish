@@ -38,42 +38,52 @@ pub enum Value {
 }
 
 impl Value {
+    #[inline]
     pub fn is_null(&self) -> bool {
         matches!(self, Value::Null)
     }
 
+    #[inline]
     pub fn is_boolean(&self) -> bool {
         matches!(self, Value::Bool(_))
     }
 
+    #[inline]
     pub fn is_number(&self) -> bool {
         matches!(self, Value::Number(_))
     }
 
+    #[inline]
     pub fn is_string(&self) -> bool {
         matches!(self, Value::String(_))
     }
 
+    #[inline]
     pub fn is_array(&self) -> bool {
         matches!(self, Value::Array(_))
     }
 
+    #[inline]
     pub fn is_object(&self) -> bool {
         matches!(self, Value::Object(_))
     }
 
+    #[inline]
     pub fn is_i64(&self) -> bool {
         matches!(self, Value::Number(number) if number.is_i64())
     }
 
+    #[inline]
     pub fn is_u64(&self) -> bool {
         matches!(self, Value::Number(number) if number.is_u64())
     }
 
+    #[inline]
     pub fn is_f64(&self) -> bool {
         matches!(self, Value::Number(number) if number.is_f64())
     }
 
+    #[inline]
     pub fn as_bool(&self) -> Option<bool> {
         match self {
             Value::Bool(value) => Some(*value),
@@ -81,6 +91,7 @@ impl Value {
         }
     }
 
+    #[inline]
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Value::String(value) => Some(value),
@@ -88,6 +99,7 @@ impl Value {
         }
     }
 
+    #[inline]
     pub fn as_f64(&self) -> Option<f64> {
         match self {
             Value::Number(number) => number.as_f64(),
@@ -95,6 +107,7 @@ impl Value {
         }
     }
 
+    #[inline]
     pub fn as_i64(&self) -> Option<i64> {
         match self {
             Value::Number(number) => number.as_i64(),
@@ -102,6 +115,7 @@ impl Value {
         }
     }
 
+    #[inline]
     pub fn as_u64(&self) -> Option<u64> {
         match self {
             Value::Number(number) => number.as_u64(),
@@ -109,6 +123,7 @@ impl Value {
         }
     }
 
+    #[inline]
     pub fn as_array(&self) -> Option<&Vec<Value>> {
         match self {
             Value::Array(items) => Some(items),
@@ -116,6 +131,7 @@ impl Value {
         }
     }
 
+    #[inline]
     pub fn as_array_mut(&mut self) -> Option<&mut Vec<Value>> {
         match self {
             Value::Array(items) => Some(items),
@@ -123,6 +139,7 @@ impl Value {
         }
     }
 
+    #[inline]
     pub fn as_object(&self) -> Option<&Map> {
         match self {
             Value::Object(map) => Some(map),
@@ -130,6 +147,7 @@ impl Value {
         }
     }
 
+    #[inline]
     pub fn as_object_mut(&mut self) -> Option<&mut Map> {
         match self {
             Value::Object(map) => Some(map),
@@ -137,18 +155,22 @@ impl Value {
         }
     }
 
+    #[inline]
     pub fn get<I: JsonIndex + ?Sized>(&self, index: &I) -> Option<&Value> {
         index.index_into(self)
     }
 
+    #[inline]
     pub fn get_mut<I: JsonIndex + ?Sized>(&mut self, index: &I) -> Option<&mut Value> {
         index.index_into_mut(self)
     }
 
+    #[inline]
     pub fn take(&mut self) -> Value {
         std::mem::take(self)
     }
 
+    #[inline]
     pub fn into_string(mut self) -> Option<String> {
         match &mut self {
             Value::String(string) => Some(std::mem::take(string)),
@@ -156,6 +178,7 @@ impl Value {
         }
     }
 
+    #[inline]
     pub fn into_array(mut self) -> Option<Vec<Value>> {
         match &mut self {
             Value::Array(items) => Some(std::mem::take(items)),
@@ -163,6 +186,7 @@ impl Value {
         }
     }
 
+    #[inline]
     pub fn into_object(mut self) -> Option<Map> {
         match &mut self {
             Value::Object(map) => Some(std::mem::take(map)),
