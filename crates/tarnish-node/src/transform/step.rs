@@ -193,7 +193,7 @@ impl StepHandle {
 
     #[napi]
     pub fn apply<'env>(&self, env: &'env Env, doc: &NodeHandle) -> Result<Unknown<'env>> {
-        let result = self.step.apply(&doc.node).or_throw(env)?;
+        let result = self.step.apply(doc.node.clone()).or_throw(env)?;
         wrap_result(env, &result)
     }
 
@@ -248,6 +248,7 @@ pub fn step_result_from_replace<'env>(
     slice: &SliceHandle,
 ) -> Result<Unknown<'env>> {
     let (from, to) = (js::pos(env, from)?, js::pos(env, to)?);
-    let result = StepResult::from_replace(&doc.node, from, to, &slice.slice).or_throw(env)?;
+    let result =
+        StepResult::from_replace(doc.node.clone(), from, to, &slice.slice).or_throw(env)?;
     wrap_result(env, &result)
 }

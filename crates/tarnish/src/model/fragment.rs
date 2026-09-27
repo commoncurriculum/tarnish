@@ -308,6 +308,18 @@ impl Fragment {
         Fragment::with_size(copy, size)
     }
 
+    /// [`replace_child`](Self::replace_child), in place when no other fragment holds these
+    /// children.
+    pub(crate) fn set_child(&mut self, index: usize, node: Node) {
+        match self.children.as_mut().and_then(Arc::get_mut) {
+            Some(children) => {
+                self.size = self.size + node.node_size() - children[index].node_size();
+                children[index] = node;
+            }
+            None => *self = self.replace_child(index, node),
+        }
+    }
+
     pub fn add_to_start(&self, node: Node) -> Fragment {
         let size = self.size + node.node_size();
         let mut children = Vec::with_capacity(self.children().len() + 1);

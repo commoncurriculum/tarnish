@@ -336,6 +336,28 @@ impl Node {
         replace::replace(&self.resolve(from)?, &self.resolve(to)?, slice)
     }
 
+    /// [`replace`](Self::replace), on a document the caller gives up. When the range lies inside
+    /// one of its children, and nothing else holds the document or its content, the new child
+    /// takes the old one's place without the rest of the content being copied.
+    pub fn into_replaced(self, from: usize, to: usize, slice: &Slice) -> Result<Node> {
+        let replaced = replace::replace_top(&self.resolve(from)?, &self.resolve(to)?, slice)?;
+        Ok(match replaced {
+            replace::Replaced::Node(node) => node,
+            replace::Replaced::Child(index, child) => self.with_child(index, child),
+        })
+    }
+
+    /// The node with its child at `index` replaced, in place when nothing else holds it.
+    fn with_child(mut self, index: usize, child: Node) -> Node {
+        match Arc::get_mut(&mut self.0) {
+            Some(data) => {
+                data.content.set_child(index, child);
+                self
+            }
+            None => self.copy(self.content().replace_child(index, child)),
+        }
+    }
+
     /// The node directly after `pos`.
     pub fn node_at(&self, pos: usize) -> Result<Option<&Node>> {
         let mut node = self;

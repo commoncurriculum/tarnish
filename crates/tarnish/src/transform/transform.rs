@@ -75,7 +75,7 @@ impl Transform {
 
     /// Apply a step if it can apply, and give its result.
     pub fn maybe_step(&mut self, step: Step) -> Result<StepResult> {
-        let result = step.apply(&self.doc)?;
+        let result = step.apply(self.doc.clone())?;
         if let StepResult::Ok(doc) = &result {
             self.add_step(step, doc.clone());
         }

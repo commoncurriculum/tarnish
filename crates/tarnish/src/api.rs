@@ -4,7 +4,7 @@
 use crate::error::{Error, Result};
 use crate::json::Value;
 use crate::model::{Node, Schema, SchemaSpec};
-use crate::transform::{Mappable, Mapping, Step, Transform};
+use crate::transform::{Mappable, Mapping, Step, StepResult, Transform};
 
 /// A schema from its spec: `nodes` and `marks`, each an object of the types' specs in order or
 /// an array of `[name, spec]` pairs, and `topNode`.
@@ -12,9 +12,17 @@ pub fn schema(spec: &Value) -> Result<Schema> {
     Schema::new(SchemaSpec::from_json(spec)?)
 }
 
-/// The document with the steps applied in order.
+/// The document with the steps applied in order. Each step is given the document the one before
+/// it made, which nothing else holds, so a replace can change it in place.
 pub fn apply_steps(doc: &Node, steps: &Value) -> Result<Node> {
-    Ok(transform(doc, steps)?.doc().clone())
+    let mut doc = doc.clone();
+    for step in step_list(doc.node_type().schema(), steps)? {
+        doc = match step.apply(doc)? {
+            StepResult::Ok(doc) => doc,
+            StepResult::Failed(message) => return Err(Error::Transform(message)),
+        };
+    }
+    Ok(doc)
 }
 
 /// The steps that undo the steps applied to the document, last first.

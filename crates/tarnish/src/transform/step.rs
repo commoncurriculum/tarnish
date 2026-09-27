@@ -16,8 +16,8 @@ pub enum StepResult {
 
 impl StepResult {
     /// `doc.replace(from, to, slice)`, a slice that doesn't fit being a failure.
-    pub fn from_replace(doc: &Node, from: usize, to: usize, slice: &Slice) -> Result<StepResult> {
-        match doc.replace(from, to, slice) {
+    pub fn from_replace(doc: Node, from: usize, to: usize, slice: &Slice) -> Result<StepResult> {
+        match doc.into_replaced(from, to, slice) {
             Ok(doc) => Ok(StepResult::Ok(doc)),
             Err(Error::Replace(message)) => Ok(StepResult::Failed(message)),
             Err(error) => Err(error),
@@ -187,8 +187,9 @@ fn attrs_with(attrs: &Map, attr: &str, value: &Option<Value>) -> Map {
 }
 
 impl Step {
-    /// Apply the step to a document.
-    pub fn apply(&self, doc: &Node) -> Result<StepResult> {
+    /// Apply the step to a document. A caller that keeps the document passes a clone of it; one
+    /// that gives it up lets a replace change it in place.
+    pub fn apply(&self, doc: Node) -> Result<StepResult> {
         match self {
             Step::Replace {
                 from,
@@ -196,7 +197,7 @@ impl Step {
                 slice,
                 structure,
             } => {
-                if *structure && content_between(doc, *from, *to)? {
+                if *structure && content_between(&doc, *from, *to)? {
                     return Ok(StepResult::Failed(
                         "Structure replace would overwrite content".into(),
                     ));
@@ -213,8 +214,8 @@ impl Step {
                 structure,
             } => {
                 if *structure
-                    && (content_between(doc, *from, *gap_from)?
-                        || content_between(doc, *gap_to, *to)?)
+                    && (content_between(&doc, *from, *gap_from)?
+                        || content_between(&doc, *gap_to, *to)?)
                 {
                     return Ok(StepResult::Failed(
                         "Structure gap-replace would overwrite content".into(),
@@ -256,7 +257,7 @@ impl Step {
             } => {
                 let old = doc.slice(*from, *to, false)?;
                 let remove = |node: &Node, _: &Node| node.mark(mark.remove_from_set(node.marks()));
-                let content = map_fragment(old.content(), &remove, doc);
+                let content = map_fragment(old.content(), &remove, &doc);
                 let slice = Slice::new(content, old.open_start(), old.open_end());
                 StepResult::from_replace(doc, *from, *to, &slice)
             }
@@ -271,7 +272,8 @@ impl Step {
                 let updated =
                     node.node_type()
                         .create(Some(node.attrs()), Fragment::empty(), &marks)?;
-                StepResult::from_replace(doc, *pos, *pos + 1, &node_slice(updated, node.is_leaf()))
+                let slice = node_slice(updated, node.is_leaf());
+                StepResult::from_replace(doc, *pos, *pos + 1, &slice)
             }
             Step::Attr { pos, attr, value } => {
                 let Some(node) = doc.node_at(*pos)? else {
@@ -283,7 +285,8 @@ impl Step {
                 let updated =
                     node.node_type()
                         .create(Some(&attrs), Fragment::empty(), node.marks())?;
-                StepResult::from_replace(doc, *pos, *pos + 1, &node_slice(updated, node.is_leaf()))
+                let slice = node_slice(updated, node.is_leaf());
+                StepResult::from_replace(doc, *pos, *pos + 1, &slice)
             }
             Step::DocAttr { attr, value } => {
                 let attrs = attrs_with(doc.attrs(), attr, value);

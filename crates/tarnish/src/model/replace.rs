@@ -227,7 +227,26 @@ fn insert_into(
 }
 
 /// The document `from` is in, with `from` to `to` replaced by `slice`.
+/// What replacing a range makes of the top node.
+pub(crate) enum Replaced {
+    /// The node anew.
+    Node(Node),
+    /// The node's child at this index anew, the range lying inside it.
+    Child(usize, Node),
+}
+
 pub(crate) fn replace(from: &ResolvedPos, to: &ResolvedPos, slice: &Slice) -> Result<Node> {
+    Ok(match replace_top(from, to, slice)? {
+        Replaced::Node(node) => node,
+        Replaced::Child(index, child) => {
+            let node = from.node(0);
+            node.copy(node.content().replace_child(index, child))
+        }
+    })
+}
+
+/// `replace`, leaving the top node for the caller to put a child it made anew in.
+pub(crate) fn replace_top(from: &ResolvedPos, to: &ResolvedPos, slice: &Slice) -> Result<Replaced> {
     if slice.open_start > from.depth() {
         return Err(Error::Replace(
             "Inserted content deeper than insertion position".into(),
@@ -236,7 +255,12 @@ pub(crate) fn replace(from: &ResolvedPos, to: &ResolvedPos, slice: &Slice) -> Re
     if from.depth() + slice.open_end != to.depth() + slice.open_start {
         return Err(Error::Replace("Inconsistent open depths".into()));
     }
-    replace_outer(from, to, slice, 0)
+    let index = from.index(0);
+    if index == to.index(0) && 0 < from.depth() - slice.open_start {
+        let child = stack::grow(|| replace_outer(from, to, slice, 1))?;
+        return Ok(Replaced::Child(index, child));
+    }
+    replace_outer(from, to, slice, 0).map(Replaced::Node)
 }
 
 fn replace_outer(

@@ -207,7 +207,7 @@ fn documents_nest_as_deeply_as_memory_allows() {
             let inverted = step.invert(before).expect("an inverted step");
             let inverted = Step::from_json(&schema, &inverted.to_json()).expect("the step again");
             undone = inverted
-                .apply(&undone)
+                .apply(undone)
                 .expect("applies")
                 .doc()
                 .expect("a document")
