@@ -351,17 +351,15 @@ impl<'c> TextRef<'c> {
         }
     }
 
-    pub fn units(self) -> Cow<'c, [u16]> {
+    pub fn units(self) -> Vec<u16> {
         match self {
-            TextRef::Utf8 { text, .. } => Cow::Owned(text.encode_utf16().collect()),
-            TextRef::Units(bytes) => Cow::Owned(
-                bytes
-                    .as_chunks::<2>()
-                    .0
-                    .iter()
-                    .map(|&pair| u16::from_le_bytes(pair))
-                    .collect(),
-            ),
+            TextRef::Utf8 { text, .. } => text.encode_utf16().collect(),
+            TextRef::Units(bytes) => bytes
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|&pair| u16::from_le_bytes(pair))
+                .collect(),
         }
     }
 

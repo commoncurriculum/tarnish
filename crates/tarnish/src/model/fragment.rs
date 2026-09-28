@@ -176,19 +176,14 @@ impl<'a> List<'a> {
 
 /// `content.cut(0, from).append(insert).append(content.cut(to))`: one of the three when the
 /// others are empty, as `append` gives back what's appended to nothing, or a list of all three.
-enum Replaced<'a> {
+enum Splice<'a> {
     Piece(Fragment<'a>),
     List(List<'a>),
 }
 
-fn replaced<'a>(
-    content: &Fragment<'a>,
-    from: usize,
-    to: usize,
-    insert: &Fragment<'a>,
-) -> Replaced<'a> {
+fn splice<'a>(content: &Fragment<'a>, from: usize, to: usize, insert: &Fragment<'a>) -> Splice<'a> {
     let end = content.size();
-    Replaced::Piece(match (from > 0, insert.size() > 0, to < end) {
+    Splice::Piece(match (from > 0, insert.size() > 0, to < end) {
         (true, false, false) => content.cut(0, from),
         (false, true, false) => insert.clone(),
         (false, false, true) => content.cut(to, end),
@@ -199,7 +194,7 @@ fn replaced<'a>(
             list.add_cut(content, 0, from);
             list.add_cut(insert, 0, insert.size());
             list.add_cut(content, to, end);
-            return Replaced::List(list);
+            return Splice::List(list);
         }
     })
 }
@@ -510,9 +505,9 @@ impl<'a> Fragment<'a> {
         to: usize,
         insert: &Fragment<'a>,
     ) -> Fragment<'a> {
-        match replaced(self, from, to, insert) {
-            Replaced::Piece(piece) => piece,
-            Replaced::List(list) => list.finish(),
+        match splice(self, from, to, insert) {
+            Splice::Piece(piece) => piece,
+            Splice::List(list) => list.finish(),
         }
     }
 
@@ -525,9 +520,9 @@ impl<'a> Fragment<'a> {
         to: usize,
         insert: &Fragment<'a>,
     ) -> Node<'a> {
-        match replaced(self, from, to, insert) {
-            Replaced::Piece(piece) => node.copy(piece),
-            Replaced::List(list) => list.finish_copy(node),
+        match splice(self, from, to, insert) {
+            Splice::Piece(piece) => node.copy(piece),
+            Splice::List(list) => list.finish_copy(node),
         }
     }
 
