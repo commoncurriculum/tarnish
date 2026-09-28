@@ -12,8 +12,8 @@ use tarnish::{Error, Result, Text, Value, js};
 use crate::names;
 use crate::select::{self, Selectors};
 use crate::serialize;
-use crate::style::Style;
 use crate::tree::{Attr, Data, Element, FOLLOWING, NodeId, PRECEDING, Tree};
+use tarnish_css::Declarations;
 
 /// An HTML document and the nodes made in it: what [`parse_document`](HtmlDom::parse_document)
 /// parsed, the fragments [`parse_fragment`](HtmlDom::parse_fragment) parsed, and what a
@@ -162,17 +162,17 @@ impl HtmlDom {
     }
 
     /// Run `read` on the element's inline style, when it can have one.
-    fn with_style<T>(node: &HtmlNode, read: impl FnOnce(&Style) -> T, none: T) -> T {
+    fn with_style<T>(node: &HtmlNode, read: impl FnOnce(&Declarations) -> T, none: T) -> T {
         let mut tree = node.dom.tree();
-        let Some(element) = tree.element_mut(node.id) else {
+        let Some(element) = tree
+            .element_mut(node.id)
+            .filter(|element| has_style(element))
+        else {
             return none;
         };
-        if !element.is_html() && element.name.ns != ns!(svg) {
-            return none;
-        }
         let style = element.style.get_or_insert_with(|| {
             let css = element.attrs.iter().find(|attr| is_style(&attr.name));
-            Style::parse(css.map_or("", |attr| &attr.value))
+            Declarations::parse(css.map_or("", |attr| &attr.value))
         });
         read(style)
     }
@@ -180,6 +180,12 @@ impl HtmlDom {
 
 fn is_style(name: &QualName) -> bool {
     name.ns == ns!() && name.local == local_name!("style")
+}
+
+/// Whether the element has `style`: HTML's, SVG's and MathML's do.
+fn has_style(element: &Element) -> bool {
+    let namespace = &element.name.ns;
+    *namespace == ns!(html) || *namespace == ns!(svg) || *namespace == ns!(mathml)
 }
 
 impl HtmlNode {
@@ -213,7 +219,7 @@ impl HtmlNode {
     /// `style.getPropertyValue(property)`: the value the inline style gives the property, empty
     /// when it gives none. See [`Dom::style_value`].
     pub fn style_value(&self, property: &str) -> String {
-        HtmlDom::with_style(self, |style| style.get(property).to_owned(), String::new())
+        HtmlDom::with_style(self, |style| style.value(property), String::new())
     }
 
     /// `nodeName`: an HTML element's qualified name in upper case, `#text` for text, and so on.
@@ -328,7 +334,7 @@ impl Dom for HtmlDom {
     }
 
     fn style_count(&self, node: &HtmlNode) -> Result<usize> {
-        Ok(HtmlDom::with_style(node, Style::len, 0))
+        Ok(HtmlDom::with_style(node, Declarations::len, 0))
     }
 
     fn style_value(&self, node: &HtmlNode, property: &str) -> Result<String> {
@@ -397,11 +403,11 @@ impl Dom for HtmlDom {
     fn create_element(&self, namespace: Option<&str>, name: &str) -> Result<HtmlNode> {
         let name = match namespace {
             None => {
-                names::validate(name)?;
+                names::validate_element(name)?;
                 let local = LocalName::from(name.to_ascii_lowercase());
                 QualName::new(None, ns!(html), local)
             }
-            Some(namespace) => names::validate_and_extract(Some(namespace), name)?,
+            Some(namespace) => names::validate_and_extract(Some(namespace), name, true)?,
         };
         let mut tree = self.tree();
         let is_template = name.ns == ns!(html) && name.local == local_name!("template");
@@ -439,7 +445,7 @@ impl Dom for HtmlDom {
         let element = tree.element_mut(id).expect("an element");
         match namespace {
             None => {
-                names::validate(name)?;
+                names::validate_attribute(name)?;
                 let name = match element.is_html() {
                     true => name.to_ascii_lowercase(),
                     false => name.to_owned(),
@@ -457,7 +463,7 @@ impl Dom for HtmlDom {
                 }
             }
             Some(namespace) => {
-                let name = names::validate_and_extract(Some(namespace), name)?;
+                let name = names::validate_and_extract(Some(namespace), name, false)?;
                 let existing = element
                     .attrs
                     .iter_mut()
@@ -476,23 +482,20 @@ impl Dom for HtmlDom {
         let id = self.element_of(element)?;
         let mut tree = self.tree();
         let element = tree.element_mut(id).expect("an element");
-        if !element.is_html() && element.name.ns != ns!(svg) {
+        if !has_style(element) {
             return Ok(false);
         }
-        let parsed = Style::parse_css(&js::to_string(css));
-        // cssstyle writes the attribute from the declarations it kept, and leaves it alone
-        // when CSSOM throws.
-        if let Some(style) = &parsed {
-            let text = style.css_text();
-            match element.attrs.iter_mut().find(|attr| is_style(&attr.name)) {
-                Some(attr) => attr.value = text,
-                None => element.attrs.push(Attr {
-                    name: QualName::new(None, ns!(), local_name!("style")),
-                    value: text,
-                }),
-            }
+        // Setting `cssText` writes the attribute from the declarations kept.
+        let style = Declarations::parse(&js::to_string(css));
+        let text = style.css_text();
+        match element.attrs.iter_mut().find(|attr| is_style(&attr.name)) {
+            Some(attr) => attr.value = text,
+            None => element.attrs.push(Attr {
+                name: QualName::new(None, ns!(), local_name!("style")),
+                value: text,
+            }),
         }
-        element.style = Some(parsed.unwrap_or_default());
+        element.style = Some(style);
         Ok(true)
     }
 

@@ -11,7 +11,7 @@
   },
   "devDependencies": {
     "ist": "1.1.7",
-    "jsdom": "20.0.3",
+    "linkedom": "github:commoncurriculum/linkedom#6164e06feb0638eab959a0b3c4aa948d7baaf932",
     "mocha": "10.8.2",
     "orderedmap": "2.1.1",
     "prosemirror-model": "1.25.11",

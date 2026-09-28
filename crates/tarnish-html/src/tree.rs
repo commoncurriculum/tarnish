@@ -1,8 +1,7 @@
 //! The arena a DOM's nodes live in, linked to each other by index.
 
 use html5ever::{QualName, ns};
-
-use crate::style::Style;
+use tarnish_css::Declarations;
 
 pub(crate) type NodeId = usize;
 
@@ -40,7 +39,7 @@ pub(crate) struct Element {
     pub(crate) template_contents: Option<NodeId>,
     pub(crate) integration_point: bool,
     /// The declarations of the `style` attribute, read when first asked for.
-    pub(crate) style: Option<Style>,
+    pub(crate) style: Option<Declarations>,
 }
 
 pub(crate) struct Attr {

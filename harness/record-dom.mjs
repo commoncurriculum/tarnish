@@ -1,8 +1,8 @@
-// Records what ProseMirror's DOMParser and DOMSerializer do in jsdom, to fixtures/dom.json, for
+// Records what ProseMirror's DOMParser and DOMSerializer do in linkedom, to fixtures/dom.json, for
 // tarnish-html's tests to expect. The schema is prosemirror-test-builder's: prosemirror-schema-
 // basic's with prosemirror-schema-list's lists.
 // - Each HTML input is parsed twice: as a <template>'s content holds it, and as a whole document,
-//   whose body is parsed. Each records the tree jsdom built, as innerHTML writes it, and the
+//   whose body is parsed. Each records the tree linkedom built, as innerHTML writes it, and the
 //   document DOMParser.parse makes of it; the template also DOMParser.parseSlice's slice.
 // - Each document, from fixtures/transform.json, the parses and a few of its own, records the
 //   innerHTML of an element that DOMSerializer.serializeFragment fills.
@@ -10,7 +10,7 @@
 //   and the attribute that setting style.cssText to it writes.
 // - Each DOM output spec records the outerHTML of what DOMSerializer.renderSpec makes of it.
 import { readFileSync, writeFileSync } from "node:fs"
-import { JSDOM } from "jsdom"
+import { parseHTML } from "linkedom"
 import { DOMParser, DOMSerializer, Node, Schema } from "prosemirror-model"
 import { schema as basic } from "prosemirror-schema-basic"
 import { addListNodes } from "prosemirror-schema-list"
@@ -19,7 +19,7 @@ const schema = new Schema({
   nodes: addListNodes(basic.spec.nodes, "paragraph block*", "block"),
   marks: basic.spec.marks,
 })
-const { window } = new JSDOM()
+const window = parseHTML("")
 const { document } = window
 const parser = DOMParser.fromSchema(schema)
 const serializer = DOMSerializer.fromSchema(schema)
