@@ -213,8 +213,15 @@ impl<'p, D: Dom> ParseContext<'p, D> {
         }
         let id = self.next_id;
         self.next_id += 1;
-        let context =
-            NodeContext::new(id, Some(*node_type), attrs, apply.to_vec(), solid, None, ws);
+        let context = NodeContext::new(
+            id,
+            Some(node_type.clone()),
+            attrs,
+            apply.to_vec(),
+            solid,
+            None,
+            ws,
+        );
         self.nodes.push(context);
         self.open += 1;
         Ok(rest)

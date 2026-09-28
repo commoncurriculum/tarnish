@@ -22,7 +22,8 @@ impl<'p, D: Dom> ParseContext<'p, D> {
             && option.is_none_or(|option| {
                 self.nodes[0]
                     .node_type
-                    .is_some_and(|top| top == option.parent().node_type())
+                    .as_ref()
+                    .is_some_and(|top| *top == option.parent().node_type())
             });
         let min_depth = -(option.map_or(0, |option| option.depth() as isize + 1))
             + if use_root { 0 } else { 1 };
@@ -60,7 +61,7 @@ impl<'p, D: Dom> ParseContext<'p, D> {
                 return Ok(false);
             }
             let next = if depth > 0 || (depth == 0 && use_root) {
-                self.nodes[depth as usize].node_type
+                self.nodes[depth as usize].node_type.clone()
             } else if let Some(option) = option
                 && depth >= min_depth
             {

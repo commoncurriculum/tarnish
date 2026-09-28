@@ -439,7 +439,7 @@ fn gather_marks<'a>(
 }
 
 /// A node type in a schema.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct NodeType<'s> {
     pub(crate) schema: &'s Schema,
     pub(crate) index: usize,

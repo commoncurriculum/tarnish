@@ -87,7 +87,7 @@ pub fn find_wrapping<'s>(
     };
     let mut result: Vec<Wrapper> = around.into_iter().map(with_attrs).collect();
     result.push(Wrapper {
-        node_type: *node_type,
+        node_type: node_type.clone(),
         attrs,
     });
     result.extend(inner.into_iter().map(with_attrs));
@@ -224,7 +224,7 @@ pub fn can_split(
     let parent = resolved.parent();
     let index = resolved.index(resolved.depth());
     let inner_type = match types_after.last().and_then(Option::as_ref) {
-        Some(wrapper) => wrapper.node_type,
+        Some(wrapper) => wrapper.node_type.clone(),
         None => parent.node_type(),
     };
     if parent.node_type().spec().isolating
@@ -245,7 +245,7 @@ pub fn can_split(
             rest = rest.replace_child(0, over.create(Fragment::empty())?);
         }
         let after = match type_after(i) {
-            Some(wrapper) => wrapper.node_type,
+            Some(wrapper) => wrapper.node_type.clone(),
             None => node.node_type(),
         };
         if !node.can_replace(index + 1, node.child_count(), &Fragment::empty(), 0, 0)?
@@ -256,7 +256,7 @@ pub fn can_split(
     }
     let index = resolved.index_after(base);
     let base_type = match type_after(0) {
-        Some(wrapper) => wrapper.node_type,
+        Some(wrapper) => wrapper.node_type.clone(),
         // A `depth` of 0 leaves no node below `base`, whose type JavaScript reads.
         None if base == resolved.depth() => {
             return Err(js::type_error(js::Nullish::Undefined, "type"));
@@ -286,7 +286,7 @@ fn can_append_with_substituted_linebreaks(a: &Node, b: &Node) -> Result<bool> {
     let mut matched = a.content_match_at(a.child_count())?;
     for child in b.children() {
         let child_type = child.node_type();
-        let node_type = if Some(child_type) == linebreak {
+        let node_type = if linebreak.as_ref() == Some(&child_type) {
             schema.text_type()
         } else {
             child_type
@@ -594,7 +594,7 @@ impl<'a> Transform<'a> {
             .doc()
             .node_at(pos)?
             .ok_or_else(|| Error::Range("No node at given position".into()))?;
-        let node_type = node_type.copied().unwrap_or(node.node_type());
+        let node_type = node_type.cloned().unwrap_or_else(|| node.node_type());
         let own = node.marks().to_vec();
         let new_node = node_type.create(attrs, Fragment::empty(), marks.unwrap_or(&own))?;
         if node.is_leaf() {
