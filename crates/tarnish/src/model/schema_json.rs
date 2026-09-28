@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use super::attrs::{AttributeSpec, Validate};
+use super::attrs::{AttributeDefault, AttributeSpec, Validate};
 use super::schema::{MarkSpec, NodeSpec, SchemaSpec, Whitespace};
 use crate::error::{Error, Result};
 use crate::js;
@@ -117,7 +117,10 @@ fn attributes(spec: &Map) -> Result<Vec<(String, AttributeSpec)>> {
             Ok((
                 name.to_string(),
                 AttributeSpec {
-                    default: attr.get("default").cloned().map(Some),
+                    default: attr
+                        .get("default")
+                        .cloned()
+                        .map_or(AttributeDefault::Required, AttributeDefault::Value),
                     validate: validate(attr, name),
                 },
             ))

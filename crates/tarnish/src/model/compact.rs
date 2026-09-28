@@ -6,7 +6,7 @@ use std::sync::Arc;
 use super::node::Node;
 use super::schema::Schema;
 use super::view::{NodeRef, SetRef};
-use crate::chunk::{Builder, Chunk, Kid, LOCAL, Record, ValueRef, corrupt};
+use crate::chunk::{Builder, Chunk, EMPTY_OBJECT, EMPTY_SET, Holder, Kid, Record, ValueRef};
 use crate::stack;
 
 /// What a copy has written of what it copies: each value and set it copied, by where it was,
@@ -33,7 +33,6 @@ impl<'k, 'a> Copier<'k, 'a> {
         }
     }
 
-    /// `chunk`, when it is a chunk kept.
     fn kept_chunk(&self, chunk: &Chunk) -> Option<&'k Arc<Chunk<'a>>> {
         self.kept.iter().find(|kept| kept.ptr_eq(chunk))
     }
@@ -45,8 +44,8 @@ impl<'k, 'a> Copier<'k, 'a> {
     }
 
     fn value(&mut self, value: ValueRef) -> u32 {
-        if value.index == 0 {
-            return 0;
+        if value.index == EMPTY_OBJECT {
+            return EMPTY_OBJECT;
         }
         let key = (address(value.chunk), value.index);
         if let Some(&written) = self.values.get(&key) {
@@ -54,7 +53,7 @@ impl<'k, 'a> Copier<'k, 'a> {
         }
         let written = match self.kept(value.chunk, value.index) {
             Some(kept) => kept,
-            None => self.builder.copy_value(value),
+            None => self.builder.write(value),
         };
         self.values.insert(key, written);
         written
@@ -62,7 +61,7 @@ impl<'k, 'a> Copier<'k, 'a> {
 
     fn set(&mut self, set: SetRef) -> u32 {
         if set.is_empty() {
-            return 0;
+            return EMPTY_SET;
         }
         let key = (address(set.chunk), set.set);
         if let Some(&written) = self.sets.get(&key) {
@@ -97,7 +96,7 @@ impl<'k, 'a> Copier<'k, 'a> {
             return match self.kept(chunk, start) {
                 Some(a) => self.builder.text_record(Record {
                     marks,
-                    attrs: 0,
+                    attrs: EMPTY_OBJECT,
                     a,
                     ..record
                 }),
@@ -111,13 +110,10 @@ impl<'k, 'a> Copier<'k, 'a> {
         // a run.
         let mut run: Option<(u32, Option<u32>)> = None;
         for kid in list.kid_list(start, count) {
-            if kid.slot == LOCAL && kid.index >= bound {
-                corrupt();
-            }
+            let chunk = list.holder(kid, bound);
             let slot = match run {
                 Some((last, slot)) if last == kid.slot => slot,
                 _ => {
-                    let chunk = list.slot_chunk(kid.slot);
                     let slot = self.kept_chunk(chunk).map(|kept| self.builder.import(kept));
                     run = Some((kid.slot, slot));
                     slot
@@ -126,15 +122,15 @@ impl<'k, 'a> Copier<'k, 'a> {
             kids.push(match slot {
                 Some(slot) => Kid { slot, ..kid },
                 None => {
-                    let node = NodeRef::at(list.slot_chunk(kid.slot), kid.index);
+                    let node = NodeRef::at(chunk, kid.index);
                     Kid::local(stack::grow(|| self.copy(node)), kid.size)
                 }
             });
         }
         let attrs = self.value(node.attrs());
-        let first = self.builder.push_kids(&kids);
+        let first = self.builder.push_kids(kids.into_iter());
         self.builder
-            .element_of(record.ty, marks, attrs, first, count, record.size)
+            .element(record.ty, marks, attrs, first, count, record.size)
     }
 }
 
@@ -142,9 +138,7 @@ impl Node<'_> {
     /// The node written again, all of it, into one chunk of its own: a document that shares
     /// nothing with others any more, and holds nothing it doesn't use.
     pub fn compact(&self) -> Node<'static> {
-        let mut copier = Copier::new(self.schema(), &[]);
-        let id = copier.copy(self.view());
-        Node::at(copier.builder.seal(), id)
+        write_again(self.view(), &[])
     }
 }
 
@@ -153,8 +147,12 @@ impl<'a> Node<'a> {
     /// in the chunks `kept`, to which it refers for the rest. A step's changes, made in many
     /// small chunks, go into one this way.
     pub fn flatten(&self, kept: &[Arc<Chunk<'a>>]) -> Node<'a> {
-        let mut copier = Copier::new(self.schema(), kept);
-        let id = copier.copy(self.view());
-        Node::at(copier.builder.seal(), id)
+        write_again(self.view(), kept)
     }
+}
+
+fn write_again<'a>(node: NodeRef, kept: &[Arc<Chunk<'a>>]) -> Node<'a> {
+    let mut copier = Copier::new(node.chunk.schema(), kept);
+    let id = copier.copy(node);
+    Node::at(copier.builder.seal(), id)
 }
