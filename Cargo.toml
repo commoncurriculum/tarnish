@@ -11,3 +11,10 @@ repository = "https://github.com/commoncurriculum/tarnish"
 [profile.release]
 codegen-units = 1
 lto = "fat"
+
+# The linkedom fork's CSS: small, since it ships as a module.
+[profile.wasm]
+inherits = "release"
+opt-level = "z"
+panic = "abort"
+strip = true
