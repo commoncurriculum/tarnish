@@ -322,6 +322,23 @@ impl<'c> TextRef<'c> {
         }
     }
 
+    /// The units from `from` to `to`, which must be in the text, unless they split a surrogate
+    /// pair held as UTF-8.
+    pub(crate) fn part(self, from: usize, to: usize) -> Option<TextRef<'c>> {
+        match self {
+            TextRef::Utf8 { text, ascii, .. } => {
+                let (start, end) = self.byte_range(from, to)?;
+                let part = &text[start..end];
+                Some(TextRef::Utf8 {
+                    text: part,
+                    len: to - from,
+                    ascii: ascii || part.is_ascii(),
+                })
+            }
+            TextRef::Units(bytes) => Some(TextRef::Units(&bytes[from * 2..to * 2])),
+        }
+    }
+
     pub fn to_text(self) -> Text {
         match self {
             TextRef::Utf8 { text, .. } => Text::from(text),

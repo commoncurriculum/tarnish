@@ -3,6 +3,7 @@
 use std::fmt;
 
 use super::{Chunk, corrupt};
+use crate::js::TypeOf;
 use crate::js::json::{write_number, write_string};
 use crate::json::{Map, Number, Value};
 use crate::{js, stack};
@@ -219,14 +220,13 @@ impl<'c> ValueRef<'c> {
             .collect()
     }
 
-    /// `typeof`, `null` being `"null"`.
-    pub fn type_of(self) -> &'static str {
+    pub fn type_of(self) -> TypeOf {
         match Tag::from_word(self.chunk.value(self.index).0) {
-            Tag::Null => "null",
-            Tag::False | Tag::True => "boolean",
-            Tag::Int | Tag::UInt | Tag::Float => "number",
-            Tag::String => "string",
-            Tag::Array | Tag::Object => "object",
+            Tag::Null => TypeOf::Null,
+            Tag::False | Tag::True => TypeOf::Boolean,
+            Tag::Int | Tag::UInt | Tag::Float => TypeOf::Number,
+            Tag::String => TypeOf::String,
+            Tag::Array | Tag::Object => TypeOf::Object,
         }
     }
 

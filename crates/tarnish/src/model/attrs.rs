@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crate::chunk::{Builder, Chunk, ValueRef, value_equals};
 use crate::error::{Error, Result};
-use crate::js::{self, AttrKeys, Given, Keys};
+use crate::js::{AttrKeys, Given, Keys, TypeOf};
 use crate::json::{Key, Map, Value};
 
 /// A function that raises an error for an attribute value it doesn't accept, `None` being
@@ -30,9 +30,14 @@ pub enum Validate {
 }
 
 enum Check {
-    /// The types a value may have, and what to say when it has another.
-    Types(Vec<String>, String),
+    /// The types a value may have, a bit for each [`TypeOf`], and what to say when it has
+    /// another.
+    Types(u8, String),
     Hook(ValidateHook),
+}
+
+fn bit(type_of: TypeOf) -> u8 {
+    1 << type_of as u8
 }
 
 struct Attribute {
@@ -105,6 +110,8 @@ pub(crate) struct AttrSet {
     attrs: Vec<(Key, Attribute)>,
     /// What nodes or marks given no attributes get, when every attribute has a default.
     defaults: Option<Map>,
+    /// Whether any attribute has a check.
+    checked: bool,
 }
 
 /// The attributes computed from what a type is given: its defaults, or each attribute's value,
@@ -122,12 +129,16 @@ impl AttrSet {
                 let check = spec.validate.as_ref().map(|validate| match validate {
                     Validate::Hook(hook) => Check::Hook(hook.clone()),
                     Validate::Types(types) => {
-                        let types: Vec<String> = types.split('|').map(str::to_owned).collect();
+                        let types: Vec<&str> = types.split('|').collect();
+                        let allowed = types
+                            .iter()
+                            .filter_map(|name| TypeOf::named(name))
+                            .fold(0, |allowed, type_of| allowed | bit(type_of));
                         let expected = format!(
                             "Expected value of type {} for attribute {name} on type {type_name}",
                             types.join(",")
                         );
-                        Check::Types(types, expected)
+                        Check::Types(allowed, expected)
                     }
                 });
                 let attribute = Attribute {
@@ -139,6 +150,7 @@ impl AttrSet {
             .collect();
         AttrSet {
             defaults: defaults(&attrs),
+            checked: attrs.iter().any(|(_, attr)| attr.check.is_some()),
             attrs,
         }
     }
@@ -256,7 +268,7 @@ impl AttrSet {
     /// [`check_map`](Self::check_map) of attributes a chunk holds.
     pub fn check_ref(&self, values: ValueRef, kind: &str, type_name: &str) -> Result<()> {
         // Value 0 is the empty object, which only a check can refuse.
-        if values.index == 0 && self.attrs.iter().all(|(_, attr)| attr.check.is_none()) {
+        if values.index == 0 && !self.checked {
             return Ok(());
         }
         // Each attribute's value, found as the keys are checked, for the checks that follow.
@@ -271,12 +283,16 @@ impl AttrSet {
                 &mut many
             }
         };
-        for (key, value) in values.entries_bytes() {
-            match self
-                .attrs
-                .iter()
-                .position(|(known, _)| known.as_bytes() == key)
-            {
+        for (at, (key, value)) in values.entries_bytes().enumerate() {
+            // Attributes a type computed are written in its order.
+            let index = match self.attrs.get(at) {
+                Some((known, _)) if known.as_bytes() == key => Some(at),
+                _ => self
+                    .attrs
+                    .iter()
+                    .position(|(known, _)| known.as_bytes() == key),
+            };
+            match index {
                 Some(index) => found[index] = Some(value),
                 None => {
                     let key = String::from_utf8_lossy(key);
@@ -286,8 +302,8 @@ impl AttrSet {
                 }
             }
         }
-        for ((_, attr), value) in self.attrs.iter().zip(found.iter()) {
-            if attr.check.is_some() {
+        if self.checked {
+            for ((_, attr), value) in self.attrs.iter().zip(found.iter()) {
                 check_value(attr, value.map(Found::Chunk))?;
             }
         }
@@ -319,16 +335,16 @@ fn check_value(attr: &Attribute, value: Option<Found>) -> Result<()> {
             Some(Found::Json(value)) => hook(Some(value)),
             Some(Found::Chunk(value)) => hook(Some(&value.to_value())),
         },
-        Some(Check::Types(types, expected)) => {
-            let name = match value {
-                None => "undefined",
-                Some(Found::Json(value)) => js::type_of(Some(value)),
+        Some(Check::Types(allowed, expected)) => {
+            let type_of = match value {
+                None => TypeOf::Undefined,
+                Some(Found::Json(value)) => TypeOf::of(Some(value)),
                 Some(Found::Chunk(value)) => value.type_of(),
             };
-            if types.iter().any(|allowed| allowed == name) {
+            if allowed & bit(type_of) != 0 {
                 return Ok(());
             }
-            Err(Error::Range(format!("{expected}, got {name}")))
+            Err(Error::Range(format!("{expected}, got {}", type_of.name())))
         }
     }
 }

@@ -62,16 +62,56 @@ pub fn truthy(value: Option<&Value>) -> bool {
     }
 }
 
-/// `typeof value`, with `null` as `"null"`, as an attribute's
-/// [`validate`](crate::AttributeSpec) type list names it. `None` is `undefined`.
-pub fn type_of(value: Option<&Value>) -> &'static str {
-    match value {
-        None => "undefined",
-        Some(Value::Null) => "null",
-        Some(Value::Bool(_)) => "boolean",
-        Some(Value::Number(_)) => "number",
-        Some(Value::String(_)) => "string",
-        Some(Value::Array(_) | Value::Object(_)) => "object",
+/// `typeof value` for what JSON holds, with `null` as `"null"`, as an attribute's
+/// [`validate`](crate::AttributeSpec) type list names it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TypeOf {
+    Undefined,
+    Null,
+    Boolean,
+    Number,
+    String,
+    Object,
+}
+
+impl TypeOf {
+    const ALL: [TypeOf; 6] = [
+        TypeOf::Undefined,
+        TypeOf::Null,
+        TypeOf::Boolean,
+        TypeOf::Number,
+        TypeOf::String,
+        TypeOf::Object,
+    ];
+
+    /// `None` being `undefined`.
+    pub fn of(value: Option<&Value>) -> TypeOf {
+        match value {
+            None => TypeOf::Undefined,
+            Some(Value::Null) => TypeOf::Null,
+            Some(Value::Bool(_)) => TypeOf::Boolean,
+            Some(Value::Number(_)) => TypeOf::Number,
+            Some(Value::String(_)) => TypeOf::String,
+            Some(Value::Array(_) | Value::Object(_)) => TypeOf::Object,
+        }
+    }
+
+    /// The type a name gives, when a JSON value can have it.
+    pub fn named(name: &str) -> Option<TypeOf> {
+        TypeOf::ALL
+            .into_iter()
+            .find(|type_of| type_of.name() == name)
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            TypeOf::Undefined => "undefined",
+            TypeOf::Null => "null",
+            TypeOf::Boolean => "boolean",
+            TypeOf::Number => "number",
+            TypeOf::String => "string",
+            TypeOf::Object => "object",
+        }
     }
 }
 

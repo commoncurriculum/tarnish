@@ -645,38 +645,34 @@ impl<'a> Builder<'a> {
         }
     }
 
-    /// A text node of two texts, one after the other.
-    pub fn text_of_parts(&mut self, ty: u16, marks: u32, first: TextRef, second: TextRef) -> u32 {
-        let (
-            TextRef::Utf8 {
-                text: a,
-                ascii: a_ascii,
-                ..
-            },
-            TextRef::Utf8 {
-                text: b,
-                ascii: b_ascii,
-                ..
-            },
-        ) = (first, second)
-        else {
-            let text: Text = [first.to_text(), second.to_text()].iter().collect();
+    /// A text node of these texts, one after another.
+    pub fn text_of_parts(&mut self, ty: u16, marks: u32, parts: &[TextRef]) -> u32 {
+        if parts.iter().any(|part| matches!(part, TextRef::Units(_))) {
+            let texts: Vec<Text> = parts.iter().map(|part| part.to_text()).collect();
+            let text: Text = texts.iter().collect();
             return self.text_of(ty, marks, &text);
-        };
-        let start = self.push(TEXT, a.as_bytes());
-        self.push(TEXT, b.as_bytes());
-        let flags = match a_ascii && b_ascii {
-            true => TEXT_NODE | ASCII,
-            false => TEXT_NODE,
-        };
+        }
+        let (start, mut bytes, mut ascii) = (self.counts[TEXT], 0, true);
+        for part in parts {
+            if let TextRef::Utf8 {
+                text,
+                ascii: part_ascii,
+                ..
+            } = *part
+            {
+                self.push(TEXT, text.as_bytes());
+                bytes += text.len();
+                ascii &= part_ascii;
+            }
+        }
         self.push_record(Record {
             ty,
-            flags,
+            flags: if ascii { TEXT_NODE | ASCII } else { TEXT_NODE },
             marks,
             attrs: 0,
             a: start,
-            b: (a.len() + b.len()) as u32,
-            size: (first.len() + second.len()) as u32,
+            b: bytes as u32,
+            size: parts.iter().map(|part| part.len()).sum::<usize>() as u32,
         })
     }
 

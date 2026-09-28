@@ -131,11 +131,23 @@ impl<'a> Node<'a> {
     /// This node's markup with other content: a node of the same type, attributes and marks.
     fn with_content(&self, content: &Fragment<'a>) -> Node<'a> {
         Node::build(self.chunk().schema(), |builder| {
-            let marks = builder.reference_markup(self.chunk(), self.record.marks);
-            let attrs = builder.reference_markup(self.chunk(), self.record.attrs);
             let (first, count, size) = content.list(builder);
-            builder.element_of(self.record.ty, marks, attrs, first, count, size)
+            self.write_copy(builder, first, count, size)
         })
+    }
+
+    /// Writes into `builder` a node with this one's markup, holding the `count` kids listed
+    /// from `first`, a kids ref, whose content is `size`.
+    pub(crate) fn write_copy(
+        &self,
+        builder: &mut Builder<'a>,
+        first: u32,
+        count: u32,
+        size: u32,
+    ) -> u32 {
+        let marks = builder.reference_markup(self.chunk(), self.record.marks);
+        let attrs = builder.reference_markup(self.chunk(), self.record.attrs);
+        builder.element_of(self.record.ty, marks, attrs, first, count, size)
     }
 
     pub fn node_type(&self) -> NodeType<'_> {
@@ -418,8 +430,41 @@ impl<'a> Node<'a> {
             return None;
         }
         let marks = builder.reference_markup(self.chunk(), self.record.marks);
-        let joined = builder.text_of_parts(self.record.ty, marks, text, more);
+        let joined = builder.text_of_parts(self.record.ty, marks, &[text, more]);
         Some(Kid::local(joined, (text.len() + more.len()) as u32))
+    }
+
+    /// Writes into `builder` one text node of these parts of text nodes with the same markup,
+    /// each from and to a UTF-16 offset, with the first's markup.
+    pub(crate) fn join_texts_into(
+        builder: &mut Builder<'a>,
+        parts: &[(Node<'a>, usize, usize)],
+    ) -> Kid {
+        let (first, ..) = &parts[0];
+        let (ty, marks) = (
+            first.record.ty,
+            builder.reference_markup(first.chunk(), first.record.marks),
+        );
+        let texts: Option<Vec<TextRef>> = parts
+            .iter()
+            .map(|(node, from, to)| node.text()?.part(*from, *to))
+            .collect();
+        let (joined, size) = match texts {
+            Some(texts) => (
+                builder.text_of_parts(ty, marks, &texts),
+                texts.iter().map(|text| text.len()).sum(),
+            ),
+            // A part splits a surrogate pair.
+            None => {
+                let texts: Vec<Text> = parts
+                    .iter()
+                    .map(|(node, from, to)| node.text().expect("text").slice(*from, *to))
+                    .collect();
+                let text: Text = texts.iter().collect();
+                (builder.text_of(ty, marks, &text), text.len())
+            }
+        };
+        Kid::local(joined, size as u32)
     }
 
     /// The node with only its content between `from` and `to`; for a text node, only that part
@@ -770,17 +815,14 @@ impl<'a> Node<'a> {
 
     /// Raise an error if this node or a descendant doesn't fit the schema.
     pub fn check(&self) -> Result<()> {
-        let mut walk = Walk {
-            path: Vec::new(),
-            kids: Vec::new(),
-        };
-        match walk.check(self.view()) {
+        let mut path = Vec::new();
+        match check_node(self.view(), &mut path) {
             Ok(()) => Ok(()),
             Err(Failed::Error(error)) => Err(error),
             // The error describes the content, for which the schema's hooks need nodes.
             Err(Failed::Content) => {
                 let mut node = self.clone();
-                for index in walk.path {
+                for index in path {
                     node = node.child(index as usize)?;
                 }
                 node.node_type().check_content(node.content())
@@ -830,48 +872,35 @@ impl From<Error> for Failed {
     }
 }
 
-/// A walk over a document checking it: the path of child indices to the node it's at, and the
-/// children of the nodes on the path, each node's after its parent's.
-struct Walk<'c> {
-    path: Vec<u32>,
-    kids: Vec<NodeRef<'c>>,
-}
-
-impl<'c> Walk<'c> {
-    fn check(&mut self, node: NodeRef<'c>) -> Result<(), Failed> {
-        let node_type = node.node_type();
-        let data = node_type.data();
-        let schema = node_type.schema();
-        let base = self.kids.len();
-        self.kids.extend(node.children());
-        let kids = &self.kids[base..];
-        let types = kids
-            .iter()
-            .map(|kid| (kid.chunk.schema() == schema).then(|| usize::from(kid.record.ty)));
-        let allowed = data.mark_set.is_none()
-            || kids
-                .iter()
-                .all(|kid| kid.marks().iter().all(|mark| data.allows_mark(mark.rank())));
-        if !(data.content.accepts(types) && allowed) {
-            return Err(Failed::Content);
-        }
-        data.attrs
-            .check_ref(node.attrs(), "node", node_type.name())?;
-        check_marks(node)?;
-        for index in 0..self.kids.len() - base {
-            let child = self.kids[base + index];
-            // Text has no content and no attributes, so only its marks can be wrong.
-            if child.is_text() {
-                check_marks(child)?;
-                continue;
-            }
-            self.path.push(index as u32);
-            stack::grow(|| self.check(child))?;
-            self.path.pop();
-        }
-        self.kids.truncate(base);
-        Ok(())
+/// Checks a node and what it holds, `path` being the child indices that lead to it.
+fn check_node(node: NodeRef, path: &mut Vec<u32>) -> Result<(), Failed> {
+    let node_type = node.node_type();
+    let data = node_type.data();
+    let schema = node_type.schema();
+    let types = node
+        .children()
+        .map(|kid| (kid.chunk.schema() == schema).then(|| usize::from(kid.record.ty)));
+    let allowed = data.mark_set.is_none()
+        || node
+            .children()
+            .all(|kid| kid.marks().iter().all(|mark| data.allows_mark(mark.rank())));
+    if !(data.content.accepts(types) && allowed) {
+        return Err(Failed::Content);
     }
+    data.attrs
+        .check_ref(node.attrs(), "node", node_type.name())?;
+    check_marks(node)?;
+    for (index, child) in node.children().enumerate() {
+        // Text has no content and no attributes, so only its marks can be wrong.
+        if child.is_text() {
+            check_marks(child)?;
+            continue;
+        }
+        path.push(index as u32);
+        stack::grow(|| check_node(child, path))?;
+        path.pop();
+    }
+    Ok(())
 }
 
 /// Checks a node's marks' attributes, and that they make a set.

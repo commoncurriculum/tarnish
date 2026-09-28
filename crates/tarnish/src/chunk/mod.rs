@@ -359,6 +359,14 @@ impl<'a> Chunk<'a> {
         word(&self.bytes, at + 8)
     }
 
+    /// The sizes of the nodes of `count` kids listed from `first`.
+    #[inline]
+    pub(crate) fn kid_sizes(&self, first: u32, count: u32) -> impl Iterator<Item = u32> + '_ {
+        let kids = self.span(KIDS, first, count).as_chunks::<12>().0;
+        kids.iter()
+            .map(|kid| u32::from_le_bytes([kid[8], kid[9], kid[10], kid[11]]))
+    }
+
     /// The import slot and index an extern names.
     #[inline]
     fn external(&self, reference: u32) -> (usize, u32) {

@@ -43,6 +43,9 @@ struct List<'a> {
     builder: Builder<'a>,
     start: u32,
     count: u32,
+    /// Text held back from the list, to join to text with the same markup that comes next: the
+    /// text nodes it's parts of, each from and to a UTF-16 offset.
+    tail: Vec<(Node<'a>, usize, usize)>,
 }
 
 impl<'a> List<'a> {
@@ -53,7 +56,78 @@ impl<'a> List<'a> {
             builder,
             start,
             count: 0,
+            tail: Vec::new(),
         }
+    }
+
+    /// Adds the children of `fragment` between `from` and `to`, cut as [`Fragment::cut`] cuts
+    /// them, the first joined to the text held back as [`Fragment::append`] joins them. Text
+    /// that comes last is held back in turn.
+    fn add_cut(&mut self, fragment: &Fragment<'a>, from: usize, to: usize) {
+        if from >= to {
+            return;
+        }
+        let (mut first, mut start) = (0, 0);
+        while start + fragment.child_size(first) <= from {
+            start += fragment.child_size(first);
+            first += 1;
+        }
+        let (mut last, mut end) = (first, start + fragment.child_size(first));
+        while end < to {
+            last += 1;
+            end += fragment.child_size(last);
+        }
+        self.add_child(
+            fragment.node(first),
+            from.saturating_sub(start),
+            to - start,
+            true,
+        );
+        if last > first {
+            self.flush();
+            self.extend(fragment, first + 1, last);
+            let last_start = end - fragment.child_size(last);
+            self.add_child(fragment.node(last), 0, to - last_start, false);
+        }
+    }
+
+    /// Adds `child` with only its content, or text, from `from` to `to`. Text is held back,
+    /// joined to the text held back already when it has the same markup and comes at a `seam`.
+    fn add_child(&mut self, child: Node<'a>, from: usize, to: usize, seam: bool) {
+        let to = to.min(child.node_size());
+        if child.is_text() {
+            let joins = seam
+                && self
+                    .tail
+                    .first()
+                    .is_some_and(|(text, ..)| text.same_markup(&child));
+            if !joins {
+                self.flush();
+            }
+            self.tail.push((child, from, to));
+        } else if from == 0 && to == child.node_size() {
+            self.flush();
+            self.push(&child);
+        } else {
+            self.flush();
+            let cut = stack::grow(|| {
+                child.cut_content(from.saturating_sub(1), child.content().size().min(to - 1))
+            });
+            self.push(&cut);
+        }
+    }
+
+    /// Lists the text held back.
+    fn flush(&mut self) {
+        let kid = match self.tail.as_slice() {
+            [] => return,
+            [(text, from, to)] => text
+                .cut_text_into(&mut self.builder, *from, *to)
+                .expect("text"),
+            parts => Node::join_texts_into(&mut self.builder, parts),
+        };
+        self.tail.clear();
+        self.push_kid(kid);
     }
 
     fn push(&mut self, node: &Node<'a>) {
@@ -80,13 +154,54 @@ impl<'a> List<'a> {
     }
 
     /// The fragment of the list, whose children take `size` positions.
-    fn finish(self, size: usize) -> Fragment<'a> {
+    fn finish(mut self, size: usize) -> Fragment<'a> {
+        self.flush();
         if self.count == 0 {
             return Fragment::empty();
         }
         let size = u32::try_from(size).expect("a fragment smaller than 4G positions");
         Fragment::of(self.builder.seal(), self.start, self.count, size, u32::MAX)
     }
+
+    /// A node with `node`'s markup, holding the list, whose children take `size` positions,
+    /// written with it.
+    fn finish_copy(mut self, node: &Node<'a>, size: usize) -> Node<'a> {
+        self.flush();
+        let size = u32::try_from(size).expect("a fragment smaller than 4G positions");
+        let first = if self.count == 0 { 0 } else { self.start };
+        let id = node.write_copy(&mut self.builder, first, self.count, size);
+        Node::at(self.builder.seal(), id)
+    }
+}
+
+/// `content.cut(0, from).append(insert).append(content.cut(to))`: one of the three when the
+/// others are empty, as `append` gives back what's appended to nothing, or a list of all three.
+enum Replaced<'a> {
+    Piece(Fragment<'a>),
+    List(List<'a>),
+}
+
+fn replaced<'a>(
+    content: &Fragment<'a>,
+    from: usize,
+    to: usize,
+    insert: &Fragment<'a>,
+) -> Replaced<'a> {
+    let end = content.size();
+    Replaced::Piece(match (from > 0, insert.size() > 0, to < end) {
+        (true, false, false) => content.cut(0, from),
+        (false, true, false) => insert.clone(),
+        (false, false, true) => content.cut(to, end),
+        (false, false, false) => Fragment::empty(),
+        _ => {
+            let schema = content.schema().expect("a fragment with children");
+            let mut list = List::new(schema);
+            list.add_cut(content, 0, from);
+            list.add_cut(insert, 0, insert.size());
+            list.add_cut(content, to, end);
+            return Replaced::List(list);
+        }
+    })
 }
 
 impl<'a> Fragment<'a> {
@@ -451,6 +566,36 @@ impl<'a> Fragment<'a> {
         }
     }
 
+    /// `this.cut(0, from).append(insert).append(this.cut(to))`, written as one list.
+    pub(crate) fn replace_range(
+        &self,
+        from: usize,
+        to: usize,
+        insert: &Fragment<'a>,
+    ) -> Fragment<'a> {
+        match replaced(self, from, to, insert) {
+            Replaced::Piece(piece) => piece,
+            Replaced::List(list) => list.finish(self.size() - (to - from) + insert.size()),
+        }
+    }
+
+    /// `node.copy(this.cut(0, from).append(insert).append(this.cut(to)))`, this being the
+    /// node's content, written with its list.
+    pub(crate) fn copy_replaced(
+        &self,
+        node: &Node<'a>,
+        from: usize,
+        to: usize,
+        insert: &Fragment<'a>,
+    ) -> Node<'a> {
+        match replaced(self, from, to, insert) {
+            Replaced::Piece(piece) => node.copy(piece),
+            Replaced::List(list) => {
+                list.finish_copy(node, self.size() - (to - from) + insert.size())
+            }
+        }
+    }
+
     /// The fragment with the child at `index` replaced by `node`.
     pub fn replace_child(&self, index: usize, node: Node<'a>) -> Fragment<'a> {
         let current = self.node(index as u32);
@@ -494,9 +639,13 @@ impl<'a> Fragment<'a> {
                 self.to_debug_string()?
             )));
         }
+        let chunk = self
+            .chunk
+            .as_ref()
+            .expect("a fragment with children is in a chunk");
         let mut offset = 0;
-        for index in 0..self.child_count() {
-            let end = offset + self.child_size(index as u32);
+        for (index, size) in chunk.kid_sizes(self.start, self.count).enumerate() {
+            let end = offset + size as usize;
             if end >= pos {
                 if end == pos {
                     return Ok((index + 1, end));

@@ -626,13 +626,17 @@ impl<'s> NodeType<'s> {
     }
 
     pub fn valid_content(&self, content: &Fragment) -> bool {
-        let types = content
-            .children()
-            .map(|child| (child.node_type().schema == self.schema).then(|| child.type_index()));
+        let types = content.refs().map(|child| {
+            (child.node_type().schema == self.schema).then(|| usize::from(child.record.ty))
+        });
         self.data().content.accepts(types)
-            && content
-                .children()
-                .all(|child| self.allows_marks(&child.marks()))
+            && (self.data().mark_set.is_none()
+                || content.refs().all(|child| {
+                    child
+                        .marks()
+                        .iter()
+                        .all(|mark| self.allows_mark_type(&mark.mark_type()))
+                }))
     }
 
     pub fn check_content(&self, content: &Fragment) -> Result<()> {

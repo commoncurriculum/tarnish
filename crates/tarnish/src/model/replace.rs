@@ -167,9 +167,7 @@ fn remove_range<'a>(content: &Fragment<'a>, from: usize, to: usize) -> Result<Fr
         if offset_to != to && !content.child(index_to)?.is_text() {
             return Err(Error::Range("Removing non-flat range".into()));
         }
-        return Ok(content
-            .cut(0, from)
-            .append(&content.cut(to, content.size())));
+        return Ok(content.replace_range(from, to, &Fragment::empty()));
     }
     if index != index_to {
         return Err(Error::Range("Removing non-flat range".into()));
@@ -197,12 +195,7 @@ fn insert_into<'a>(
         {
             return Ok(None);
         }
-        return Ok(Some(
-            content
-                .cut(0, dist)
-                .append(insert)
-                .append(&content.cut(dist, content.size())),
-        ));
+        return Ok(Some(content.replace_range(dist, dist, insert)));
     }
     let child = child.expect("a child around the position");
     let inner = stack::grow(|| {
@@ -290,14 +283,14 @@ fn replace_outer<'a>(
         && to.depth() == depth
     {
         let parent = from.parent();
-        let content = parent.content();
-        close(
+        let replaced = parent.content().copy_replaced(
             parent,
-            content
-                .cut(0, from.parent_offset())
-                .append(&slice.content)
-                .append(&content.cut(to.parent_offset(), content.size())),
-        )
+            from.parent_offset(),
+            to.parent_offset(),
+            &slice.content,
+        );
+        check_content(parent, replaced.content())?;
+        Ok(replaced)
     } else {
         let (start, end) = prepare_slice_for_replace(slice, from)?;
         close(node, replace_three_way(from, &start, &end, to, depth)?)
@@ -365,13 +358,18 @@ fn add_range<'a>(
 }
 
 fn close<'a>(node: &Node<'a>, content: Fragment<'a>) -> Result<Node<'a>> {
-    if !node.node_type().valid_content(&content) {
+    check_content(node, &content)?;
+    Ok(node.copy(content))
+}
+
+fn check_content(node: &Node, content: &Fragment) -> Result<()> {
+    if !node.node_type().valid_content(content) {
         return Err(Error::Replace(format!(
             "Invalid content for node {}",
             node.node_type().name()
         )));
     }
-    Ok(node.copy(content))
+    Ok(())
 }
 
 fn replace_three_way<'a>(
