@@ -538,25 +538,24 @@ impl<'a> Node<'a> {
             id,
             own,
         } = self;
-        let Some(mut chunk) = own else {
-            let node = Node {
+        let node = match own {
+            None => Node {
                 content,
                 record,
                 id,
                 own: None,
-            };
-            return node.copy(node.content.replace_child(index as usize, child));
+            },
+            Some(mut chunk) => {
+                // The content holds the list's chunk, which nothing else may hold to change it.
+                drop(content);
+                let size = child.node_size() as u32;
+                if Chunk::replace_kid_in_place(&mut chunk, id, index, child.chunk(), child.id, size)
+                {
+                    return Node::at(chunk, id);
+                }
+                Node::at(chunk, id)
+            }
         };
-        let (start, old_size) = (content.start(), content.child_size(index));
-        drop(content);
-        let size = record.size as usize - old_size + child.node_size();
-        if set_child(&mut chunk, record.a, start, index, &child).is_some() {
-            Arc::get_mut(&mut chunk)
-                .expect("a chunk changed in place")
-                .set_size(id, size as u32);
-            return Node::at(chunk, id);
-        }
-        let node = Node::at(chunk, id);
         node.copy(node.content.replace_child(index as usize, child))
     }
 
@@ -800,29 +799,6 @@ impl<'a> Node<'a> {
         let id = reader.node(json)?;
         Ok(Node::at(reader.finish(), id))
     }
-}
-
-/// Puts `child` in place of kid `position` of the list at `start` that `kids`, a ref in `chunk`,
-/// names in an import: `None`, having changed nothing, unless `chunk` and that import are held
-/// by nothing else and own their bytes.
-fn set_child<'a>(
-    chunk: &mut Arc<Chunk<'a>>,
-    kids: u32,
-    start: u32,
-    position: u32,
-    child: &Node<'a>,
-) -> Option<()> {
-    let chunk = Arc::get_mut(chunk).filter(|chunk| chunk.is_owned())?;
-    let (slot, _) = chunk.external_ref(kids)?;
-    let list = chunk.import_mut(slot).filter(|list| list.is_owned())?;
-    let child_slot = list.import_in_place(child.chunk())?;
-    let kid = Kid {
-        slot: child_slot,
-        index: child.id,
-        size: child.node_size() as u32,
-    };
-    list.set_kid(start, position, kid);
-    Some(())
 }
 
 fn empty_text() -> Error {

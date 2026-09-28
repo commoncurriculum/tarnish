@@ -583,31 +583,62 @@ impl<'a> Chunk<'a> {
         std::ptr::eq(self.bytes.as_ptr(), other.bytes.as_ptr())
     }
 
-    /// The import slot and index a ref to another chunk names; `None` for a ref into this one.
-    pub(crate) fn external_ref(&self, reference: u32) -> Option<(usize, u32)> {
-        (reference & EXTERN != 0).then(|| {
-            let (slot, index) = self.external(reference);
-            (slot as usize, index)
-        })
+    /// Puts node `index` of `holder`, `size` positions long, in place of kid `position` of node
+    /// `id`'s list of kids, and changes the node's size to match: `false`, having changed
+    /// nothing, unless the list is in an import, and this chunk and that one are held by
+    /// nothing else and own their bytes.
+    pub(crate) fn replace_kid_in_place(
+        this: &mut Arc<Chunk<'a>>,
+        id: u32,
+        position: u32,
+        holder: &Arc<Chunk<'a>>,
+        index: u32,
+        size: u32,
+    ) -> bool {
+        let Some(chunk) = Arc::get_mut(this).filter(|chunk| chunk.is_owned()) else {
+            return false;
+        };
+        let record = chunk.record(id);
+        if record.a & EXTERN == 0 {
+            return false;
+        }
+        let (slot, start) = chunk.external(record.a);
+        let at = start.checked_add(position).unwrap_or_else(|| corrupt());
+        let Some(list) = (chunk.imports.get_mut(slot as usize))
+            .and_then(Arc::get_mut)
+            .filter(|list| list.is_owned())
+        else {
+            return false;
+        };
+        let content = u64::from(record.size) - u64::from(list.kid(at).size) + u64::from(size);
+        let Ok(content) = u32::try_from(content) else {
+            return false;
+        };
+        let Some(slot) = list.import_in_place(holder) else {
+            return false;
+        };
+        let kid = list.at(KIDS, at);
+        list.write_words(kid, &[slot, index, size]);
+        let node = chunk.at(NODES, id);
+        chunk.write_words(node + 20, &[content]);
+        true
     }
 
-    /// An import, to change in place: `None` unless the chunk holds it alone.
-    pub(crate) fn import_mut(&mut self, slot: usize) -> Option<&mut Chunk<'a>> {
-        self.imports.get_mut(slot).and_then(Arc::get_mut)
-    }
-
-    /// Whether the chunk's bytes are its own, so that it may be changed in place once nothing
-    /// else holds it.
-    pub(crate) fn is_owned(&self) -> bool {
+    fn is_owned(&self) -> bool {
         matches!(self.bytes, Cow::Owned(_))
+    }
+
+    fn owned_bytes(&mut self) -> &mut Vec<u8> {
+        match &mut self.bytes {
+            Cow::Owned(bytes) => bytes,
+            Cow::Borrowed(_) => panic!("a chunk changed in place owns its bytes"),
+        }
     }
 
     /// Words of the chunk's own bytes written over, at byte `at`.
     fn write_words(&mut self, at: usize, words: &[u32]) {
-        let Cow::Owned(bytes) = &mut self.bytes else {
-            panic!("a chunk changed in place owns its bytes");
-        };
-        for (word, bytes) in words.iter().zip(bytes[at..].as_chunks_mut::<4>().0) {
+        let bytes = &mut self.owned_bytes()[at..];
+        for (word, bytes) in words.iter().zip(bytes.as_chunks_mut::<4>().0) {
             *bytes = word.to_le_bytes();
         }
     }
@@ -615,7 +646,7 @@ impl<'a> Chunk<'a> {
     /// The slot of `chunk`, importing it, at the end, when it isn't an import yet: `None` once
     /// the chunk has as many imports as changes in place may give it, which would otherwise
     /// keep every chunk they made alive.
-    pub(crate) fn import_in_place(&mut self, chunk: &Arc<Chunk<'a>>) -> Option<u32> {
+    fn import_in_place(&mut self, chunk: &Arc<Chunk<'a>>) -> Option<u32> {
         if let Some(slot) = self
             .imports
             .iter()
@@ -626,30 +657,13 @@ impl<'a> Chunk<'a> {
         if self.imports.len() >= IMPORTS_IN_PLACE {
             return None;
         }
-        let Cow::Owned(bytes) = &mut self.bytes else {
-            panic!("a chunk changed in place owns its bytes");
-        };
-        bytes.extend_from_slice(&chunk.id.to_le_bytes());
+        self.owned_bytes()
+            .extend_from_slice(&chunk.id.to_le_bytes());
         let slot = self.imports.len() as u32;
         self.counts[IMPORTS] = slot + 1;
         self.write_words(24 + IMPORTS * 4, &[slot + 1]);
         self.imports.push(chunk.clone());
         Some(slot)
-    }
-
-    /// Kid `position` of the list starting at `first` written over.
-    pub(crate) fn set_kid(&mut self, first: u32, position: u32, kid: Kid) {
-        let at = self.at(
-            KIDS,
-            first.checked_add(position).unwrap_or_else(|| corrupt()),
-        );
-        self.write_words(at, &[kid.slot, kid.index, kid.size]);
-    }
-
-    /// Node `id`'s size written over.
-    pub(crate) fn set_size(&mut self, id: u32, size: u32) {
-        let at = self.at(NODES, id);
-        self.write_words(at + 20, &[size]);
     }
 
     /// The chunks this one imports, and theirs, each once, this one's last.

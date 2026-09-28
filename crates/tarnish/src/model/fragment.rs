@@ -231,12 +231,6 @@ impl<'a> Fragment<'a> {
         self.chunk.as_ref()
     }
 
-    /// Where the list starts in its chunk's kids.
-    #[inline]
-    pub(crate) fn start(&self) -> u32 {
-        self.start
-    }
-
     /// A fragment of these nodes, joining adjacent text nodes with the same marks.
     pub fn from_array(nodes: Vec<Node<'a>>) -> Fragment<'a> {
         let Some(first) = nodes.first() else {
