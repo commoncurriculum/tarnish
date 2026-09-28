@@ -2,8 +2,6 @@ defmodule Tarnish.Native do
   @moduledoc false
   use Rustler, otp_app: :tarnish, crate: :tarnish_elixir, path: "../crates/tarnish_elixir"
 
-  # Each call but `schema/1` runs on a normal scheduler, answering `:dirty` when it has more work
-  # than a normal scheduler takes; its `_dirty` twin does the same on a dirty scheduler.
   def schema(_spec), do: :erlang.nif_error(:nif_not_loaded)
   def node_from_json(_schema, _json), do: :erlang.nif_error(:nif_not_loaded)
   def node_from_json_dirty(_schema, _json), do: :erlang.nif_error(:nif_not_loaded)

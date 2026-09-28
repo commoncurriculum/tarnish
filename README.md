@@ -1,66 +1,55 @@
 # tarnish
 
-ProseMirror's document model and transforms (`prosemirror-model` and `prosemirror-transform`)
-in Rust, for servers that need to read and change ProseMirror documents without running
-JavaScript. For example, an Elixir backend can apply the steps an editor sends.
+ProseMirror's document model and transforms in Rust: `prosemirror-model` 1.25.11 and
+`prosemirror-transform` 1.12.0. A server can read, check, build and change ProseMirror documents,
+and apply the steps editors send, without running JavaScript.
 
-The contract is ProseMirror's public API: what schemas, nodes, marks, slices, resolved
-positions, steps, step maps, mappings and transforms do for their callers. ProseMirror's own
-test suites check that API, and tarnish is held to them. Behind it, tarnish takes whatever
-shape is fastest and clearest.
+- **The whole API.** Schemas, nodes, fragments, marks, slices, resolved positions, content
+  expressions, the eight step types, step maps and mappings, every `Transform` operation, and
+  `DOMParser` and `DOMSerializer` over a DOM you plug in.
+- **Proven by ProseMirror's own tests.** Both packages' test suites run unedited against tarnish:
+  309 of 309 model tests and 238 of 238 transform tests pass.
+- **Bindings.** Elixir, taking and returning Erlang terms, and C, taking and returning JSON, for
+  any language that can call a C library.
+- **Safe.** No `unsafe` code, and no depth limit: documents nest as deeply as memory allows.
 
-## What's here
+## Use it
 
-| Path                    | What it is                                                                                                                                      |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `crates/tarnish`        | The library: schemas, nodes, marks, slices, resolved positions, steps, mapping, transforms, and DOM parsing and serializing over a `Dom` trait |
-| `elixir/`               | The Elixir package. It takes and returns Erlang terms, with no JSON text in between                                                             |
-| `crates/tarnish_elixir` | The Rustler NIF behind the Elixir package                                                                                                       |
-| `crates/tarnish-c`      | A shared and static library for any other language: JSON strings in and out, declared in `include/tarnish.h`                                   |
-| `crates/tarnish-node`   | A Node bridge, used only to run ProseMirror's own tests against the Rust code. It isn't published                                              |
-| `upstream/`             | ProseMirror's repositories, pinned as submodules, for their test suites                                                                         |
-| `test/`                 | tarnish's own tests, in the upstream suites' style, of inputs those suites don't give                                                           |
-| `fixtures/`             | What the real packages do: the transforms `prosemirror-transform`'s tests check, and `prosemirror-model` on inputs its tests don't give it     |
+### Rust
 
-## How it's proven
+```toml
+[dependencies]
+tarnish = { git = "https://github.com/commoncurriculum/tarnish" }
+```
 
-The proof doesn't depend on anyone reading the Rust. CI checks it:
+```rust
+use tarnish::transform::Transform;
+use tarnish::{Node, api, json};
 
-1. **ProseMirror's own test suites run unedited.** `npm run test:js` runs them against the real
-   packages, which shows the suites and the harness are sound. `npm run test:rust` runs the same
-   files against tarnish: a Node resolve hook swaps `prosemirror-model` and
-   `prosemirror-transform` for the bridge. Both must pass every test. Skipped or focused tests
-   fail the run. The tests in `test/` run the same way against both, so each is proven against
-   JavaScript before it checks tarnish.
-2. **The bindings are checked against JavaScript's output.** `npm run test:js` also records each
-   transform the upstream suite checks with steps, using the upstream test file's own
-   `EMIT_JSON` option: the schema, the starting document, the steps, the resulting document, and
-   mapped positions. It also records what `prosemirror-model` does with inputs its tests don't
-   give it, such as attributes that aren't objects, and types that no content fills. CI fails if
-   what it records differs from the committed files.
-   - The Elixir tests apply every recorded transform and must get the recorded document. They
-     also invert the steps and map the positions.
-   - The C test does the same, and the JSON the library returns must equal `JSON.stringify`'s
-     output byte for byte.
-   - The Rust and Elixir tests read the recorded nodes and must get the same nodes or errors.
+let spec = r#"{"nodes": {"doc": {"content": "paragraph+"}, "paragraph": {"content": "text*"},
+                         "text": {}},
+               "marks": {"em": {}}}"#;
+let schema = api::schema(&json::from_str(spec).expect("JSON"))?;
+let doc = r#"{"type": "doc", "content": [
+    {"type": "paragraph", "content": [{"type": "text", "text": "Hello"}]}]}"#;
+let doc = Node::from_json(&schema, &json::from_str(doc).expect("JSON"))?;
 
-## Where it differs
+// Apply the steps an editor sent.
+let steps = r#"[{"stepType": "replace", "from": 6, "to": 6,
+                 "slice": {"content": [{"type": "text", "text": ", world"}]}}]"#;
+let doc = api::apply_steps(&doc, &json::from_str(steps).expect("JSON"))?;
+assert_eq!(doc.text_content()?.as_str(), Some("Hello, world"));
 
-Where ProseMirror takes input it can't make sense of, tarnish refuses it or gives what it can
-hold:
+// Or change it on the server, as a transform.
+let em = schema.mark(&schema.mark_type("em").expect("em"), None)?;
+let mut tr = Transform::new(doc);
+tr.add_mark(1, 6, &em)?;
+println!("{}", tr.doc().to_json_string());
+```
 
-- A step's position must be a whole number from zero up, its ranges must run forwards, and a
-  slice can't be open deeper than its content. ProseMirror takes any number, and gives a
-  backwards range or such a slice a negative size. tarnish raises the `RangeError` its
-  `fromJSON` raises for a position that isn't a number.
-- A JSON value holds strings as Rust does, which can't hold a lone surrogate, so one read or
-  written as a value is U+FFFD. A document written as JSON text keeps it.
-- An attribute whose spec's default is `undefined` is left out. ProseMirror keeps its name with
-  no value, so `toJSON` writes `"attrs": {}` and `hasMarkup` sees the name.
+This example is the crate's doctest, so it compiles and runs in CI.
 
-## Elixir
-
-The package builds its NIF from `crates/`, so depend on the whole repository:
+### Elixir
 
 ```elixir
 {:tarnish, git: "https://github.com/commoncurriculum/tarnish", subdir: "elixir"}
@@ -76,41 +65,189 @@ json = Tarnish.to_json(doc)
 {:ok, pos} = Tarnish.map_position(schema, steps, 5)
 ```
 
-A schema is built once, and a document is read once and kept in Rust, so applying steps to it
-doesn't convert it again. Specs, steps and JSON are maps as Jason decodes ProseMirror's JSON, or
-`Jason.OrderedObject`s. Rust reads the terms it's given in place, and makes the terms it answers
-from Erlang's external term format, which the VM makes a whole term from in one call. Errors come
-back as `{:error, {kind, message}}`, where the kind names the class ProseMirror throws. A part of
-a term that ProseMirror reads and Jason couldn't encode, such as a tuple, raises
-`ArgumentError`; a part it ignores, such as a key a node doesn't have, isn't read. Give a
-schema's `"nodes"` and `"marks"` as lists of `{name, spec}` pairs, or as `Jason.OrderedObject`s,
-because their order matters and a map doesn't keep it.
+- **Input.** Specs, documents and steps are ProseMirror's JSON as Jason decodes it. Give a
+  schema's `"nodes"` and `"marks"` as lists of `{name, spec}` pairs, or as
+  `Jason.OrderedObject`s, since their order matters and a map doesn't keep it.
+- **Errors.** Errors are `{:error, {kind, message}}`, where the kind names the class ProseMirror
+  throws (`:range_error`, `:replace_error`, …). A term ProseMirror would read but Jason couldn't
+  encode, such as a tuple, raises `ArgumentError`.
+- **Output.** A document keeps the map it was read from, and `to_json` shares every part of that
+  map that is still what ProseMirror writes. After steps, only the nodes they changed are new
+  maps.
 
-A document keeps the map it was read from, and its JSON shares every part of that map which is
-the JSON of a node it still has, as ProseMirror writes it. So the JSON of a document read and
-then changed by steps is a few new maps, for the nodes the steps changed, around the maps it was
-read from. A map that isn't what ProseMirror writes, such as one with a key a node doesn't have,
-or with a float where ProseMirror writes an integer, is written anew.
+### C, and other languages through it
 
-A call runs on a normal scheduler when it has no more than about a millisecond's work, and on a
-dirty one otherwise. A dirty scheduler takes a few microseconds to hand a call to, which is most
-of the time a small document takes.
-
-Documents nest as deeply as memory allows: a recursion that runs low on a dirty scheduler's
-small stack carries on in a new stack segment, so no document takes the VM down.
-
-A step that splits a surrogate pair, as a browser's can, leaves a lone surrogate in the text.
-A binary holds UTF-8, which can't, so `to_json` gives U+FFFD for it. That keeps every position
-where it was: both are one UTF-16 unit.
-
-## C, and other languages through it
-
-`cargo build --release -p tarnish-c` builds `libtarnish_c` (`.so`/`.dylib` and `.a`).
+`cargo build --release -p tarnish-c` builds `libtarnish_c` as a shared and a static library.
 [`include/tarnish.h`](crates/tarnish-c/include/tarnish.h) declares the same operations as the
-Elixir package, with schemas and nodes as handles, and JSON strings in and out, read as
-`JSON.parse` reads them. Errors are `"Class: message"` strings. A document's JSON is
-`JSON.stringify`'s text, a lone surrogate included. Other JSON is read and written as Rust
-strings, which can't hold one, so a lone surrogate in a step's slice becomes U+FFFD.
+Elixir package:
+
+- schemas and nodes are handles;
+- JSON goes in and out as strings;
+- errors are `"Class: message"`;
+- a document's JSON is exactly the text `JSON.stringify` writes.
+
+Everything behind the header is Rust; C is only the calling convention, which PHP, Python, Ruby,
+Go and Node can all load.
+
+## What maps to what
+
+Names are Rust's: `nodeSize` is `node_size`, `Transform.addMark` is `Transform::add_mark`.
+
+| ProseMirror | tarnish |
+| --- | --- |
+| `Schema`, `NodeType`, `MarkType`, `NodeSpec`, `MarkSpec`, `AttributeSpec` | `Schema`, `NodeType`, `MarkType`, `SchemaSpec`, `NodeSpec`, `MarkSpec`, `AttributeSpec`; `SchemaSpec::from_json` reads a spec from JSON |
+| `Node`, `Fragment`, `Mark`, `Slice`, `ResolvedPos`, `NodeRange`, `ContentMatch` | The same names, in `tarnish` |
+| `Node.fromJSON`, `node.toJSON()` | `Node::from_json`, `Node::to_json`, `Node::to_json_string` |
+| `Transform` and every operation on it | `transform::Transform` |
+| `ReplaceStep`, `ReplaceAroundStep`, `AddMarkStep`, `RemoveMarkStep`, `AddNodeMarkStep`, `RemoveNodeMarkStep`, `AttrStep`, `DocAttrStep` | `transform::Step`, one variant each |
+| `StepMap`, `Mapping`, `MapResult` | `transform::StepMap`, `Mapping`, `MapResult` |
+| `liftTarget`, `findWrapping`, `canSplit`, `canJoin`, `joinPoint`, `insertPoint`, `dropPoint`, `replaceStep` | The same functions in `transform` |
+| `DOMParser`, `DOMSerializer`, `DOMParser.schemaRules` | `dom::DomParser` (`from_schema`), `dom::DomSerializer`, `dom::schema_rules`, over the `dom::Dom` trait |
+
+Positions count UTF-16 units, as they do in the browser, so a step lands where it did there, even
+one that splits a surrogate pair.
+
+## What isn't here yet
+
+- **Custom step types.** `Step.jsonID` registers a new kind of step in JavaScript. tarnish's steps
+  are ProseMirror's own eight.
+- **An HTML parser.** `DomParser` and `DomSerializer` run over the `Dom` trait. Implement it for
+  your DOM (html5ever's, for example) to parse or write HTML. The test bridge implements it for
+  jsdom.
+- **Functions in specs from data.** A spec read from JSON, Elixir or C has no `toDOM`,
+  `getAttrs` or `leafText`: those are JavaScript functions. In Rust you give them as closures.
+- **Building transforms from Elixir and C.** The bindings apply, invert and map steps. Making new
+  steps (`addMark`, `setBlockType`, …) is Rust-only for now.
+
+## How it's proven
+
+The proof doesn't depend on anyone reading the Rust. CI checks it:
+
+1. **ProseMirror's suites.** They run unedited, from `upstream/`, pinned submodules at the tags of
+   the npm versions (CI checks the two match).
+   - `npm run test:js` runs them against the real packages, which proves the suites and the
+     harness.
+   - `npm run test:rust` runs the same files against tarnish, through a Node bridge
+     (`crates/tarnish-node`, internal) that stands in for the two packages.
+   - A skipped or focused test fails the run, so a pass means every test ran.
+2. **tarnish's own tests.** The tests in `test/` cover inputs the upstream suites don't, such as
+   text that joins across a replaced range. They run the same way, against JavaScript first.
+3. **Recorded answers for the bindings.** `npm run test:js` also records fixtures from the real
+   packages, and CI fails if they change:
+   - every transform the upstream transform suite checks: its schema, starting document, steps,
+     resulting document and mapped positions;
+   - what `prosemirror-model` does with inputs its tests don't give.
+
+   The Elixir tests apply every recorded transform, invert it and map its positions. The C test
+   does the same, and its JSON must equal `JSON.stringify`'s byte for byte.
+
+| Check | Result |
+| --- | --- |
+| prosemirror-model's suite, against tarnish | 309 passing |
+| prosemirror-transform's suite, against tarnish | 238 passing |
+| tarnish's own suite, against JavaScript and tarnish | 34 passing |
+| Elixir (`mix test`) | 203 tests |
+| C (`npm run test:c`) | 148 recorded transforms, the error cases and a 200,000-deep attribute |
+| Rust (`cargo test`) | the recorded cases, and a 20,000-deep document through every operation on a 256 KB stack |
+
+## Speed
+
+The bench document has 200 paragraphs with bold text and links: 1,201 nodes, 78 KB of JSON.
+`npm run bench` writes it, together with ten steps that each type one character. The table shows
+µs per call on one 4-core VM: ProseMirror in Node 22 after its JIT warms up, tarnish from Rust,
+and tarnish from Elixir.
+
+| | ProseMirror (Node) | tarnish (Rust) | tarnish (Elixir) |
+| --- | --- | --- | --- |
+| Read a document from JSON | 282 | 73–82 | 335 |
+| Check it | 189 | 24 | 27 |
+| Apply 10 steps | 23 | 11 | 24 |
+| Write the changed document's JSON | 71 | 225 | 6 |
+
+- **Elixir reading.** Most of the Elixir read time is spent reading Erlang terms. Keeping the
+  document between calls, as `%Tarnish.Doc{}` does, skips the read.
+- **Elixir writing.** The Elixir `to_json` shares the maps it read, so it writes only what the
+  steps changed.
+- **Rust writing.** Rust's `to_json` builds every value anew, and is slower than V8 at that.
+
+To reproduce:
+
+```sh
+npm run bench
+cargo run --release -p tarnish --example bench
+(cd elixir && MIX_ENV=test mix run bench/apply_steps.exs)
+```
+
+## Design
+
+The contract is ProseMirror's public API. Behind it, tarnish takes whatever shape is fastest.
+
+- **Documents are chunks.** A chunk is an immutable array of little-endian bytes: a header, then
+  one section per kind of thing, each an array of fixed-size records linked by `u32` index.
+  - The sections hold nodes (24 bytes), each node's list of children (12 bytes), mark sets,
+    marks, attribute values and text.
+  - A chunk refers into the chunks it imports by slot, never by address, so its bytes are the
+    whole of it. Elixir keeps a document as binaries and reads them in place.
+  - A step writes the nodes it makes into a new chunk that imports the old one. A chunk that
+    nothing else holds is patched in place.
+  - Every read is checked, so a bad chunk panics instead of misreading.
+  - The format is in [`crates/tarnish/src/chunk/mod.rs`](crates/tarnish/src/chunk/mod.rs).
+- **Depth.** Every recursion over nesting goes through `stack::grow`, which continues on a new
+  stack segment when the thread's stack runs low. A scheduler's small stack can't overflow.
+
+## Why not oxc, Biome or Yuku
+
+They are fast parsers, but for other languages, and nothing tarnish does is parsing one of those.
+tarnish reads two things:
+
+- JSON, with serde_json (and json-event-parser for what serde_json refuses);
+- ProseMirror's content expressions, such as `paragraph+ (heading | list)*`, a grammar only
+  ProseMirror has.
+
+HTML comes in through the `Dom` trait, from whatever parser the caller uses.
+
+- **Yuku** is a JavaScript and TypeScript compiler written in Zig. Its idea of a tree as flat
+  arrays of fixed-size nodes linked by index, instead of a tree of heap objects, is the idea
+  behind tarnish's chunks. The code itself parses JavaScript, and calling Zig from Rust would
+  take unsafe code.
+- **oxc** is a JavaScript and TypeScript toolchain in Rust. Its regular-expression crate parses
+  patterns without running them. Its Markdown parser follows micromark.
+- **Biome** parses JavaScript, TypeScript, JSON, CSS and GraphQL (and HTML and Markdown for its
+  formatter) into lossless syntax trees, where tarnish needs ProseMirror's nodes.
+
+## Where it differs
+
+Where ProseMirror takes input it can't make sense of, tarnish refuses it or keeps what it can
+hold:
+
+- **Positions.** A step's position must be a whole number from zero up, its ranges must run
+  forwards, and a slice can't be open deeper than its content. ProseMirror takes any number, and
+  gives such a range or slice a negative size. tarnish raises the `RangeError` that `fromJSON`
+  raises for a position that isn't a number.
+- **Depths.** Depth arguments are unsigned. Where ProseMirror takes a negative depth counting
+  back from the position's own, pass that depth.
+- **Lone surrogates.** A JSON value holds strings as Rust does, which can't hold a lone
+  surrogate, so one read or written as a value is U+FFFD.
+  - A document written as JSON text keeps it, as `JSON.stringify` does.
+  - In Elixir, `to_json` gives U+FFFD, one UTF-16 unit, so positions stay where they were.
+- **`default: undefined`.** An attribute whose spec's default is `undefined` is left out.
+  ProseMirror keeps its name with no value.
+- **Spec properties.** A spec's properties that ProseMirror doesn't read are kept in
+  `NodeSpec::extra` and `MarkSpec::extra`.
+
+## Layout
+
+| Path | What it is |
+| --- | --- |
+| `crates/tarnish` | The library: `model/`, `transform/`, `dom/`, `chunk/` (the document format), `json/` and `js/` (JSON and JavaScript's semantics for it), `api` (what the bindings call) |
+| `elixir/`, `crates/tarnish_elixir` | The Elixir package and the Rustler NIF behind it |
+| `crates/tarnish-c` | The C library and its generated header |
+| `crates/tarnish-node` | The Node bridge that runs ProseMirror's suites against tarnish. Internal, not published |
+| `upstream/` | ProseMirror's repositories, pinned as submodules, for their test suites |
+| `harness/` | The suite runner, the fixture recorders, and the bridge and C test builds |
+| `test/` | tarnish's own tests, in the upstream suites' style |
+| `fixtures/` | What the real packages did, recorded by `npm run test:js` |
+| `bench/` | The benchmark document and ProseMirror's timing |
 
 ## Running the tests
 
@@ -121,6 +258,10 @@ npm run test:js      # ProseMirror's suites against ProseMirror, recording the f
 npm run test:rust    # ProseMirror's suites against tarnish
 npm run test:c       # the C library against the fixtures
 (cd elixir && mix deps.get && mix test)
-cargo test           # the library's own tests, among them documents nested far past a small stack
+cargo test
 cargo fmt --all --check && cargo clippy --all-targets -- -D warnings
 ```
+
+## License
+
+MIT. tarnish ports ProseMirror, whose MIT notice [`LICENSE`](LICENSE) keeps.

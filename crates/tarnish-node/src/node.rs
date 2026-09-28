@@ -1,5 +1,3 @@
-//! Nodes.
-
 use napi::bindgen_prelude::{FnArgs, Function, Null, ToNapiValue, Unknown, Utf16String};
 use napi::{Env, JsString, JsValue, Result, ValueType};
 use napi_derive::napi;

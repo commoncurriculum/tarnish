@@ -563,7 +563,6 @@ impl<'a> Transform<'a> {
                 if let Some(NewlineConversion::ToNewlines(linebreak)) = &conversion {
                     replace_linebreaks(self, node, pos, map_from, linebreak)?;
                 }
-                // Clear the markup the new type doesn't allow.
                 let at = self.mapping_from(map_from).map(pos, 1);
                 clear_incompatible(self, at, node_type, None, conversion.is_none())?;
                 let mapping = self.mapping_from(map_from);
@@ -620,10 +619,7 @@ impl<'a> Transform<'a> {
         let resolved = self.doc().resolve(pos)?;
         let mut before = Fragment::empty();
         let mut after = Fragment::empty();
-        // A `depth` past the top can't split: the slice opens deeper than `pos` is, and the step
-        // fails. JavaScript builds it on through ancestors at negative depths, which count back
-        // from `pos`'s own, failing the same way, or with a TypeError when `depth` runs past
-        // those too.
+        // A `depth` past the top makes the step fail: its slice opens deeper than `pos` is.
         for (d, i) in (1..=resolved.depth()).rev().zip((0..depth).rev()) {
             before = Fragment::from_node(resolved.node(d).copy(before));
             after = Fragment::from_node(match types_after.get(i).and_then(Option::as_ref) {

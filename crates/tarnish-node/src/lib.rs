@@ -3,8 +3,8 @@
 //! JavaScript code never sees this crate's handles: `js/` wraps each in the class ProseMirror
 //! exports and passes the bridge the handle a wrapper keeps in `h`. Every call returns the
 //! wrapper, which the bridge asks the JavaScript side for so that one node is always one
-//! object. All of ProseMirror's logic runs in tarnish; the bridge and `js/` only convert
-//! arguments and results.
+//! object. ProseMirror's logic runs in tarnish; the bridge and `js/` convert arguments and
+//! results, and take the forms JavaScript gives them in, such as a negative depth.
 
 // Not `forbid`: every `#[napi]` item registers itself through the ctor crate, whose expansion
 // has an `allow` for this lint that `forbid` rejects.

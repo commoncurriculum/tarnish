@@ -114,7 +114,6 @@ impl<'a> Fitter<'a> {
     }
 
     fn fit(mut self) -> Result<Option<Step<'a>>> {
-        // Place what can be placed; when nothing can, open the slice further, or drop a node.
         while self.unplaced.size() > 0 {
             match self.find_fittable()? {
                 Some(fit) => self.place_nodes(fit)?,

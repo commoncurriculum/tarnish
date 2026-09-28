@@ -1,5 +1,3 @@
-//! Marks.
-
 use napi::bindgen_prelude::{FnArgs, ToNapiValue, Unknown};
 use napi::{Env, Result};
 use napi_derive::napi;

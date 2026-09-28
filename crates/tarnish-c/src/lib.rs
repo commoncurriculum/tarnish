@@ -23,9 +23,7 @@ pub struct TarnishSchema(Schema);
 #[repr(opaque)]
 pub struct TarnishNode(Node<'static>);
 
-/// Where a function that can fail puts its error: "Class: message", the class naming the error
-/// ProseMirror throws (RangeError, SyntaxError, ReplaceError, TransformError, TypeError or
-/// Error).
+/// Where a function that can fail puts its error, as `include/banner.h` describes.
 type ErrorOut<'a> = Option<Out<'a, Option<char_p::Box>>>;
 
 /// `JSON.parse` of the string.

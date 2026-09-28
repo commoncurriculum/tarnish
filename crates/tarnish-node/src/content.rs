@@ -1,5 +1,3 @@
-//! Content matches.
-
 use napi::bindgen_prelude::{FnArgs, Null, ToNapiValue, Unknown};
 use napi::{Env, Result};
 use napi_derive::napi;

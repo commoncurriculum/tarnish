@@ -1,5 +1,3 @@
-//! Fragments.
-
 use napi::bindgen_prelude::{FnArgs, Function, Unknown};
 use napi::{Env, JsString, JsValue, Result};
 use napi_derive::napi;

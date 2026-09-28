@@ -7,9 +7,10 @@
  *
  * A function that can fail takes `char **error`. On failure it returns NULL or false and, when
  * `error` isn't NULL, sets `*error` to "Class: message", the class naming the error ProseMirror
- * throws (RangeError, SyntaxError, ReplaceError, TransformError or Error). Free every string
- * the library returns, errors included, with tarnish_free, a schema with tarnish_schema_free and
- * a node with tarnish_node_free. Documents may nest as deeply as memory allows.
+ * throws (RangeError, SyntaxError, ReplaceError, TransformError, TypeError or Error). Free
+ * every string the library returns, errors included, with tarnish_free, a schema with
+ * tarnish_schema_free and a node with tarnish_node_free. Documents may nest as deeply as memory
+ * allows.
  *
  * `cargo run -p tarnish-c --example header --features headers` writes this file.
  */

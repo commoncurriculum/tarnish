@@ -1,10 +1,6 @@
-// Runs ProseMirror's own test files, unedited, from the pinned submodules, against the target
-// TARNISH_TARGET names: `js` for the real packages, `rust` for tarnish. Then it runs tarnish's
-// own tests in test/, of inputs those suites don't give, the same way against the same target.
-//
-// Against the real packages, prosemirror-transform's test file also records every transform it
-// checks with steps to fixtures/transform.json, through its own EMIT_JSON option. The Elixir and
-// C tests read that file, so their expected outputs all come from JavaScript.
+// Runs ProseMirror's suites and test/ against TARNISH_TARGET: `js` for the real packages, which
+// also records fixtures/transform.json, or `rust` for tarnish. The README's "How it's proven"
+// says why.
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 
