@@ -3,8 +3,11 @@
 use std::sync::Arc;
 
 use super::attrs::Computed;
+use super::fields::field_count;
 use super::schema::Schema;
-use crate::chunk::{ASCII, BINDING, Builder, Chunk, HELD_AS_UNITS, Kid, Record, TEXT_NODE};
+use crate::chunk::{
+    ASCII, BINDING, Builder, Chunk, EMPTY_OBJECT, EMPTY_SET, HELD_AS_UNITS, Kid, Record, TEXT_NODE,
+};
 use crate::error::{Error, Result};
 use crate::js::{AttrKeys, Given, Json, Keys, ReadMark, ReadNode};
 use crate::json::{EMPTY, Value};
@@ -39,7 +42,8 @@ impl<'s, 'a> Reader<'s, 'a> {
         self.builder.seal()
     }
 
-    /// Tells the value a node was read from what it read.
+    /// Hands `json`, the value a node was read from, what reading made of it, and flags the
+    /// node when `json` asks to.
     fn read<'j>(&mut self, json: impl Json<'j>, read: ReadNode) -> u32 {
         let id = read.index;
         if json.read_node(&read) {
@@ -48,7 +52,6 @@ impl<'s, 'a> Reader<'s, 'a> {
         id
     }
 
-    /// Reads a node: its index in the chunk.
     pub fn node<'j>(&mut self, json: impl Json<'j>) -> Result<u32> {
         // The likeliest first, for a reader that looks each up and stops once it has found as
         // many as the object has.
@@ -59,7 +62,7 @@ impl<'s, 'a> Reader<'s, 'a> {
         }
         let [name, text, content, marks, attrs] = fields;
         let (marks, mark_count) = match marks.filter(|marks| marks.truthy()) {
-            None => (0, 0),
+            None => (EMPTY_SET, 0),
             Some(marks) => self.marks(marks)?,
         };
         let name = name.map_or("undefined".into(), Json::string);
@@ -73,7 +76,7 @@ impl<'s, 'a> Reader<'s, 'a> {
             let index = self.builder.text(self.text_type, marks, &text);
             let read = ReadNode {
                 index,
-                fields: 2 + usize::from(marks != 0),
+                fields: field_count(false, false, marks != EMPTY_SET, true),
                 children: 0,
                 marks: mark_count,
                 attrs: AttrKeys(Keys::Map(&EMPTY)),
@@ -105,17 +108,18 @@ impl<'s, 'a> Reader<'s, 'a> {
             }
         };
         let attrs = attr_set.write(&mut self.builder, node_type.index(), &computed);
+        let first = self.builder.push_kids(self.children.drain(kids_start..));
         let index = self.builder.element(
             node_type.index() as u16,
             marks,
             attrs,
-            self.children[kids_start..kids_start + kids].iter().copied(),
+            first,
+            kids as u32,
             size,
         );
-        self.children.truncate(kids_start);
         let read = ReadNode {
             index,
-            fields: 1 + usize::from(attrs != 0) + usize::from(size > 0) + usize::from(marks != 0),
+            fields: field_count(attrs != EMPTY_OBJECT, size > 0, marks != EMPTY_SET, false),
             children: kids,
             marks: mark_count,
             attrs: attr_set.keys(&computed),
@@ -151,8 +155,7 @@ impl<'s, 'a> Reader<'s, 'a> {
     /// Reads a fragment, as a list of kids of its own: where it starts, its length and size.
     pub fn fragment_list<'j>(&mut self, json: impl Json<'j>) -> Result<(u32, u32, u32)> {
         let (start, count, size) = self.fragment(json)?;
-        let kids = self.builder.kids(self.children[start..].iter().copied());
-        self.children.truncate(start);
+        let kids = self.builder.push_kids(self.children.drain(start..));
         Ok((kids, count as u32, size))
     }
 
@@ -160,13 +163,7 @@ impl<'s, 'a> Reader<'s, 'a> {
     /// it when they have the same marks, as `Fragment.fromArray` joins them. Its size.
     fn push_child(&mut self, start: usize, node: u32) -> u64 {
         let record = self.builder.record(node);
-        let size = if record.flags & TEXT_NODE != 0 {
-            u64::from(record.size)
-        } else if self.schema.node_data(usize::from(record.ty)).is_leaf() {
-            1
-        } else {
-            2 + u64::from(record.size)
-        };
+        let size = record.node_size(self.schema) as u64;
         if self.children.len() > start
             && record.flags & TEXT_NODE != 0
             && let Some(&last) = self.children.last()
@@ -242,12 +239,12 @@ impl<'s, 'a> Reader<'s, 'a> {
             ),
             _ => {
                 let attrs = attr_set.write(&mut self.builder, usize::MAX, &computed);
-                (self.builder.mark(rank as u32, attrs), attrs != 0)
+                (self.builder.mark(rank as u32, attrs), attrs != EMPTY_OBJECT)
             }
         };
         json.read_mark(&ReadMark {
             rank,
-            fields: 1 + usize::from(attrs),
+            fields: field_count(attrs, false, false, false),
             attrs: attr_set.keys(&computed),
         });
         Ok((rank as u32, mark))
