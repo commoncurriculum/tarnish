@@ -454,6 +454,26 @@ impl<'a> Chunk<'a> {
             .map(|(chunk, index, _)| (chunk, index))
     }
 
+    /// `count` kids listed from `first`, as they're held: each one's slot, index and size.
+    #[inline]
+    pub(crate) fn kid_list(&self, first: u32, count: u32) -> impl Iterator<Item = Kid> + '_ {
+        let kids = self.span(KIDS, first, count).as_chunks::<12>().0;
+        kids.iter().map(|kid| Kid {
+            slot: u32::from_le_bytes([kid[0], kid[1], kid[2], kid[3]]),
+            index: u32::from_le_bytes([kid[4], kid[5], kid[6], kid[7]]),
+            size: u32::from_le_bytes([kid[8], kid[9], kid[10], kid[11]]),
+        })
+    }
+
+    /// The chunk a kid's slot names: an import, or this one for [`LOCAL`].
+    #[inline]
+    pub(crate) fn slot_chunk(&self, slot: u32) -> &Chunk<'a> {
+        match slot {
+            LOCAL => self,
+            slot => self.import(slot),
+        }
+    }
+
     /// [`children`](Self::children), with the size each kid holds.
     #[inline]
     pub(crate) fn kids(

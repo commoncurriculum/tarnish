@@ -6,7 +6,7 @@ use std::sync::Arc;
 use super::node::Node;
 use super::schema::Schema;
 use super::view::{NodeRef, SetRef};
-use crate::chunk::{Builder, Chunk, Kid, Record, ValueRef};
+use crate::chunk::{Builder, Chunk, Kid, LOCAL, Record, ValueRef, corrupt};
 use crate::stack;
 
 /// What a copy has written of what it copies: each value and set it copied, by where it was,
@@ -107,20 +107,28 @@ impl<'k, 'a> Copier<'k, 'a> {
         let (list, start, bound) = node.kids();
         let count = node.child_count();
         let mut kids = Vec::with_capacity(count as usize);
-        // Kids come in runs from one chunk, whose slot here, if it's kept, is found once a run.
-        let mut run: Option<(&Chunk, Option<u32>)> = None;
-        for (chunk, index, size) in list.kids(start, count, bound) {
+        // Kids come in runs from one slot, whose slot here, if its chunk is kept, is found once
+        // a run.
+        let mut run: Option<(u32, Option<u32>)> = None;
+        for kid in list.kid_list(start, count) {
+            if kid.slot == LOCAL && kid.index >= bound {
+                corrupt();
+            }
             let slot = match run {
-                Some((last, slot)) if last.ptr_eq(chunk) => slot,
+                Some((last, slot)) if last == kid.slot => slot,
                 _ => {
+                    let chunk = list.slot_chunk(kid.slot);
                     let slot = self.kept_chunk(chunk).map(|kept| self.builder.import(kept));
-                    run = Some((chunk, slot));
+                    run = Some((kid.slot, slot));
                     slot
                 }
             };
             kids.push(match slot {
-                Some(slot) => Kid { slot, index, size },
-                None => Kid::local(stack::grow(|| self.copy(NodeRef::at(chunk, index))), size),
+                Some(slot) => Kid { slot, ..kid },
+                None => {
+                    let node = NodeRef::at(list.slot_chunk(kid.slot), kid.index);
+                    Kid::local(stack::grow(|| self.copy(node)), kid.size)
+                }
             });
         }
         let attrs = self.value(node.attrs());
