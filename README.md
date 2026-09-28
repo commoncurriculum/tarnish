@@ -386,7 +386,7 @@ hold:
 | --- | --- |
 | `crates/tarnish` | The library: `model/`, `transform/`, `dom/`, `chunk/` (the document format), `json/` and `js/` (JSON and JavaScript's semantics for it), `api` (what the bindings call) |
 | `crates/tarnish-html` | An HTML DOM for `DomParser` and `DomSerializer`: html5ever's parser, the standard's serialization |
-| `crates/tarnish-css`, `crates/tarnish-css-wasm` | Inline styles on stylo, natively and as the WebAssembly the linkedom fork's `element.style` runs; `harness/css-wasm.mjs` writes it into the fork |
+| `crates/tarnish-css`, `crates/tarnish-css-wasm` | Inline styles on stylo, and the same as WebAssembly, which `harness/css-wasm.mjs` writes into the linkedom fork |
 | `elixir/`, `crates/tarnish_elixir` | The Elixir package and the Rustler NIF behind it |
 | `crates/tarnish-c` | The C library and its generated header |
 | `crates/tarnish-node` | The Node bridge that runs ProseMirror's suites against tarnish. Internal, not published |
@@ -411,7 +411,9 @@ cargo fmt --all --check && cargo clippy --all-targets -- -D warnings
 
 Building `tarnish-css` needs Python 3, which stylo's build script runs. Writing it into the
 linkedom fork (`node harness/css-wasm.mjs <checkout>`) also needs the `wasm32-unknown-unknown`
-target and the `wasm-bindgen-cli` version `tarnish-css-wasm` pins.
+target and the `wasm-bindgen-cli` version `tarnish-css-wasm` pins; npx fetches binaryen's
+`wasm-opt`. It writes `esm/shared/css/`: the module as `engine.wasm`, its glue as `engine.js`,
+and `THIRD-PARTY.md`, the crates it's compiled from, with their licences, texts and sources.
 
 ## License
 
