@@ -50,3 +50,8 @@ impl Declarations {
 pub fn property_names() -> Vec<String> {
     tarnish_css::property_names().collect()
 }
+
+#[wasm_bindgen]
+pub fn engine() -> String {
+    tarnish_css::ENGINE.to_owned()
+}

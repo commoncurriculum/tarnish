@@ -17,6 +17,10 @@ use style::servo_arc::Arc;
 use style::stylesheets::{CssRuleType, Origin, UrlExtraData};
 use style_traits::ParsingMode;
 
+/// This crate's version and the stylo it's built on. The fork's WebAssembly gives it as
+/// `engine()`, so a test can check that JavaScript and Rust run the same engine.
+pub const ENGINE: &str = concat!(env!("CARGO_PKG_VERSION"), "+stylo-0.21.0");
+
 /// The document's URL, which only `url()` values would resolve against, and they keep what
 /// they were written as.
 static URL: LazyLock<UrlExtraData> =
@@ -187,6 +191,13 @@ mod tests {
         assert_eq!(style.remove("color"), None);
         assert!(style.set("font-weight", "", ""));
         assert!(style.is_empty());
+    }
+
+    #[test]
+    fn the_engine_names_the_stylo_it_is_built_on() {
+        let (_, stylo) = ENGINE.split_once("+stylo-").expect("stylo's version");
+        let pin = format!("stylo = \"={stylo}\"");
+        assert!(include_str!("../Cargo.toml").contains(&pin), "{pin}");
     }
 
     #[test]

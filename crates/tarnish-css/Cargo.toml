@@ -1,14 +1,17 @@
 [package]
 name = "tarnish-css"
 version = "0.1.0"
-description = "A CSS declaration block, as element.style holds one, on Servo's CSS engine"
+description = "A CSS declaration block, as element.style holds one, on stylo, Servo's CSS engine"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+# Pinned exactly: the linkedom fork runs this crate as WebAssembly built from tarnish's lockfile,
+# and a crate that depends on this one must resolve the same engine. `ENGINE` names it.
 [dependencies]
-stylo = "0.21"
-stylo_static_prefs = "0.21"
-stylo_traits = "0.21"
+cssparser = "=0.37.0"
+stylo = "=0.21.0"
+stylo_static_prefs = "=0.21.0"
+stylo_traits = "=0.21.0"
 url = "2"

@@ -1785,6 +1785,7 @@ dependencies = [
 name = "tarnish-css"
 version = "0.1.0"
 dependencies = [
+ "cssparser",
  "stylo",
  "stylo_static_prefs",
  "stylo_traits",
