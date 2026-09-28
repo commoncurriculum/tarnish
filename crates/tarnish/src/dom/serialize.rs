@@ -39,10 +39,10 @@ pub struct Rendered<N> {
     pub content_dom: Option<N>,
 }
 
-pub type NodeToDom<N> = Arc<dyn for<'a> Fn(&Node<'a>) -> Result<DomSpec<N>> + Send + Sync>;
+pub type NodeToDom<N> = Arc<dyn Fn(&Node<'static>) -> Result<DomSpec<N>> + Send + Sync>;
 
 /// A mark's `toDOM`, told whether the mark's content is inline.
-pub type MarkToDom<N> = Arc<dyn for<'a> Fn(&Mark<'a>, bool) -> Result<DomSpec<N>> + Send + Sync>;
+pub type MarkToDom<N> = Arc<dyn Fn(&Mark<'static>, bool) -> Result<DomSpec<N>> + Send + Sync>;
 
 /// Serializes nodes and marks to a DOM with each type's `toDOM`.
 pub struct DomSerializer<N> {
@@ -61,7 +61,7 @@ impl<N: Clone> DomSerializer<N> {
     pub fn serialize_fragment<D: Dom<Node = N>>(
         &self,
         dom: &D,
-        fragment: &Fragment,
+        fragment: &Fragment<'static>,
         target: Option<N>,
     ) -> Result<N> {
         let target = match target {
@@ -69,7 +69,7 @@ impl<N: Clone> DomSerializer<N> {
             None => dom.create_fragment()?,
         };
         let mut top = target.clone();
-        let mut active: Vec<(Mark, N)> = Vec::new();
+        let mut active: Vec<(Mark<'static>, N)> = Vec::new();
         for node in fragment.children() {
             let marks = node.marks().to_vec();
             if !active.is_empty() || !marks.is_empty() {
@@ -105,7 +105,7 @@ impl<N: Clone> DomSerializer<N> {
         Ok(target)
     }
 
-    fn serialize_node_inner<D: Dom<Node = N>>(&self, dom: &D, node: &Node) -> Result<N> {
+    fn serialize_node_inner<D: Dom<Node = N>>(&self, dom: &D, node: &Node<'static>) -> Result<N> {
         if let Some(text) = node.text() {
             return dom.create_text(&text.to_text());
         }
@@ -128,7 +128,7 @@ impl<N: Clone> DomSerializer<N> {
     }
 
     /// Serialize a node, with its marks around it.
-    pub fn serialize_node<D: Dom<Node = N>>(&self, dom: &D, node: &Node) -> Result<N> {
+    pub fn serialize_node<D: Dom<Node = N>>(&self, dom: &D, node: &Node<'static>) -> Result<N> {
         let mut element = self.serialize_node_inner(dom, node)?;
         for mark in node.marks().iter().rev() {
             if let Some(wrap) = self.serialize_mark(dom, &mark, node.is_inline())? {
@@ -143,7 +143,7 @@ impl<N: Clone> DomSerializer<N> {
     pub fn serialize_mark<D: Dom<Node = N>>(
         &self,
         dom: &D,
-        mark: &Mark,
+        mark: &Mark<'static>,
         inline: bool,
     ) -> Result<Option<Rendered<N>>> {
         let Some(to_dom) = self.marks.get(mark.mark_type().name()) else {

@@ -122,7 +122,7 @@ pub fn step_map_offset<'env>(env: &'env Env, n: f64) -> Result<Unknown<'env>> {
 /// A mapping of its own, or a transform's, which grows as the transform does.
 pub enum MappingSource {
     Own(RefCell<Mapping>),
-    Transform(Rc<RefCell<Transform>>),
+    Transform(Rc<RefCell<Transform<'static>>>),
 }
 
 pub fn wrap_mapping<'env>(env: &'env Env, source: MappingSource) -> Result<Unknown<'env>> {

@@ -10,7 +10,7 @@ use crate::fragment::{self, FragmentHandle};
 use crate::js::{self, OrThrow};
 use crate::schema::SchemaHandle;
 
-pub fn wrap<'env>(env: &'env Env, slice: &Slice) -> Result<Unknown<'env>> {
+pub fn wrap<'env>(env: &'env Env, slice: &Slice<'static>) -> Result<Unknown<'env>> {
     let args = (
         fragment::wrap(env, slice.content())?,
         slice.open_start() as f64,
@@ -21,7 +21,7 @@ pub fn wrap<'env>(env: &'env Env, slice: &Slice) -> Result<Unknown<'env>> {
 
 #[napi]
 pub struct SliceHandle {
-    pub(crate) slice: Slice,
+    pub(crate) slice: Slice<'static>,
 }
 
 #[napi]

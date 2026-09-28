@@ -9,15 +9,13 @@ use crate::js::{self, OrThrow};
 use crate::node::{self, NodeHandle};
 use crate::schema::SchemaHandle;
 
-pub fn wrap<'env>(env: &'env Env, fragment: &Fragment) -> Result<Unknown<'env>> {
+pub fn wrap<'env>(env: &'env Env, fragment: &Fragment<'static>) -> Result<Unknown<'env>> {
     let handle = FragmentHandle {
         fragment: fragment.clone(),
     };
-    js::call_registered(
-        env,
-        "wrapFragment",
-        FnArgs::from((handle, fragment.id() as f64)),
-    )
+    let (chunk, start, count) = fragment.id();
+    let key = format!("{chunk}:{start}:{count}");
+    js::call_registered(env, "wrapFragment", FnArgs::from((handle, key)))
 }
 
 #[napi(object)]
@@ -34,7 +32,7 @@ pub struct IndexInfo {
 
 #[napi]
 pub struct FragmentHandle {
-    pub(crate) fragment: Fragment,
+    pub(crate) fragment: Fragment<'static>,
 }
 
 #[napi]
@@ -53,15 +51,15 @@ impl FragmentHandle {
     pub fn children<'env>(&self, env: &'env Env) -> Result<Vec<Unknown<'env>>> {
         self.fragment
             .children()
-            .iter()
-            .map(|child| node::wrap(env, child))
+
+            .map(|child| node::wrap(env, &child))
             .collect()
     }
 
     #[napi]
     pub fn child<'env>(&self, env: &'env Env, index: u32) -> Result<Unknown<'env>> {
         let child = self.fragment.child(index as usize).or_throw(env)?;
-        node::wrap(env, child)
+        node::wrap(env, &child)
     }
 
     #[napi]
@@ -97,7 +95,9 @@ impl FragmentHandle {
         let (from, to) = (js::pos(env, from)?, js::pos(env, to)?);
         let separator = node::separator(block_separator)?;
         let mut leaf_text = node::leaf_text(leaf_text)?;
-        let leaf_text = leaf_text.as_mut().map(|f| f as &mut tarnish::LeafTextHook);
+        let leaf_text = leaf_text
+            .as_mut()
+            .map(|f| f as &mut tarnish::LeafTextHook<'_, 'static>);
         let text = self
             .fragment
             .text_between(from, to, separator.as_ref(), leaf_text)
@@ -108,7 +108,7 @@ impl FragmentHandle {
     #[napi]
     pub fn for_each(&self, env: &Env, f: Function) -> Result<()> {
         for (index, (offset, child)) in self.fragment.children_with_offsets().enumerate() {
-            let args = (node::wrap(env, child)?, offset as f64, index as f64);
+            let args = (node::wrap(env, &child)?, offset as f64, index as f64);
             js::call(f.to_unknown(), FnArgs::from(args))?;
         }
         Ok(())

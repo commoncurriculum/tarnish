@@ -9,12 +9,12 @@ use crate::js::{self, OrThrow};
 use crate::mark;
 use crate::node;
 
-pub fn wrap<'env>(env: &'env Env, pos: ResolvedPos) -> Result<Unknown<'env>> {
+pub fn wrap<'env>(env: &'env Env, pos: ResolvedPos<'static>) -> Result<Unknown<'env>> {
     js::call_registered(env, "wrapResolvedPos", ResolvedPosHandle { pos })
 }
 
 /// A node range as JavaScript's `NodeRange`, of wrappers of its positions.
-fn wrap_range<'env>(env: &'env Env, range: NodeRange) -> Result<Unknown<'env>> {
+fn wrap_range<'env>(env: &'env Env, range: NodeRange<'static>) -> Result<Unknown<'env>> {
     let args = (
         wrap(env, range.resolved_from().clone())?,
         wrap(env, range.resolved_to().clone())?,
@@ -25,7 +25,7 @@ fn wrap_range<'env>(env: &'env Env, range: NodeRange) -> Result<Unknown<'env>> {
 
 #[napi]
 pub struct ResolvedPosHandle {
-    pub(crate) pos: ResolvedPos,
+    pub(crate) pos: ResolvedPos<'static>,
 }
 
 #[napi]
@@ -132,13 +132,15 @@ impl ResolvedPosHandle {
         pred: Option<Function>,
     ) -> Result<Unknown<'env>> {
         let mut call = pred.map(|pred| {
-            move |node: &tarnish::Node| {
+            move |node: &tarnish::Node<'static>| {
                 js::host(|env| {
                     js::call(pred.to_unknown(), node::wrap(env, node)?)?.coerce_to_bool()
                 })
             }
         });
-        let pred = call.as_mut().map(|f| f as &mut tarnish::NodePredicate);
+        let pred = call
+            .as_mut()
+            .map(|f| f as &mut tarnish::NodePredicate<'_, 'static>);
         match self.pos.block_range(&other.pos, pred).or_throw(env)? {
             Some(range) => wrap_range(env, range),
             None => Null.into_unknown(env),
@@ -160,7 +162,7 @@ impl ResolvedPosHandle {
 /// bridge.
 #[napi]
 pub struct NodeRangeHandle {
-    pub(crate) range: NodeRange,
+    pub(crate) range: NodeRange<'static>,
 }
 
 #[napi]

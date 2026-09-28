@@ -3,15 +3,15 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use napi::bindgen_prelude::{
     FromNapiValue, Function, FunctionRef, JsObjectValue, JsValuesTupleIntoVec, Null, Object,
     ToNapiValue, Unknown, Utf16String,
 };
 use napi::{Env, Error, JsString, JsValue, Result, Status, ValueType};
+use tarnish::chunk::ValueRef;
 use tarnish::js::Given;
-use tarnish::{Attrs, Map, Text, Value};
+use tarnish::{Attrs, Map, Text, TextRef, Value};
 
 thread_local! {
     static ENV: Cell<Option<Env>> = const { Cell::new(None) };
@@ -199,6 +199,14 @@ pub fn text_to_js<'env>(env: &'env Env, text: &Text) -> Result<JsString<'env>> {
     }
 }
 
+/// A text node's text, as JavaScript holds it.
+pub fn text_ref_to_js<'env>(env: &'env Env, text: TextRef) -> Result<JsString<'env>> {
+    match text.as_str() {
+        Some(text) => env.create_string(text),
+        None => env.create_string_utf16(&text.units()),
+    }
+}
+
 /// A string as JavaScript holds it, with every UTF-16 unit.
 pub fn text_from_js(value: Unknown) -> Result<Text> {
     Ok(Text::from_units(&Utf16String::from_unknown(value)?))
@@ -244,16 +252,16 @@ pub fn json_from_js(value: Unknown) -> Result<Value> {
 }
 
 /// Attributes as a type's `create` reads them from a value, a falsy value as `null`.
-pub fn attrs_from_js(value: Unknown) -> Result<Option<Attrs>> {
+pub fn attrs_from_js(value: Unknown) -> Result<Option<Map>> {
     let value = value_from_js(value)?;
     Ok(match value.as_ref().map(tarnish::js::attrs) {
-        Some(Given::Object(attrs)) => Some(Arc::new(attrs.into_owned())),
+        Some(Given::Object(attrs)) => Some(attrs.into_owned()),
         Some(Given::Falsy(_)) | None => None,
     })
 }
 
 pub fn value_to_js<'env>(env: &'env Env, value: &Value) -> Result<Unknown<'env>> {
-    to_js(env, value, None)
+    to_js(env, value)
 }
 
 /// [`value_to_js`], `None` being `undefined`.
@@ -265,30 +273,71 @@ pub fn optional_to_js<'env>(env: &'env Env, value: Option<&Value>) -> Result<Unk
 }
 
 /// Where a JavaScript array made from an attribute's array came from: the attributes, kept
-/// alive so that the array's address stays theirs, and that address.
+/// alive so that the array's identity stays theirs, and that identity.
 struct Origin {
-    _attrs: Attrs,
-    address: usize,
+    _attrs: Attrs<'static>,
+    id: (usize, u32),
 }
 
-/// The address of the attribute array a JavaScript array was made from, if it was, so that a
+/// The identity of the attribute array a JavaScript array was made from, if it was, so that a
 /// DOM spec that is an attribute's array can be told from one that equals it, as ProseMirror
 /// tells them apart.
-pub fn array_origin(array: Unknown) -> Option<usize> {
+pub fn array_origin(array: Unknown) -> Option<(usize, u32)> {
     let array = Object::from_unknown(array).ok()?;
-    array.unwrap::<Origin>().ok().map(|origin| origin.address)
+    array.unwrap::<Origin>().ok().map(|origin| origin.id)
 }
 
 /// A node's or mark's attributes, each array in them tagged with where it came from.
-pub fn attrs_to_js<'env>(env: &'env Env, attrs: &Attrs) -> Result<Unknown<'env>> {
+pub fn attrs_to_js<'env>(env: &'env Env, attrs: &Attrs<'static>) -> Result<Unknown<'env>> {
     let mut object = Object::new(env)?;
     for (key, item) in attrs.iter() {
-        object.set(key, to_js(env, item, Some(attrs))?)?;
+        object.set(key, ref_to_js(env, item, attrs)?)?;
     }
     Ok(object.to_unknown())
 }
 
-fn to_js<'env>(env: &'env Env, value: &Value, attrs: Option<&Attrs>) -> Result<Unknown<'env>> {
+/// Attributes outside a document: a type's defaults, or what it computed.
+pub fn map_to_js<'env>(env: &'env Env, attrs: &Map) -> Result<Unknown<'env>> {
+    let mut object = Object::new(env)?;
+    for (key, item) in attrs.iter() {
+        object.set(key, to_js(env, item)?)?;
+    }
+    Ok(object.to_unknown())
+}
+
+fn ref_to_js<'env>(env: &'env Env, value: ValueRef, attrs: &Attrs<'static>) -> Result<Unknown<'env>> {
+    if value.is_null() {
+        return Null.into_unknown(env);
+    }
+    if let Some(boolean) = value.as_bool() {
+        return boolean.into_unknown(env);
+    }
+    if let Some(number) = value.as_f64() {
+        return number.into_unknown(env);
+    }
+    if let Some(string) = value.as_str() {
+        return string.into_unknown(env);
+    }
+    if value.is_array() {
+        let mut array = env.create_array(value.len() as u32)?;
+        for (index, item) in value.items().enumerate() {
+            array.set(index as u32, ref_to_js(env, item, attrs)?)?;
+        }
+        let origin = Origin {
+            _attrs: attrs.clone(),
+            id: value.id(),
+        };
+        array.wrap(origin, None)?;
+        return Ok(array.to_unknown());
+    }
+    let mut object = Object::new(env)?;
+    for (key, item) in value.entries() {
+        object.set(key, ref_to_js(env, item, attrs)?)?;
+    }
+    Ok(object.to_unknown())
+}
+
+fn to_js<'env>(env: &'env Env, value: &Value) -> Result<Unknown<'env>> {
     match value {
         Value::Null => Null.into_unknown(env),
         Value::Bool(value) => value.into_unknown(env),
@@ -297,23 +346,10 @@ fn to_js<'env>(env: &'env Env, value: &Value, attrs: Option<&Attrs>) -> Result<U
         Value::Array(items) => {
             let mut array = env.create_array(items.len() as u32)?;
             for (index, item) in items.iter().enumerate() {
-                array.set(index as u32, to_js(env, item, attrs)?)?;
-            }
-            if let Some(attrs) = attrs {
-                let origin = Origin {
-                    _attrs: attrs.clone(),
-                    address: items.as_ptr() as usize,
-                };
-                array.wrap(origin, None)?;
+                array.set(index as u32, to_js(env, item)?)?;
             }
             Ok(array.to_unknown())
         }
-        Value::Object(map) => {
-            let mut object = Object::new(env)?;
-            for (key, item) in map.iter() {
-                object.set(key, to_js(env, item, attrs)?)?;
-            }
-            Ok(object.to_unknown())
-        }
+        Value::Object(map) => map_to_js(env, map),
     }
 }

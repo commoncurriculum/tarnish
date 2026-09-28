@@ -16,7 +16,7 @@ pub type StyleAttrsHook = Arc<dyn Fn(&str) -> Result<GetAttrsResult> + Send + Sy
 pub type GetContentHook<N> = Arc<dyn Fn(&N, &Schema) -> Result<Fragment<'static>> + Send + Sync>;
 
 /// A style rule's `clearMark`: whether to take the mark off the content.
-pub type ClearMarkHook = Arc<dyn for<'a> Fn(&Mark<'a>) -> Result<bool> + Send + Sync>;
+pub type ClearMarkHook = Arc<dyn Fn(&Mark<'static>) -> Result<bool> + Send + Sync>;
 
 /// A `contentElement` function: the element in a matched one that holds its content.
 pub type ContentElementHook<N> = Arc<dyn Fn(&N) -> Result<N> + Send + Sync>;

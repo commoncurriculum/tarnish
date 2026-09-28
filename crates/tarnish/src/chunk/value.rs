@@ -118,6 +118,10 @@ impl<'c> ValueRef<'c> {
         matches!(self.kind(), Kind::Object(..))
     }
 
+    pub fn is_array(self) -> bool {
+        matches!(self.kind(), Kind::Array(..))
+    }
+
     /// An array's or object's number of items, and 0 for anything else.
     pub fn len(self) -> usize {
         match self.kind() {

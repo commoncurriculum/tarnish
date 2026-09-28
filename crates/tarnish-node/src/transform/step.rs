@@ -13,7 +13,7 @@ use crate::schema::SchemaHandle;
 use crate::slice::{self, SliceHandle};
 
 /// A step as JavaScript's class of it, made from the arguments its constructor takes.
-pub fn wrap<'env>(env: &'env Env, step: &Step) -> Result<Unknown<'env>> {
+pub fn wrap<'env>(env: &'env Env, step: &Step<'static>) -> Result<Unknown<'env>> {
     let id = step.json_id();
     let make = "makeStep";
     match step {
@@ -76,14 +76,14 @@ pub fn wrap<'env>(env: &'env Env, step: &Step) -> Result<Unknown<'env>> {
     }
 }
 
-pub fn wrap_option<'env>(env: &'env Env, step: Option<Step>) -> Result<Unknown<'env>> {
+pub fn wrap_option<'env>(env: &'env Env, step: Option<Step<'static>>) -> Result<Unknown<'env>> {
     match step {
         Some(step) => wrap(env, &step),
         None => Null.into_unknown(env),
     }
 }
 
-pub fn wrap_result<'env>(env: &'env Env, result: &StepResult) -> Result<Unknown<'env>> {
+pub fn wrap_result<'env>(env: &'env Env, result: &StepResult<'static>) -> Result<Unknown<'env>> {
     let (doc, failed) = match result {
         StepResult::Ok(doc) => (node::wrap(env, doc)?, None),
         StepResult::Failed(message) => (Null.into_unknown(env)?, Some(message.as_str())),
@@ -97,7 +97,7 @@ fn mark_op(add: bool) -> MarkOp {
 
 #[napi]
 pub struct StepHandle {
-    pub(crate) step: Step,
+    pub(crate) step: Step<'static>,
 }
 
 #[napi]

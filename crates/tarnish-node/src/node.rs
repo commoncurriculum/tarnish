@@ -3,31 +3,40 @@
 use napi::bindgen_prelude::{FnArgs, Function, Null, ToNapiValue, Unknown, Utf16String};
 use napi::{Env, JsString, JsValue, Result, ValueType};
 use napi_derive::napi;
-use tarnish::{ChildAt, Node, Text};
+use tarnish::{ChildAt, Marks, Node, Text};
 
+use crate::content::Place;
 use crate::fragment::{self, FragmentHandle};
 use crate::js::{self, OrThrow};
 use crate::mark::{self, MarkHandle};
 use crate::schema::{self, MarkTypeHandle, NodeTypeHandle};
 use crate::slice::{self, SliceHandle};
 
-pub fn wrap<'env>(env: &'env Env, node: &Node) -> Result<Unknown<'env>> {
+pub fn wrap<'env>(env: &'env Env, node: &Node<'static>) -> Result<Unknown<'env>> {
     let handle = NodeHandle { node: node.clone() };
-    js::call_registered(env, "wrapNode", FnArgs::from((handle, node.id() as f64)))
+    let (chunk, index) = node.id();
+    let key = format!("{chunk}:{index}");
+    js::call_registered(env, "wrapNode", FnArgs::from((handle, key)))
 }
 
-pub fn wrap_option<'env>(env: &'env Env, node: Option<&Node>) -> Result<Unknown<'env>> {
+pub fn wrap_option<'env>(env: &'env Env, node: Option<&Node<'static>>) -> Result<Unknown<'env>> {
     match node {
         Some(node) => wrap(env, node),
         None => Null.into_unknown(env),
     }
 }
 
+/// A node a schema's hook is given, which may be in chunks borrowed for less than JavaScript
+/// keeps a wrapper: a copy of it.
+pub fn detach(node: &Node) -> Node<'static> {
+    node.compact()
+}
+
 /// A JavaScript `(node, pos, parent, index)` callback as tarnish calls it: going on into a
 /// node's children unless it returns `false`.
 pub fn visitor(
     f: Function,
-) -> impl FnMut(&Node, usize, Option<&Node>, usize) -> tarnish::Result<bool> {
+) -> impl FnMut(&Node<'static>, usize, Option<&Node<'static>>, usize) -> tarnish::Result<bool> {
     move |node, pos, parent, index| {
         js::host(|env| {
             let args = (
@@ -47,7 +56,7 @@ pub fn visitor(
 /// `textBetween`'s `leafText`, a string or a function of the node, as tarnish calls it.
 pub fn leaf_text(
     leaf_text: Option<Unknown>,
-) -> Result<Option<impl FnMut(&Node) -> tarnish::Result<Text>>> {
+) -> Result<Option<impl FnMut(&Node<'static>) -> tarnish::Result<Text>>> {
     let Some(leaf_text) = leaf_text else {
         return Ok(None);
     };
@@ -55,7 +64,7 @@ pub fn leaf_text(
         return Ok(None);
     }
     let is_function = leaf_text.get_type()? == ValueType::Function;
-    Ok(Some(move |node: &Node| {
+    Ok(Some(move |node: &Node<'static>| {
         js::host(|env| {
             let text = match is_function {
                 true => js::call(leaf_text, wrap(env, node)?)?,
@@ -83,9 +92,9 @@ pub struct ChildInfo<'env> {
     pub offset: u32,
 }
 
-fn child_info<'env>(env: &'env Env, child: ChildAt) -> Result<ChildInfo<'env>> {
+fn child_info<'env>(env: &'env Env, child: ChildAt<'static>) -> Result<ChildInfo<'env>> {
     Ok(ChildInfo {
-        node: wrap_option(env, child.node)?,
+        node: wrap_option(env, child.node.as_ref())?,
         index: child.index as u32,
         offset: child.offset as u32,
     })
@@ -93,19 +102,19 @@ fn child_info<'env>(env: &'env Env, child: ChildAt) -> Result<ChildInfo<'env>> {
 
 #[napi]
 pub struct NodeHandle {
-    pub(crate) node: Node,
+    pub(crate) node: Node<'static>,
 }
 
 #[napi]
 impl NodeHandle {
     #[napi]
     pub fn node_type<'env>(&self, env: &'env Env) -> Result<Unknown<'env>> {
-        schema::wrap_node_type(env, self.node.node_type())
+        schema::wrap_node_type(env, &self.node.node_type())
     }
 
     #[napi]
     pub fn attrs<'env>(&self, env: &'env Env) -> Result<Unknown<'env>> {
-        js::attrs_to_js(env, self.node.attrs())
+        js::attrs_to_js(env, &self.node.attrs())
     }
 
     #[napi]
@@ -115,14 +124,14 @@ impl NodeHandle {
 
     #[napi]
     pub fn marks<'env>(&self, env: &'env Env) -> Result<Unknown<'env>> {
-        mark::wrap_set(env, self.node.marks())
+        mark::wrap_set(env, &self.node.marks())
     }
 
     #[napi]
     pub fn text<'env>(&self, env: &'env Env) -> Result<Option<JsString<'env>>> {
         self.node
             .text()
-            .map(|text| js::text_to_js(env, text))
+            .map(|text| js::text_ref_to_js(env, text))
             .transpose()
     }
 
@@ -173,7 +182,9 @@ impl NodeHandle {
         let (from, to) = (js::pos(env, from)?, js::pos(env, to)?);
         let separator = separator(block_separator)?;
         let mut leaf_text = self::leaf_text(leaf_text)?;
-        let leaf_text = leaf_text.as_mut().map(|f| f as &mut tarnish::LeafTextHook);
+        let leaf_text = leaf_text
+            .as_mut()
+            .map(|f| f as &mut tarnish::LeafTextHook<'_, 'static>);
         let text = self
             .node
             .text_between(from, to, separator.as_ref(), leaf_text)
@@ -202,7 +213,7 @@ impl NodeHandle {
         let marks = marks.map(mark::list);
         Ok(self
             .node
-            .has_markup(&node_type.node_type, attrs.as_deref(), marks.as_deref()))
+            .has_markup(&node_type.node_type(), attrs.as_ref(), marks.as_deref()))
     }
 
     #[napi]
@@ -210,9 +221,16 @@ impl NodeHandle {
         wrap(env, &self.node.copy(content.fragment.clone()))
     }
 
+    /// The node with these marks, or itself when they are its own, as ProseMirror gives it
+    /// back when it is passed its own array of them.
     #[napi]
     pub fn mark<'env>(&self, env: &'env Env, marks: Vec<&MarkHandle>) -> Result<Unknown<'env>> {
-        wrap(env, &self.node.mark(mark::list(marks).into()))
+        let marks = mark::list(marks);
+        let own = self.node.marks();
+        if own.len() == marks.len() && own.iter().zip(&marks).all(|(own, mark)| own.ptr_eq(mark)) {
+            return wrap(env, &self.node);
+        }
+        wrap(env, &self.node.mark(Marks::from_list(&marks)))
     }
 
     #[napi]
@@ -263,7 +281,7 @@ impl NodeHandle {
     #[napi]
     pub fn node_at<'env>(&self, env: &'env Env, pos: f64) -> Result<Unknown<'env>> {
         let node = self.node.node_at(js::pos(env, pos)?).or_throw(env)?;
-        wrap_option(env, node)
+        wrap_option(env, node.as_ref())
     }
 
     #[napi]
@@ -300,7 +318,7 @@ impl NodeHandle {
         mark_type: &MarkTypeHandle,
     ) -> Result<bool> {
         self.node
-            .range_has_mark_type(js::pos(env, from)?, js::pos(env, to)?, &mark_type.mark_type)
+            .range_has_mark_type(js::pos(env, from)?, js::pos(env, to)?, &mark_type.mark_type())
             .or_throw(env)
     }
 
@@ -312,7 +330,8 @@ impl NodeHandle {
     #[napi]
     pub fn content_match_at<'env>(&self, env: &'env Env, index: u32) -> Result<Unknown<'env>> {
         let found = self.node.content_match_at(index as usize).or_throw(env)?;
-        crate::content::wrap(env, &found)
+        let place = Place::of_type(self.node.schema(), self.node.node_type().index());
+        crate::content::wrap(env, &place, &found)
     }
 
     #[napi]
@@ -350,7 +369,7 @@ impl NodeHandle {
             .can_replace_with(
                 from as usize,
                 to as usize,
-                &node_type.node_type,
+                &node_type.node_type(),
                 marks.as_deref(),
             )
             .or_throw(env)

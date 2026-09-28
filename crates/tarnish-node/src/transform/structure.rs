@@ -22,25 +22,25 @@ pub struct WrapperArg<'env> {
 }
 
 /// Wrappers, `None` for a falsy entry.
-pub fn wrappers(list: Vec<Option<WrapperArg>>) -> Result<Vec<Option<Wrapper>>> {
-    list.into_iter()
+pub fn wrappers<'a>(list: &'a [Option<WrapperArg>]) -> Result<Vec<Option<Wrapper<'a>>>> {
+    list.iter()
         .map(|wrapper| {
             let Some(wrapper) = wrapper else {
                 return Ok(None);
             };
             let attrs = wrapper.attrs.map(js::attrs_from_js).transpose()?;
             Ok(Some(Wrapper {
-                node_type: wrapper.node_type.node_type.clone(),
+                node_type: wrapper.node_type.node_type(),
                 attrs: attrs.flatten(),
             }))
         })
         .collect()
 }
 
-pub fn mark_match<'a>(mark: &Either<&'a MarkHandle, &'a MarkTypeHandle>) -> MarkMatch<'a> {
+pub fn mark_match<'a>(mark: &Either<&'a MarkHandle, &'a MarkTypeHandle>) -> MarkMatch<'a, 'static> {
     match mark {
         Either::A(mark) => MarkMatch::Mark(&mark.mark),
-        Either::B(mark_type) => MarkMatch::Type(&mark_type.mark_type),
+        Either::B(mark_type) => MarkMatch::Type(mark_type.mark_type()),
     }
 }
 
@@ -78,7 +78,8 @@ pub fn can_split(
     depth: u32,
     types_after: Option<Vec<Option<WrapperArg>>>,
 ) -> Result<bool> {
-    let types = wrappers(types_after.unwrap_or_default())?;
+    let types_after = types_after.unwrap_or_default();
+    let types = wrappers(&types_after)?;
     let pos = js::pos(env, pos)?;
     tarnish::transform::can_split(&doc.node, pos, depth as usize, &types).or_throw(env)
 }
@@ -98,7 +99,7 @@ pub fn insert_point(
 ) -> Result<Option<u32>> {
     let pos = js::pos(env, pos)?;
     let point =
-        tarnish::transform::insert_point(&doc.node, pos, &node_type.node_type).or_throw(env)?;
+        tarnish::transform::insert_point(&doc.node, pos, &node_type.node_type()).or_throw(env)?;
     Ok(point.map(|pos| pos as u32))
 }
 
@@ -131,7 +132,7 @@ pub fn find_wrapping<'env>(
     let attrs = js::attrs_from_js(attrs)?;
     let found = tarnish::transform::find_wrapping(
         &range.range,
-        &node_type.node_type,
+        &node_type.node_type(),
         attrs,
         Some(&inner_range.range),
     )
@@ -145,7 +146,7 @@ pub fn find_wrapping<'env>(
             Ok(FoundWrapper {
                 node_type: schema::wrap_node_type(env, &wrapper.node_type)?,
                 attrs: match &wrapper.attrs {
-                    Some(attrs) => js::attrs_to_js(env, attrs)?,
+                    Some(attrs) => js::map_to_js(env, attrs)?,
                     None => Null.into_unknown(env)?,
                 },
             })

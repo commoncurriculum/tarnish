@@ -145,7 +145,7 @@ fn style_rule(object: &Object, style: String) -> Result<Rule<StyleRule>> {
             as StyleAttrsHook
     });
     let clear_mark = Hook::method(object, "clearMark")?.map(|hook| {
-        Arc::new(move |mark: &Mark| {
+        Arc::new(move |mark: &Mark<'static>| {
             js::host(|env| hook.call(env, mark::wrap(env, mark)?)?.coerce_to_bool())
         }) as ClearMarkHook
     });
@@ -271,7 +271,7 @@ fn with_options<T>(
         from: index("from")?,
         to: index("to")?,
         top_node: top_node.map(|node| node.node.clone()),
-        top_match: top_match.map(|found| found.content_match.clone()),
+        top_match: top_match.as_ref().map(|found| found.content_match()),
         context: context.map(|pos| pos.pos.clone()),
         rule_from_node: rule_from_node
             .as_ref()

@@ -7,7 +7,7 @@ use napi::bindgen_prelude::{Either, Unknown};
 use napi::{Env, Result, ValueType};
 use napi_derive::napi;
 use tarnish::transform::{BlockAttrs, Transform, Wrapper};
-use tarnish::{Attrs, Node};
+use tarnish::{Map, Node};
 
 use super::map::{self, MappingSource};
 use super::step::{self, StepHandle};
@@ -29,7 +29,7 @@ pub struct ChangedRange {
 
 #[napi]
 pub struct TransformHandle {
-    tr: Rc<RefCell<Transform>>,
+    tr: Rc<RefCell<Transform<'static>>>,
 }
 
 impl TransformHandle {
@@ -37,7 +37,9 @@ impl TransformHandle {
     fn run(
         &self,
         env: &Env,
-        f: impl FnOnce(&mut Transform) -> tarnish::Result<&mut Transform>,
+        f: impl for<'t> FnOnce(
+            &'t mut Transform<'static>,
+        ) -> tarnish::Result<&'t mut Transform<'static>>,
     ) -> Result<()> {
         let result = f(&mut self.tr.borrow_mut()).map(|_| ());
         result.or_throw(env)
@@ -193,7 +195,7 @@ impl TransformHandle {
         range: &NodeRangeHandle,
         wrappers: Vec<Option<WrapperArg>>,
     ) -> Result<()> {
-        let wrappers: Vec<Wrapper> = structure::wrappers(wrappers)?
+        let wrappers: Vec<Wrapper> = structure::wrappers(&wrappers)?
             .into_iter()
             .map(|wrapper| {
                 wrapper.ok_or_else(|| napi::Error::from_reason("A wrapper with no type"))
@@ -213,16 +215,16 @@ impl TransformHandle {
         attrs: Unknown,
     ) -> Result<()> {
         let (from, to) = (js::pos(env, from)?, js::pos(env, to)?);
-        let node_type = &node_type.node_type;
+        let node_type = &node_type.node_type();
         if attrs.get_type()? == ValueType::Function {
-            let mut attrs_of = |node: &Node| -> tarnish::Result<Option<Attrs>> {
+            let mut attrs_of = |node: &Node<'static>| -> tarnish::Result<Option<Map>> {
                 js::host(|env| js::attrs_from_js(js::call(attrs, node::wrap(env, node)?)?))
             };
             let attrs = BlockAttrs::Hook(&mut attrs_of);
             return self.run(env, |tr| tr.set_block_type(from, to, node_type, attrs));
         }
         let attrs = js::attrs_from_js(attrs)?;
-        let attrs = BlockAttrs::Fixed(attrs.as_deref());
+        let attrs = BlockAttrs::Fixed(attrs.as_ref());
         self.run(env, |tr| tr.set_block_type(from, to, node_type, attrs))
     }
 
@@ -236,11 +238,11 @@ impl TransformHandle {
         marks: Option<Vec<&MarkHandle>>,
     ) -> Result<()> {
         let pos = js::pos(env, pos)?;
-        let node_type = node_type.map(|node_type| &node_type.node_type);
+        let node_type = node_type.map(NodeTypeHandle::node_type);
         let attrs = js::attrs_from_js(attrs)?;
         let marks = marks.map(mark::list);
         self.run(env, |tr| {
-            tr.set_node_markup(pos, node_type, attrs.as_deref(), marks.as_deref())
+            tr.set_node_markup(pos, node_type.as_ref(), attrs.as_ref(), marks.as_deref())
         })
     }
 
@@ -291,7 +293,8 @@ impl TransformHandle {
         types_after: Option<Vec<Option<WrapperArg>>>,
     ) -> Result<()> {
         let pos = js::pos(env, pos)?;
-        let types = structure::wrappers(types_after.unwrap_or_default())?;
+        let types_after = types_after.unwrap_or_default();
+        let types = structure::wrappers(&types_after)?;
         self.run(env, |tr| tr.split(pos, depth as usize, &types))
     }
 
@@ -323,9 +326,9 @@ impl TransformHandle {
         start: Option<&ContentMatchHandle>,
     ) -> Result<()> {
         let pos = js::pos(env, pos)?;
-        let start = start.map(|start| start.content_match.clone());
+        let start = start.map(ContentMatchHandle::content_match);
         self.run(env, |tr| {
-            tr.clear_incompatible(pos, &parent_type.node_type, start)
+            tr.clear_incompatible(pos, &parent_type.node_type(), start)
         })
     }
 }

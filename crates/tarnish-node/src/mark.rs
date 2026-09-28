@@ -8,30 +8,28 @@ use tarnish::{Mark, Marks};
 use crate::js;
 use crate::schema;
 
-pub fn list(marks: Vec<&MarkHandle>) -> Vec<Mark> {
+pub fn list(marks: Vec<&MarkHandle>) -> Vec<Mark<'static>> {
     marks.into_iter().map(|mark| mark.mark.clone()).collect()
 }
 
-/// The set an operation made of `given`, or `None` when it left the set as it was, for
-/// JavaScript to give back the array it passed, as ProseMirror does.
-pub fn changed_set<'env>(
+/// The list an operation made, or `None` when it left the list as it was, for JavaScript to
+/// give back the array it passed, as ProseMirror does.
+pub fn changed_list<'env>(
     env: &'env Env,
-    given: &Marks,
-    result: &Marks,
+    result: Option<Vec<Mark<'static>>>,
 ) -> Result<Option<Unknown<'env>>> {
-    if given.ptr_eq(result) {
-        return Ok(None);
-    }
-    wrap_set(env, result).map(Some)
+    result.map(|marks| wrap_list(env, &marks)).transpose()
 }
 
-pub fn wrap<'env>(env: &'env Env, mark: &Mark) -> Result<Unknown<'env>> {
+pub fn wrap<'env>(env: &'env Env, mark: &Mark<'static>) -> Result<Unknown<'env>> {
     let handle = MarkHandle { mark: mark.clone() };
-    js::call_registered(env, "wrapMark", FnArgs::from((handle, mark.id() as f64)))
+    let (chunk, index) = mark.id();
+    let key = format!("{chunk}:{index}");
+    js::call_registered(env, "wrapMark", FnArgs::from((handle, key)))
 }
 
-/// A set of marks as an array of wrappers; the empty set as `Mark.none`.
-pub fn wrap_set<'env>(env: &'env Env, marks: &[Mark]) -> Result<Unknown<'env>> {
+/// A list of marks as an array of wrappers; the empty list as `Mark.none`.
+pub fn wrap_list<'env>(env: &'env Env, marks: &[Mark<'static>]) -> Result<Unknown<'env>> {
     if marks.is_empty() {
         return js::call_registered(env, "markNone", ());
     }
@@ -42,21 +40,25 @@ pub fn wrap_set<'env>(env: &'env Env, marks: &[Mark]) -> Result<Unknown<'env>> {
     marks.into_unknown(env)
 }
 
+pub fn wrap_set<'env>(env: &'env Env, marks: &Marks<'static>) -> Result<Unknown<'env>> {
+    wrap_list(env, &marks.to_vec())
+}
+
 #[napi]
 pub struct MarkHandle {
-    pub(crate) mark: Mark,
+    pub(crate) mark: Mark<'static>,
 }
 
 #[napi]
 impl MarkHandle {
     #[napi]
     pub fn mark_type<'env>(&self, env: &'env Env) -> Result<Unknown<'env>> {
-        schema::wrap_mark_type(env, self.mark.mark_type())
+        schema::wrap_mark_type(env, &self.mark.mark_type())
     }
 
     #[napi]
     pub fn attrs<'env>(&self, env: &'env Env) -> Result<Unknown<'env>> {
-        js::attrs_to_js(env, self.mark.attrs())
+        js::attrs_to_js(env, &self.mark.attrs())
     }
 
     #[napi]
@@ -65,8 +67,7 @@ impl MarkHandle {
         env: &'env Env,
         set: Vec<&MarkHandle>,
     ) -> Result<Option<Unknown<'env>>> {
-        let set: Marks = list(set).into();
-        changed_set(env, &set, &self.mark.add_to_set(&set))
+        changed_list(env, self.mark.added_to(&list(set)))
     }
 
     #[napi]
@@ -75,13 +76,17 @@ impl MarkHandle {
         env: &'env Env,
         set: Vec<&MarkHandle>,
     ) -> Result<Option<Unknown<'env>>> {
-        let set: Marks = list(set).into();
-        changed_set(env, &set, &self.mark.remove_from_set(&set))
+        let mut set = list(set);
+        let removed = set.iter().position(|other| self.mark == *other).map(|index| {
+            set.remove(index);
+            set
+        });
+        changed_list(env, removed)
     }
 
     #[napi]
     pub fn is_in_set(&self, set: Vec<&MarkHandle>) -> bool {
-        self.mark.is_in_set(&list(set))
+        self.mark.is_in_list(&list(set))
     }
 
     #[napi]
@@ -97,10 +102,12 @@ impl MarkHandle {
 
 #[napi]
 pub fn marks_same_set(a: Vec<&MarkHandle>, b: Vec<&MarkHandle>) -> bool {
-    Mark::same_set(&list(a), &list(b))
+    Mark::same_list(&list(a), &list(b))
 }
 
 #[napi]
 pub fn marks_set_from<'env>(env: &'env Env, marks: Vec<&MarkHandle>) -> Result<Unknown<'env>> {
-    wrap_set(env, &Mark::set_from(&list(marks)))
+    let mut marks = list(marks);
+    marks.sort_by_key(|mark| mark.mark_type().rank());
+    wrap_list(env, &marks)
 }

@@ -9,13 +9,17 @@ use tarnish::{
     AttributeSpec, MarkType, NodeHook, NodeType, Schema, SchemaSpec, Text, Validate, Whitespace,
 };
 
+use crate::content::Place;
 use crate::fragment::FragmentHandle;
 use crate::js::{self, Hook, OrThrow};
 use crate::mark::{self, MarkHandle};
 use crate::node;
 
 fn node_hook<T: 'static>(hook: Hook, read: fn(Unknown) -> Result<T>) -> NodeHook<T> {
-    Arc::new(move |node| js::host(|env| read(hook.call(env, node::wrap(env, node)?)?)))
+    Arc::new(move |node| {
+        let node = node::detach(node);
+        js::host(|env| read(hook.call(env, node::wrap(env, &node)?)?))
+    })
 }
 
 /// The functions of attribute specs, and defaults of `undefined`, which JSON leaves out.
@@ -77,14 +81,20 @@ impl SchemaHandle {
 
     #[napi]
     pub fn node_type(&self, index: u32) -> Option<NodeTypeHandle> {
-        let node_type = self.schema.node_types().nth(index as usize)?;
-        Some(NodeTypeHandle { node_type })
+        let index = index as usize;
+        (index < self.schema.node_types().len()).then(|| NodeTypeHandle {
+            schema: self.schema.clone(),
+            index,
+        })
     }
 
     #[napi]
     pub fn mark_type(&self, index: u32) -> Option<MarkTypeHandle> {
-        let mark_type = self.schema.mark_types().nth(index as usize)?;
-        Some(MarkTypeHandle { mark_type })
+        let rank = index as usize;
+        (rank < self.schema.mark_types().len()).then(|| MarkTypeHandle {
+            schema: self.schema.clone(),
+            rank,
+        })
     }
 
     #[napi(getter)]
@@ -149,44 +159,51 @@ pub fn wrap_mark_type<'env>(env: &'env Env, mark_type: &MarkType) -> Result<Unkn
 
 #[napi]
 pub struct NodeTypeHandle {
-    pub(crate) node_type: NodeType,
+    pub(crate) schema: Schema,
+    pub(crate) index: usize,
+}
+
+impl NodeTypeHandle {
+    pub(crate) fn node_type(&self) -> NodeType<'_> {
+        self.schema.node_type_at(self.index)
+    }
 }
 
 #[napi]
 impl NodeTypeHandle {
     #[napi(getter)]
     pub fn name(&self) -> String {
-        self.node_type.name().to_owned()
+        self.node_type().name().to_owned()
     }
 
     #[napi(getter)]
     pub fn is_block(&self) -> bool {
-        self.node_type.is_block()
+        self.node_type().is_block()
     }
 
     #[napi(getter)]
     pub fn is_text(&self) -> bool {
-        self.node_type.is_text()
+        self.node_type().is_text()
     }
 
     #[napi(getter)]
     pub fn inline_content(&self) -> bool {
-        self.node_type.inline_content()
+        self.node_type().inline_content()
     }
 
     #[napi(getter)]
     pub fn is_leaf(&self) -> bool {
-        self.node_type.is_leaf()
+        self.node_type().is_leaf()
     }
 
     #[napi(getter)]
     pub fn groups(&self) -> Vec<String> {
-        self.node_type.groups().to_vec()
+        self.node_type().groups().to_vec()
     }
 
     #[napi(getter)]
     pub fn whitespace(&self) -> &'static str {
-        match self.node_type.whitespace() {
+        match self.node_type().whitespace() {
             Whitespace::Pre => "pre",
             Whitespace::Normal => "normal",
         }
@@ -194,42 +211,43 @@ impl NodeTypeHandle {
 
     #[napi(getter)]
     pub fn has_required_attrs(&self) -> bool {
-        self.node_type.has_required_attrs()
+        self.node_type().has_required_attrs()
     }
 
     #[napi(getter)]
     pub fn default_attrs<'env>(&self, env: &'env Env) -> Result<Option<Unknown<'env>>> {
-        self.node_type
+        self.node_type()
             .default_attrs()
-            .map(|defaults| js::attrs_to_js(env, defaults))
+            .map(|defaults| js::map_to_js(env, defaults))
             .transpose()
     }
 
     /// The indexes of the marks allowed in the type's nodes, `null` for all.
     #[napi(getter)]
     pub fn mark_set(&self) -> Option<Vec<u32>> {
-        let marks = self.node_type.mark_set()?;
+        let marks = self.node_type().mark_set()?;
         Some(marks.iter().map(|mark| mark.rank() as u32).collect())
     }
 
     #[napi]
     pub fn content_match<'env>(&self, env: &'env Env) -> Result<Unknown<'env>> {
-        crate::content::wrap(env, &self.node_type.content_match())
+        let place = Place::of_type(&self.schema, self.index);
+        crate::content::wrap(env, &place, &self.node_type().content_match())
     }
 
     #[napi]
     pub fn compatible_content(&self, other: &NodeTypeHandle) -> bool {
-        self.node_type.compatible_content(&other.node_type)
+        self.node_type().compatible_content(&other.node_type())
     }
 
     #[napi]
     pub fn compute_attrs<'env>(&self, env: &'env Env, attrs: Unknown) -> Result<Unknown<'env>> {
         let attrs = js::attrs_from_js(attrs)?;
         let computed = self
-            .node_type
-            .compute_attrs(attrs.as_deref())
+            .node_type()
+            .compute_attrs(attrs.as_ref())
             .or_throw(env)?;
-        js::attrs_to_js(env, &computed)
+        js::map_to_js(env, &computed)
     }
 
     #[napi]
@@ -243,8 +261,8 @@ impl NodeTypeHandle {
         let attrs = js::attrs_from_js(attrs)?;
         let marks = mark::list(marks.unwrap_or_default());
         let node = self
-            .node_type
-            .create(attrs.as_deref(), content.fragment.clone(), &marks)
+            .node_type()
+            .create(attrs.as_ref(), content.fragment.clone(), &marks)
             .or_throw(env)?;
         node::wrap(env, &node)
     }
@@ -260,8 +278,8 @@ impl NodeTypeHandle {
         let attrs = js::attrs_from_js(attrs)?;
         let marks = mark::list(marks.unwrap_or_default());
         let node = self
-            .node_type
-            .create_checked(attrs.as_deref(), content.fragment.clone(), &marks)
+            .node_type()
+            .create_checked(attrs.as_ref(), content.fragment.clone(), &marks)
             .or_throw(env)?;
         node::wrap(env, &node)
     }
@@ -277,20 +295,20 @@ impl NodeTypeHandle {
         let attrs = js::attrs_from_js(attrs)?;
         let marks = mark::list(marks.unwrap_or_default());
         let node = self
-            .node_type
-            .create_and_fill(attrs.as_deref(), content.fragment.clone(), &marks)
+            .node_type()
+            .create_and_fill(attrs.as_ref(), content.fragment.clone(), &marks)
             .or_throw(env)?;
         node.map(|node| node::wrap(env, &node)).transpose()
     }
 
     #[napi]
     pub fn valid_content(&self, content: &FragmentHandle) -> bool {
-        self.node_type.valid_content(&content.fragment)
+        self.node_type().valid_content(&content.fragment)
     }
 
     #[napi]
     pub fn check_content(&self, env: &Env, content: &FragmentHandle) -> Result<()> {
-        self.node_type
+        self.node_type()
             .check_content(&content.fragment)
             .or_throw(env)
     }
@@ -298,17 +316,17 @@ impl NodeTypeHandle {
     #[napi]
     pub fn check_attrs(&self, env: &Env, attrs: Unknown) -> Result<()> {
         let attrs = js::attrs_from_js(attrs)?.unwrap_or_default();
-        self.node_type.check_attrs(&attrs).or_throw(env)
+        self.node_type().check_attrs(&attrs).or_throw(env)
     }
 
     #[napi]
     pub fn allows_mark_type(&self, mark_type: &MarkTypeHandle) -> bool {
-        self.node_type.allows_mark_type(&mark_type.mark_type)
+        self.node_type().allows_mark_type(&mark_type.mark_type())
     }
 
     #[napi]
     pub fn allows_marks(&self, marks: Vec<&MarkHandle>) -> bool {
-        self.node_type.allows_marks(&mark::list(marks))
+        self.node_type().allows_mark_list(&mark::list(marks))
     }
 
     #[napi]
@@ -317,40 +335,55 @@ impl NodeTypeHandle {
         env: &'env Env,
         marks: Vec<&MarkHandle>,
     ) -> Result<Option<Unknown<'env>>> {
-        let marks = mark::list(marks).into();
-        mark::changed_set(env, &marks, &self.node_type.allowed_marks(&marks))
+        let marks = mark::list(marks);
+        let node_type = self.node_type();
+        let changed = (!node_type.allows_mark_list(&marks)).then(|| {
+            marks
+                .iter()
+                .filter(|mark| node_type.allows_mark_type(&mark.mark_type()))
+                .cloned()
+                .collect()
+        });
+        mark::changed_list(env, changed)
     }
 }
 
 #[napi]
 pub struct MarkTypeHandle {
-    pub(crate) mark_type: MarkType,
+    pub(crate) schema: Schema,
+    pub(crate) rank: usize,
+}
+
+impl MarkTypeHandle {
+    pub(crate) fn mark_type(&self) -> MarkType<'_> {
+        self.schema.mark_type_at(self.rank)
+    }
 }
 
 #[napi]
 impl MarkTypeHandle {
     #[napi(getter)]
     pub fn name(&self) -> String {
-        self.mark_type.name().to_owned()
+        self.mark_type().name().to_owned()
     }
 
     #[napi(getter)]
     pub fn rank(&self) -> u32 {
-        self.mark_type.rank() as u32
+        self.rank as u32
     }
 
     #[napi(getter)]
     pub fn default_attrs<'env>(&self, env: &'env Env) -> Result<Option<Unknown<'env>>> {
-        self.mark_type
+        self.mark_type()
             .default_attrs()
-            .map(|defaults| js::attrs_to_js(env, defaults))
+            .map(|defaults| js::map_to_js(env, defaults))
             .transpose()
     }
 
     /// The indexes of the mark types this one excludes.
     #[napi(getter)]
     pub fn excluded(&self) -> Vec<u32> {
-        self.mark_type
+        self.mark_type()
             .excluded()
             .iter()
             .map(|mark| mark.rank() as u32)
@@ -360,7 +393,7 @@ impl MarkTypeHandle {
     #[napi]
     pub fn create<'env>(&self, env: &'env Env, attrs: Unknown) -> Result<Unknown<'env>> {
         let attrs = js::attrs_from_js(attrs)?;
-        let mark = self.mark_type.create(attrs.as_deref()).or_throw(env)?;
+        let mark = self.mark_type().create(attrs.as_ref()).or_throw(env)?;
         mark::wrap(env, &mark)
     }
 
@@ -370,8 +403,18 @@ impl MarkTypeHandle {
         env: &'env Env,
         set: Vec<&MarkHandle>,
     ) -> Result<Option<Unknown<'env>>> {
-        let set = mark::list(set).into();
-        mark::changed_set(env, &set, &self.mark_type.remove_from_set(&set))
+        let set = mark::list(set);
+        let mark_type = self.mark_type();
+        let changed = set
+            .iter()
+            .any(|mark| mark.mark_type() == mark_type)
+            .then(|| {
+                set.iter()
+                    .filter(|mark| mark.mark_type() != mark_type)
+                    .cloned()
+                    .collect()
+            });
+        mark::changed_list(env, changed)
     }
 
     #[napi]
@@ -381,8 +424,8 @@ impl MarkTypeHandle {
         set: Vec<&MarkHandle>,
     ) -> Result<Option<Unknown<'env>>> {
         let set = mark::list(set);
-        self.mark_type
-            .is_in_set(&set)
+        self.mark_type()
+            .is_in_list(&set)
             .map(|mark| mark::wrap(env, mark))
             .transpose()
     }
@@ -390,11 +433,11 @@ impl MarkTypeHandle {
     #[napi]
     pub fn check_attrs(&self, env: &Env, attrs: Unknown) -> Result<()> {
         let attrs = js::attrs_from_js(attrs)?.unwrap_or_default();
-        self.mark_type.check_attrs(&attrs).or_throw(env)
+        self.mark_type().check_attrs(&attrs).or_throw(env)
     }
 
     #[napi]
     pub fn excludes(&self, other: &MarkTypeHandle) -> bool {
-        self.mark_type.excludes(&other.mark_type)
+        self.mark_type().excludes(&other.mark_type())
     }
 }

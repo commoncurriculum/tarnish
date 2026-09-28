@@ -97,8 +97,8 @@ impl<'a> Marks<'a> {
         }
     }
 
-    /// A set of marks already sorted by rank.
-    pub(crate) fn from_sorted(marks: &[Mark<'a>]) -> Marks<'a> {
+    /// A set of these marks, in this order, which for a set is by rank.
+    pub fn from_list(marks: &[Mark<'a>]) -> Marks<'a> {
         let Some(first) = marks.first() else {
             return Marks::default();
         };
@@ -194,7 +194,7 @@ impl<'a> Mark<'a> {
     pub fn add_to_set(&self, set: &Marks<'a>) -> Marks<'a> {
         let marks = set.to_vec();
         match self.added_to(&marks) {
-            Some(added) => Marks::from_sorted(&added),
+            Some(added) => Marks::from_list(&added),
             None => set.clone(),
         }
     }
@@ -242,7 +242,7 @@ impl<'a> Mark<'a> {
                     .chain(&marks[index + 1..])
                     .cloned()
                     .collect();
-                Marks::from_sorted(&kept)
+                Marks::from_list(&kept)
             }
             None => set.clone(),
         }
@@ -272,11 +272,11 @@ impl<'a> Mark<'a> {
             return Mark::none();
         }
         if marks.is_sorted_by_key(|mark| mark.view().rank()) {
-            return Marks::from_sorted(marks);
+            return Marks::from_list(marks);
         }
         let mut copy = marks.to_vec();
         copy.sort_by_key(|mark| mark.view().rank());
-        Marks::from_sorted(&copy)
+        Marks::from_list(&copy)
     }
 
     pub fn from_json<'j>(schema: &Schema, json: impl Json<'j>) -> Result<Mark<'static>> {
