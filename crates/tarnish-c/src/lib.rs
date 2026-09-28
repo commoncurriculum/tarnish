@@ -34,9 +34,17 @@ fn parse(json: Option<char_p::Ref<'_>>) -> Result<Value> {
     tarnish::json::from_str(text).map_err(|_| Error::Syntax("Invalid JSON".into()))
 }
 
-/// The text as a C string. JSON never holds a raw NUL, but an error's message may.
+/// The text as a C string. JSON never holds a raw NUL, but an error's message or a document's
+/// text may.
 fn string(text: String) -> char_p::Box {
     char_p::Box::try_from(text.replace('\0', "\\u0000")).expect("text without NUL")
+}
+
+/// A string that may be NULL, which must be UTF-8.
+fn text<'a>(text: Option<char_p::Ref<'a>>, what: &str) -> Result<Option<&'a str>> {
+    let utf8 = |text: char_p::Ref<'a>| std::str::from_utf8(text.to_bytes());
+    let invalid = |_| Error::Other(format!("The {what} wasn't UTF-8"));
+    text.map(|text| utf8(text).map_err(invalid)).transpose()
 }
 
 fn given<'a, T>(pointer: Option<&'a T>, what: &str) -> Result<&'a T> {
@@ -157,6 +165,60 @@ fn tarnish_map_position(
         Ok(())
     })
     .is_some()
+}
+
+/// Makes changes on the server: applies the ops, a JSON array, in order to one `Transform` of
+/// the document, and gives the changed document. Free it with `tarnish_node_free`. An op is an
+/// object naming a `Transform` method in "op", with the method's arguments by the names
+/// ProseMirror gives them, as the README describes. When `steps_json` isn't NULL, a call that
+/// succeeds sets it to the JSON array of the steps the transform made, for editors to apply;
+/// free it with `tarnish_free`.
+#[ffi_export]
+fn tarnish_transform(
+    node: Option<&TarnishNode>,
+    ops_json: Option<char_p::Ref<'_>>,
+    steps_json: Option<Out<'_, Option<char_p::Box>>>,
+    error: ErrorOut<'_>,
+) -> Option<repr_c::Box<TarnishNode>> {
+    run(error, || {
+        let (doc, steps) = api::transform(&given(node, "node")?.0, &parse(ops_json)?)?;
+        if let Some(steps_json) = steps_json {
+            steps_json.write(Some(string(stringify(&steps))));
+        }
+        Ok(Box::new(TarnishNode(doc)).into())
+    })
+}
+
+/// The text between `from` and `to`, as `textBetween` gives it: `block_separator` goes between
+/// blocks, and `leaf_text` stands for each leaf node that isn't text; either may be NULL. A lone
+/// surrogate, where a position splits a pair, is U+FFFD, and a NUL is written `\u0000`. Free it
+/// with `tarnish_free`.
+#[ffi_export]
+fn tarnish_text_between(
+    node: Option<&TarnishNode>,
+    from: usize,
+    to: usize,
+    block_separator: Option<char_p::Ref<'_>>,
+    leaf_text: Option<char_p::Ref<'_>>,
+    error: ErrorOut<'_>,
+) -> Option<char_p::Box> {
+    run(error, || {
+        let node = &given(node, "node")?.0;
+        let block_separator = text(block_separator, "block separator")?;
+        let leaf_text = text(leaf_text, "leaf text")?;
+        let between = api::text_between(node, from, to, block_separator, leaf_text)?;
+        Ok(string(between.to_string_lossy().into_owned()))
+    })
+}
+
+/// All the text in the node, as `textContent` gives it, with a lone surrogate as U+FFFD and a
+/// NUL written `\u0000`. Free it with `tarnish_free`.
+#[ffi_export]
+fn tarnish_text_content(node: Option<&TarnishNode>, error: ErrorOut<'_>) -> Option<char_p::Box> {
+    run(error, || {
+        let content = api::text_content(&given(node, "node")?.0)?;
+        Ok(string(content.to_string_lossy().into_owned()))
+    })
 }
 
 /// Frees a string the library returned.
