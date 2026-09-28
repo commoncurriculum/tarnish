@@ -6,6 +6,7 @@ use crate::tree::{Element, Space};
 pub(crate) fn interface(element: &Element) -> &'static str {
     match element.space() {
         Space::Html => html(&element.name.local),
+        // Browsers give `<svg>` SVGSVGElement, `<title>` SVGTitleElement and so on.
         Space::Svg => "SVGElement",
         Space::MathMl => "MathMLElement",
         Space::Other => "Element",
@@ -14,8 +15,6 @@ pub(crate) fn interface(element: &Element) -> &'static str {
 
 fn html(local: &str) -> &'static str {
     match local {
-        "applet" | "bgsound" | "blink" | "isindex" | "keygen" | "multicol" | "nextid"
-        | "spacer" => "HTMLUnknownElement",
         "abbr" | "address" | "article" | "aside" | "b" | "bdi" | "bdo" | "cite" | "code" | "dd"
         | "dfn" | "dt" | "em" | "figcaption" | "figure" | "footer" | "header" | "hgroup" | "i"
         | "kbd" | "main" | "mark" | "nav" | "noscript" | "rp" | "rt" | "ruby" | "s" | "samp"
@@ -95,8 +94,7 @@ fn html(local: &str) -> &'static str {
     }
 }
 
-/// HTML's valid custom element name: a lower-case ASCII letter, a hyphen among its characters,
-/// no upper-case ASCII letter, and not one of the names SVG and MathML already use.
+/// <https://html.spec.whatwg.org/#valid-custom-element-name>
 fn is_custom_element_name(name: &str) -> bool {
     const RESERVED: [&str; 8] = [
         "annotation-xml",

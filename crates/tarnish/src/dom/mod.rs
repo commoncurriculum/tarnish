@@ -72,6 +72,7 @@ pub trait Dom {
     /// Set the element's inline style from CSS text. `false` when the element has no style to
     /// set, for the attribute to be set instead.
     fn set_style(&self, element: &Self::Node, css: &Value) -> Result<bool>;
-    /// `String(node)`: what an attribute set to the node holds.
-    fn stringify(&self, node: &Self::Node) -> Result<String>;
+    /// The string an attribute set to the node stores, as WebIDL converts the node to a
+    /// DOMString: `[object HTMLSpanElement]` for a `<span>`, a link's `href` for an `<a>`.
+    fn attribute_value(&self, node: &Self::Node) -> Result<String>;
 }

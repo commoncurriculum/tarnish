@@ -28,7 +28,6 @@ pub(crate) enum Data {
     Doctype { name: String },
     Text(String),
     Comment(String),
-    ProcessingInstruction { target: String, data: String },
     Element(Box<Element>),
 }
 

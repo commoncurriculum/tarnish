@@ -188,7 +188,7 @@ fn write(tree: &Tree, node: NodeId, out: &mut String) {
                 out.push_str(name);
                 out.push('>');
             }
-            Data::Document | Data::Fragment | Data::ProcessingInstruction { .. } => {}
+            Data::Document | Data::Fragment => {}
         }
     }
 }

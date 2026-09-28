@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use html5ever::{LocalName, Namespace, Prefix, QualName, local_name, ns};
 use tarnish::dom::{Dom, NodeKind};
 use tarnish::{Error, Result, Text, Value, js};
+use url::Url;
 
 use crate::interface::interface;
 use crate::names::{self, NameKind};
@@ -162,6 +163,19 @@ impl HtmlDom {
         }
     }
 
+    /// <https://html.spec.whatwg.org/#dom-hyperlink-href>: a link's URL resolved against the
+    /// document's base URL, or as written when it doesn't resolve. The document's own URL is
+    /// `about:blank`.
+    fn hyperlink_href(&self, tree: &Tree, href: &str) -> String {
+        let blank = Url::parse("about:blank").expect("a URL");
+        let selectors = self.selectors("base[href]").expect("a selector");
+        let base = select::query(tree, DOCUMENT, &selectors)
+            .and_then(|base| blank.join(tree.element(base)?.attribute("href")?).ok())
+            .unwrap_or(blank);
+        base.join(href)
+            .map_or_else(|_| href.to_owned(), String::from)
+    }
+
     /// Run `read` on the element's inline style, when it can have one.
     fn with_style<T>(node: &HtmlNode, read: impl FnOnce(&Declarations) -> T, none: T) -> T {
         let mut tree = node.dom.tree();
@@ -248,7 +262,6 @@ fn node_name(tree: &Tree, id: NodeId) -> String {
         Data::Document => "#document".into(),
         Data::Fragment => "#document-fragment".into(),
         Data::Doctype { name } => name.clone(),
-        Data::ProcessingInstruction { target, .. } => target.clone(),
     }
 }
 
@@ -282,7 +295,6 @@ impl Dom for HtmlDom {
     fn text(&self, node: &HtmlNode) -> Result<Text> {
         Ok(match &node.dom.tree().node(node.id).data {
             Data::Text(text) | Data::Comment(text) => Text::from(text.as_str()),
-            Data::ProcessingInstruction { data, .. } => Text::from(data.as_str()),
             _ => Text::default(),
         })
     }
@@ -492,24 +504,24 @@ impl Dom for HtmlDom {
         Ok(true)
     }
 
-    fn stringify(&self, node: &HtmlNode) -> Result<String> {
+    fn attribute_value(&self, node: &HtmlNode) -> Result<String> {
         let tree = node.dom.tree();
         Ok(match &tree.node(node.id).data {
-            // A link stringifies to its `href`, which jsdom resolves against the document's URL
-            // and this keeps as written.
             Data::Element(element)
                 if element.is_html()
                     && matches!(element.name.local, local_name!("a") | local_name!("area")) =>
             {
-                element.attribute("href").unwrap_or_default().to_owned()
+                match element.attribute("href") {
+                    Some(href) => node.dom.hyperlink_href(&tree, href),
+                    None => String::new(),
+                }
             }
             Data::Element(element) => format!("[object {}]", interface(element)),
             Data::Text(_) => "[object Text]".into(),
             Data::Comment(_) => "[object Comment]".into(),
-            Data::Document => "[object Document]".into(),
+            Data::Document => "[object HTMLDocument]".into(),
             Data::Fragment => "[object DocumentFragment]".into(),
             Data::Doctype { .. } => "[object DocumentType]".into(),
-            Data::ProcessingInstruction { .. } => "[object ProcessingInstruction]".into(),
         })
     }
 }

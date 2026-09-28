@@ -589,10 +589,90 @@ const renders = specs.map(spec => ({
   }),
 }))
 
+// What an attribute set to a node holds, as renderSpec sets one to a {dom, contentDOM}: the name of
+// the node's interface, or a link's href, resolved against the document's base URL. An element is
+// named as a DOM spec names it; a document, if given, is parsed to make the node in.
+const tags = [
+  ...["a", "abbr", "acronym", "address", "applet", "area", "article", "aside", "audio", "b", "base", "basefont"],
+  ...["bdi", "bdo", "bgsound", "big", "blink", "blockquote", "body", "br", "button", "canvas", "caption"],
+  ...["center", "cite", "code", "col", "colgroup", "data", "datalist", "dd", "del", "details", "dfn", "dialog"],
+  ...["dir", "div", "dl", "dt", "em", "embed", "fieldset", "figcaption", "figure", "font", "footer", "form"],
+  ...["frame", "frameset", "h1", "h2", "h3", "h4", "h5", "h6", "head", "header", "hgroup", "hr", "html", "i"],
+  ...["iframe", "image", "img", "input", "ins", "isindex", "kbd", "keygen", "label", "legend", "li", "link"],
+  ...["listing", "main", "map", "mark", "marquee", "menu", "meta", "meter", "multicol", "nav", "nextid", "nobr"],
+  ...["noembed", "noframes", "noscript", "object", "ol", "optgroup", "option", "output", "p", "param", "picture"],
+  ...["plaintext", "pre", "progress", "q", "rb", "rp", "rt", "rtc", "ruby", "s", "samp", "script", "search"],
+  ...["section", "select", "slot", "small", "source", "spacer", "span", "strike", "strong", "style", "sub"],
+  ...["summary", "sup", "table", "tbody", "td", "template", "textarea", "tfoot", "th", "thead", "time", "title"],
+  ...["tr", "track", "tt", "u", "ul", "var", "video", "wbr", "xmp", "h7", "foo", "custom-el", "x-1", "a-b.c"],
+  ...["annotation-xml", "color-profile", "font-face", "font-face-src", "font-face-uri", "font-face-format"],
+  ...["font-face-name", "missing-glyph"],
+  ...["http://www.w3.org/1999/xhtml x-Y", "http://www.w3.org/1999/xhtml A", "http://www.w3.org/1999/xhtml x:p"],
+  ...["http://www.w3.org/2000/svg svg", "http://www.w3.org/2000/svg title", "http://www.w3.org/2000/svg a"],
+  ...["http://www.w3.org/1998/Math/MathML math", "http://www.w3.org/1998/Math/MathML mi", "urn:x p", "urn:x a"],
+]
+const hrefs = [
+  "HTTP://Example.COM",
+  "https://example.com/a b?c=d#e",
+  "/docs",
+  "docs",
+  "//example.com/x",
+  "#x",
+  "?q",
+  "",
+  "  https://a.b/c\td\n  ",
+  "https://ex ample.com",
+  "javascript:alert(1)",
+  "mailto:A@B.com",
+  "data:text/plain,x y",
+  "http://[::1",
+  "https://user:pass@EXAMPLE.com:443/a/../b/./c",
+  "https://例え.jp/パス?キー=値",
+  "file:///C:/x",
+]
+const bases = [
+  "<base href='https://example.com/a/b?c'>",
+  "<base href='relative/'>",
+  "<base href='https://ex ample.com/'>",
+  "<base><base href='https://one.example/x/'><base href='https://two.example/'>",
+  "<body><base href='https://body.example/'>",
+]
+const strings = [
+  ...tags.map(element => ({ element })),
+  ...hrefs.flatMap(href => ["a", "area", "http://www.w3.org/1999/xhtml x:a"].map(element => ({ element, href }))),
+  ...bases.flatMap(html => ["c?d", "/docs", "#x", "//other.example/"].map(href => ({ document: html, element: "a", href }))),
+  ...["text", "comment", "fragment", "document", "doctype"].map(node => ({ node })),
+].map(record => {
+  const owner = record.document === undefined ? document : new window.DOMParser().parseFromString(record.document, "text/html")
+  const attribute = owner.createAttribute("x")
+  attribute.value = nodeOf(owner, record)
+  return { ...record, string: attribute.value }
+})
+
+function nodeOf(owner, { element, href, node }) {
+  switch (node) {
+    case "text":
+      return owner.createTextNode("x")
+    case "comment":
+      return owner.createComment("x")
+    case "fragment":
+      return owner.createDocumentFragment()
+    case "document":
+      return owner
+    case "doctype":
+      return new window.DOMParser().parseFromString("<!DOCTYPE html>", "text/html").doctype
+  }
+  const space = element.indexOf(" ")
+  const made = space > 0 ? owner.createElementNS(element.slice(0, space), element.slice(space + 1)) : owner.createElement(element)
+  if (href !== undefined) made.setAttribute("href", href)
+  return made
+}
+
 const spec = { topNode: schema.topNodeType.name, nodes: schema.spec.nodes.toObject(), marks: schema.spec.marks.toObject() }
 const oneEach = records => `[\n${records.map(record => `    ${JSON.stringify(record)}`).join(",\n")}\n  ]`
 writeFileSync(
   new URL("../fixtures/dom.json", import.meta.url),
   `{\n  "schema": ${JSON.stringify(spec)},\n  "parses": ${oneEach(parses)},\n  "serializes": ${oneEach(serializes)},\n` +
-    `  "styleProperties": ${JSON.stringify(properties)},\n  "styles": ${oneEach(styles)},\n  "renders": ${oneEach(renders)}\n}\n`,
+    `  "styleProperties": ${JSON.stringify(properties)},\n  "styles": ${oneEach(styles)},\n  "renders": ${oneEach(renders)},\n` +
+    `  "strings": ${oneEach(strings)}\n}\n`,
 )

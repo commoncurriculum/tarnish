@@ -58,11 +58,14 @@ fn node_or_none(value: Unknown) -> Result<Option<JsNode>> {
     }
 }
 
-/// A value that may be a DOM node, as one, when it is an object with a `nodeType`.
+/// Whether the object is a DOM node: whether it has a `nodeType`.
+fn is_node(object: &Object) -> Result<bool> {
+    Ok(!js::is_nullish(&js::get(object, "nodeType")?)?)
+}
+
+/// A value that may be a DOM node, as one, when it is.
 fn dom_node(value: Unknown) -> Result<Option<JsNode>> {
-    if value.get_type()? != ValueType::Object
-        || js::is_nullish(&js::get(&Object::from_unknown(value)?, "nodeType")?)?
-    {
+    if value.get_type()? != ValueType::Object || !is_node(&Object::from_unknown(value)?)? {
         return Ok(None);
     }
     JsNode::new(value).map(Some)
@@ -71,15 +74,14 @@ fn dom_node(value: Unknown) -> Result<Option<JsNode>> {
 /// What an attribute set to the value holds. The DOM converts a node, as `String(node)` may
 /// give its HTML where WebIDL gives `[object HTMLSpanElement]`.
 fn attribute_value(value: Unknown) -> Result<String> {
-    if value.get_type()? != ValueType::Object {
+    if value.get_type()? != ValueType::Object || !is_node(&Object::from_unknown(value)?)? {
         return js::coerce_to_string(&value);
     }
-    let object = Object::from_unknown(value)?;
-    let owner = js::get(&object, "ownerDocument")?;
-    let document = match owner.get_type()? {
-        ValueType::Object => Object::from_unknown(owner)?,
-        _ if !js::is_nullish(&js::get(&object, "nodeType")?)? => object,
-        _ => return js::coerce_to_string(&value),
+    let node = Object::from_unknown(value)?;
+    let owner = js::get(&node, "ownerDocument")?;
+    let document = match js::is_nullish(&owner)? {
+        true => node,
+        false => Object::from_unknown(owner)?,
     };
     let attribute = js::call_method(&document, "createAttribute", "value")?;
     let mut attribute = Object::from_unknown(attribute)?;
@@ -277,7 +279,7 @@ impl Dom for JsDom<'_> {
         })
     }
 
-    fn stringify(&self, node: &JsNode) -> tarnish::Result<String> {
+    fn attribute_value(&self, node: &JsNode) -> tarnish::Result<String> {
         js::host(|env| attribute_value(node.value(env)?))
     }
 }

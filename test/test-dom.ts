@@ -43,6 +43,17 @@ describe("DOMSerializer.renderSpec", () => {
         '<div dom="[object HTMLSpanElement]" contentdom="[object HTMLElement]">text</div>')
   })
 
+  it("takes a rendered link's href, resolved, for an attribute", () => {
+    let a = document.createElement("a")
+    a.setAttribute("href", "HTTP://Example.COM")
+    ist(html(["div", {dom: a}] as any), '<div dom="http://example.com/"></div>')
+  })
+
+  it("takes an object that isn't a node as String does, whatever its ownerDocument", () => {
+    let title = {ownerDocument: {}, toString: () => "t"}
+    ist(html(["p", {title}] as any), '<p title="t"></p>')
+  })
+
   it("takes a rendered object after a child as a child", () => {
     let span = document.createElement("span")
     ist(html(["div", ["p", {class: "a"}], {dom: span}] as any), '<div><p class="a"></p><span></span></div>')

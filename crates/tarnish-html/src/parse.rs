@@ -127,11 +127,8 @@ impl TreeSink for Sink<'_> {
         self.tree.borrow_mut().push(Data::Comment(text.to_string()))
     }
 
-    fn create_pi(&self, target: StrTendril, data: StrTendril) -> NodeId {
-        self.tree.borrow_mut().push(Data::ProcessingInstruction {
-            target: target.to_string(),
-            data: data.to_string(),
-        })
+    fn create_pi(&self, _: StrTendril, _: StrTendril) -> NodeId {
+        unreachable!("HTML parses a processing instruction as a comment")
     }
 
     fn append(&self, parent: &NodeId, child: NodeOrText<NodeId>) {

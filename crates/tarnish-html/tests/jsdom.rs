@@ -244,3 +244,66 @@ fn rendered_specs_are_jsdoms() {
     }
     report(failures);
 }
+
+/// The node a `strings` record names, made in `dom` as the recorder made it.
+fn node_of(dom: &HtmlDom, record: &Value) -> Result<HtmlNode> {
+    let first_child =
+        |dom: &HtmlDom, node| dom.first_child(&node).map(|child| child.expect("a child"));
+    match record.get("node").and_then(Value::as_str) {
+        Some("text") => dom.create_text(&"x".into()),
+        Some("comment") => first_child(dom, dom.parse_fragment("<!--x-->")),
+        Some("fragment") => dom.create_fragment(),
+        Some("document") => Ok(dom.document()),
+        Some("doctype") => {
+            let doctype = HtmlDom::parse_document("<!DOCTYPE html>");
+            first_child(&doctype, doctype.document())
+        }
+        _ => {
+            let element = record["element"].as_str().expect("an element");
+            let element = match element.find(' ') {
+                Some(space) => dom.create_element(Some(&element[..space]), &element[space + 1..]),
+                None => dom.create_element(None, element),
+            }?;
+            if let Some(href) = record.get("href") {
+                dom.set_attribute(&element, None, "href", href)?;
+            }
+            Ok(element)
+        }
+    }
+}
+
+/// Elements the fork gives another interface than the standard does, which tarnish-html
+/// follows, and why. The test prints both strings, and fails when they come to match.
+const DIFFERENT_STRINGS: &[(&str, &str)] = &[(
+    "http://www.w3.org/1999/xhtml A",
+    "The fork registers each HTML element class under its upper-case name too, for its parser, \
+     so createElementNS gives an upper-case local name the lower-case name's class. The standard \
+     gives HTMLUnknownElement.",
+)];
+
+#[test]
+fn attribute_values_of_nodes_match_the_fork() -> Result<()> {
+    let (_, fixtures) = fixtures();
+    let mut failures = Vec::new();
+    for record in fixtures["strings"].as_array().expect("strings") {
+        let dom = match record.get("document").and_then(Value::as_str) {
+            Some(html) => HtmlDom::parse_document(html),
+            None => HtmlDom::new(),
+        };
+        let string = dom.attribute_value(&node_of(&dom, record)?)?;
+        let element = record.get("element").and_then(Value::as_str);
+        let known = DIFFERENT_STRINGS
+            .iter()
+            .any(|(name, _)| Some(*name) == element);
+        match (known, record["string"].as_str() == Some(&string)) {
+            (false, true) => {}
+            (true, false) => println!("  recorded: {record}\n  tarnish-html: {string:?}"),
+            (false, false) => {
+                failures.push(format!("  recorded: {record}\n  tarnish-html: {string:?}"))
+            }
+            (true, true) => failures.push(format!("{record} is no longer different")),
+        }
+    }
+    report(failures);
+    Ok(())
+}
