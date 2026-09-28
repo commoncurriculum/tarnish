@@ -293,7 +293,7 @@ The proof doesn't depend on anyone reading the Rust. CI checks it:
 | --- | --- |
 | prosemirror-model's suite, against tarnish | 309 passing |
 | prosemirror-transform's suite, against tarnish | 238 passing |
-| tarnish's own suite, against JavaScript and tarnish | 36 passing |
+| tarnish's own suite, against JavaScript and tarnish | 38 passing |
 | Elixir (`mix test`) | 516 tests |
 | C (`npm run test:c`) | 148 recorded transforms, 308 op lists and texts, the error cases and a 200,000-deep attribute |
 | Rust (`cargo test`) | the recorded cases, and a 20,000-deep document through every operation on a 256 KB stack |
