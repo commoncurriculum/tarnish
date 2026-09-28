@@ -160,6 +160,8 @@ const html = [
   '<ol start="0x10"><li>hex</li></ol>',
   '<ol start="2.5"><li>fraction</li></ol>',
   '<ol start="1"><li>one</li></ol>',
+  '<ol start="abc"><li>not a number</li></ol>',
+  '<ol start="Infinity"><li>infinite</li></ol>',
   "<ul><li>a</li><ul><li>nested directly</li></ul><li>b</li></ul>",
   "<ol><li>a</li><ol><li>b</li><ul><li>c</li></ul></ol></ol>",
   "<ul><ul><li>first is a list</li></ul></ul>",
@@ -413,7 +415,9 @@ const recorded = transforms.tests
   .filter(test => test.schema === 0 || test.schema === 2)
   .flatMap(test => [test.start, test.result])
 const parsed = parses.flatMap(parse => [parse.template.doc, parse.document.doc]).filter(doc => !doc.error)
-const docs = [...new Map([...own, ...recorded, ...parsed].map(doc => [JSON.stringify(doc), doc])).values()]
+// Each document is read from its JSON text, as the tests read it: a NaN attribute is null there.
+const texts = new Set([...own, ...recorded, ...parsed].map(doc => JSON.stringify(doc)))
+const docs = [...texts].map(text => JSON.parse(text))
 
 const serializes = docs.map(doc => ({
   doc,

@@ -179,8 +179,9 @@ fn serializations_are_jsdoms() {
     let serializer = basic::serializer();
     let mut failures = Vec::new();
     for record in fixtures["serializes"].as_array().expect("serializations") {
-        let doc = Node::from_json(&schema, &record["doc"]).expect("a document");
-        let html = outcome(to_html(&serializer, doc.content()).map(Value::String));
+        let doc = Node::from_json(&schema, &record["doc"]);
+        let html = doc.and_then(|doc| to_html(&serializer, doc.content()));
+        let html = outcome(html.map(Value::String));
         let recorded = match record.get("html") {
             Some(html) => html.clone(),
             None => json::json!({"error": record["error"].clone()}),
