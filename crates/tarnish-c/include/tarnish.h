@@ -125,6 +125,45 @@ tarnish_schema_new (
     char const * spec_json,
     char * * error);
 
+/** \brief
+ *  The text between `from` and `to`, as `textBetween` gives it: `block_separator` goes between
+ *  blocks, and `leaf_text` stands for each leaf node that isn't text; either may be NULL. A lone
+ *  surrogate, where a position splits a pair, is U+FFFD, and a NUL is written `\u0000`. Free it
+ *  with `tarnish_free`.
+ */
+char *
+tarnish_text_between (
+    TarnishNode_t const * node,
+    size_t from,
+    size_t to,
+    char const * block_separator,
+    char const * leaf_text,
+    char * * error);
+
+/** \brief
+ *  All the text in the node, as `textContent` gives it, with a lone surrogate as U+FFFD and a
+ *  NUL written `\u0000`. Free it with `tarnish_free`.
+ */
+char *
+tarnish_text_content (
+    TarnishNode_t const * node,
+    char * * error);
+
+/** \brief
+ *  Makes changes on the server: applies the ops, a JSON array, in order to one `Transform` of
+ *  the document, and gives the changed document. Free it with `tarnish_node_free`. An op is an
+ *  object naming a `Transform` method in "op", with the method's arguments by the names
+ *  ProseMirror gives them, as the README describes. When `steps_json` isn't NULL, a call that
+ *  succeeds sets it to the JSON array of the steps the transform made, for editors to apply;
+ *  free it with `tarnish_free`.
+ */
+TarnishNode_t *
+tarnish_transform (
+    TarnishNode_t const * node,
+    char const * ops_json,
+    char * * steps_json,
+    char * * error);
+
 
 #ifdef __cplusplus
 } /* extern \"C\" */

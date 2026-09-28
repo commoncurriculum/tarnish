@@ -16,7 +16,7 @@ mod term;
 
 use doc::Doc;
 use rustler::{Encoder, Env, NifResult, Resource, ResourceArc, Term};
-use tarnish::{Error, Node, Schema, Value, api};
+use tarnish::{Error, Node, Schema, Text, Value, api};
 use term::Unread;
 
 rustler::atoms! {
@@ -45,9 +45,10 @@ struct Limits {
     read: usize,
     /// Bytes of a term written, which the VM then makes the term from.
     write: usize,
-    /// The positions of a document checked.
+    /// The positions of a document checked, or read for its text.
     check: usize,
-    /// Steps applied, times the top-level nodes of the document, which a step copies.
+    /// Steps applied, or positions ops span, times the top-level nodes of the document, which a
+    /// step copies.
     apply: usize,
 }
 
@@ -137,6 +138,20 @@ fn steps(limits: &Limits, doc: &Node, steps: Term) -> Result<Value, Unanswered> 
     Ok(steps)
 }
 
+/// The ops, when the positions they span are few enough for the limits to apply to `doc`: an
+/// op over a range may make a step for each node in it.
+fn ops(limits: &Limits, doc: &Node, ops: Term) -> Result<Value, Unanswered> {
+    let ops = term::read(ops, limits.read)?;
+    let span = |op: &Value| {
+        let at = |key: &str| op.get(key).and_then(Value::as_f64).unwrap_or(0.0);
+        ((at("to") - at("from")).max(0.0) as usize).saturating_add(1)
+    };
+    let spans = ops.as_array().into_iter().flatten().map(span);
+    let work = spans.fold(0, usize::saturating_add);
+    within(work.saturating_mul(doc.child_count() + 1), limits.apply)?;
+    Ok(ops)
+}
+
 /// The term of the bytes [`etf`] wrote, when they're few enough.
 fn make<'a>(env: Env<'a>, bytes: Option<Vec<u8>>) -> Answer<'a> {
     let bytes = bytes.ok_or(Unanswered::Dirty)?;
@@ -180,6 +195,46 @@ fn invert<'a>(env: Env<'a>, limits: &Limits, doc: Term<'a>, json: Term<'a>) -> A
         }
         Err(failed) => Ok(failure(env, failed)),
     }
+}
+
+fn transformed<'a>(env: Env<'a>, limits: &Limits, doc: Term<'a>, json: Term<'a>) -> Answer<'a> {
+    let doc = load(doc)?;
+    let root = doc.root();
+    match api::transform(&root, &ops(limits, &root, json)?) {
+        Ok((node, steps)) => {
+            let steps = make(env, etf::write(&steps, limits.write))?;
+            Ok((ok(), doc.changed(env, &node), steps).encode(env))
+        }
+        Err(failed) => Ok(failure(env, failed)),
+    }
+}
+
+/// `{:ok, text}`, a lone surrogate in it being U+FFFD, or the failure.
+fn text_term<'a>(env: Env<'a>, text: tarnish::Result<Text>) -> Term<'a> {
+    respond(env, text, |text| {
+        text.to_string_lossy().as_ref().encode(env)
+    })
+}
+
+fn between<'a>(
+    env: Env<'a>,
+    limits: &Limits,
+    doc: Term<'a>,
+    from: usize,
+    to: usize,
+    block_separator: Option<&str>,
+    leaf_text: Option<&str>,
+) -> Answer<'a> {
+    let doc = load(doc)?.root();
+    within(to.min(doc.node_size()), limits.check)?;
+    let text = api::text_between(&doc, from, to, block_separator, leaf_text);
+    Ok(text_term(env, text))
+}
+
+fn content<'a>(env: Env<'a>, limits: &Limits, doc: Term<'a>) -> Answer<'a> {
+    let doc = load(doc)?.root();
+    within(doc.node_size(), limits.check)?;
+    Ok(text_term(env, api::text_content(&doc)))
 }
 
 fn map<'a>(
@@ -251,6 +306,52 @@ fn invert_steps<'a>(env: Env<'a>, doc: Term<'a>, steps: Term<'a>) -> NifResult<T
 #[rustler::nif(schedule = "DirtyCpu")]
 fn invert_steps_dirty<'a>(env: Env<'a>, doc: Term<'a>, steps: Term<'a>) -> NifResult<Term<'a>> {
     answer(env, invert(env, &DIRTY, doc, steps))
+}
+
+#[rustler::nif]
+fn transform<'a>(env: Env<'a>, doc: Term<'a>, ops: Term<'a>) -> NifResult<Term<'a>> {
+    answer(env, transformed(env, &NORMAL, doc, ops))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn transform_dirty<'a>(env: Env<'a>, doc: Term<'a>, ops: Term<'a>) -> NifResult<Term<'a>> {
+    answer(env, transformed(env, &DIRTY, doc, ops))
+}
+
+#[rustler::nif]
+fn text_between<'a>(
+    env: Env<'a>,
+    doc: Term<'a>,
+    from: usize,
+    to: usize,
+    block_separator: Option<&'a str>,
+    leaf_text: Option<&'a str>,
+) -> NifResult<Term<'a>> {
+    let text = between(env, &NORMAL, doc, from, to, block_separator, leaf_text);
+    answer(env, text)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn text_between_dirty<'a>(
+    env: Env<'a>,
+    doc: Term<'a>,
+    from: usize,
+    to: usize,
+    block_separator: Option<&'a str>,
+    leaf_text: Option<&'a str>,
+) -> NifResult<Term<'a>> {
+    let text = between(env, &DIRTY, doc, from, to, block_separator, leaf_text);
+    answer(env, text)
+}
+
+#[rustler::nif]
+fn text_content<'a>(env: Env<'a>, doc: Term<'a>) -> NifResult<Term<'a>> {
+    answer(env, content(env, &NORMAL, doc))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn text_content_dirty<'a>(env: Env<'a>, doc: Term<'a>) -> NifResult<Term<'a>> {
+    answer(env, content(env, &DIRTY, doc))
 }
 
 #[rustler::nif]

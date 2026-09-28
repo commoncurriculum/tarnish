@@ -63,17 +63,25 @@ This example is the crate's doctest, so it compiles and runs in CI.
 {:ok, inverted} = Tarnish.invert_steps(doc, steps)
 json = Tarnish.to_json(doc)
 {:ok, pos} = Tarnish.map_position(schema, steps, 5)
+
+# Change the document on the server, and send editors the steps.
+ops = [%{"op" => "addMark", "from" => 1, "to" => 6, "mark" => %{"type" => "em"}}]
+{:ok, doc, steps} = Tarnish.transform(doc, ops)
+
+# Its text, to index for search.
+{:ok, text} = Tarnish.text_between(doc, 0, 12, "\n")
+text = Tarnish.text_content(doc)
 ```
 
-- **Input.** Specs, documents and steps are ProseMirror's JSON as Jason decodes it. Give a
+- **Input.** Specs, documents, steps and ops are ProseMirror's JSON as Jason decodes it. Give a
   schema's `"nodes"` and `"marks"` as lists of `{name, spec}` pairs, or as
   `Jason.OrderedObject`s, since their order matters and a map doesn't keep it.
 - **Errors.** Errors are `{:error, {kind, message}}`, where the kind names the class ProseMirror
   throws (`:range_error`, `:replace_error`, …). A term ProseMirror would read but Jason couldn't
   encode, such as a tuple, raises `ArgumentError`.
 - **Output.** A document keeps the map it was read from, and `to_json` shares every part of that
-  map that is still what ProseMirror writes. After steps, only the nodes they changed are new
-  maps.
+  map that is still what ProseMirror writes. After steps or ops, only the nodes they changed are
+  new maps. In text, a lone surrogate, where a position splits a pair, is U+FFFD.
 
 ### C, and other languages through it
 
@@ -84,10 +92,47 @@ Elixir package:
 - schemas and nodes are handles;
 - JSON goes in and out as strings;
 - errors are `"Class: message"`;
-- a document's JSON is exactly the text `JSON.stringify` writes.
+- a document's JSON is exactly the text `JSON.stringify` writes;
+- `tarnish_transform` gives the changed document, and the steps' JSON through `steps_json`;
+- `tarnish_text_between` and `tarnish_text_content` give text as UTF-8, with U+FFFD for a lone
+  surrogate.
 
 Everything behind the header is Rust; C is only the calling convention, which PHP, Python, Ruby,
 Go and Node can all load.
+
+### Changing documents from Elixir and C
+
+`Tarnish.transform` and `tarnish_transform` take a list of ops and apply them in order to one
+`Transform`. An op names a `Transform` method in `"op"` and gives its arguments by the names
+ProseMirror gives them:
+
+```json
+[{"op": "insert", "pos": 1, "content": {"type": "text", "text": "Hello "}},
+ {"op": "addMark", "from": 1, "to": 6, "mark": {"type": "strong"}},
+ {"op": "setBlockType", "from": 1, "type": "heading", "attrs": {"level": 2}},
+ {"op": "wrap", "from": 1, "to": 1, "nodeType": "blockquote"}]
+```
+
+- **Methods.** `replace`, `replaceWith`, `delete`, `insert`, `replaceRange`,
+  `replaceRangeWith`, `deleteRange`, `addMark`, `removeMark`, `addNodeMark`, `removeNodeMark`,
+  `setNodeMarkup`, `setNodeAttribute`, `setDocAttribute`, `setBlockType`, `lift`, `wrap`,
+  `join`, `split`, `clearIncompatible`, and `step` and `maybeStep`, which take a step's JSON.
+- **Arguments.** Nodes, slices and marks are their JSON, and a fragment is an array of nodes
+  or one node. Node and mark types are names. `removeMark` and `removeNodeMark` take a mark or
+  a mark type's name, and `removeMark` with neither removes every mark. What JSON can't hold,
+  `setBlockType`'s function for `attrs` and `clearIncompatible`'s `match`, isn't taken.
+- **Ranges.** For the `NodeRange` that `lift` and `wrap` take, an op gives `from`, `to` and an
+  optional `depth`; without a depth the range is `$from.blockRange($to)`. Without a `target`,
+  `lift` lifts to `liftTarget`'s. Without `wrappers`, `wrap` wraps in `nodeType`, with `attrs`,
+  as `findWrapping` finds. When there's no range, target or wrapping, the op fails with a
+  `RangeError` saying so.
+- **Positions.** Positions and depths are whole numbers, and a range's `to` can't come before its
+  `from`. An argument that is missing or of the wrong kind is a `RangeError` naming it.
+- **Errors.** An op that fails fails the call with the error ProseMirror throws.
+
+[`harness/record-ops.mjs`](harness/record-ops.mjs) reads ops the same way against the real
+`Transform`, and records what a few hundred op lists give, every method among them, for the
+Rust, Elixir and C tests to reproduce.
 
 ## What maps to what
 
@@ -98,7 +143,8 @@ Names are Rust's: `nodeSize` is `node_size`, `Transform.addMark` is `Transform::
 | `Schema`, `NodeType`, `MarkType`, `NodeSpec`, `MarkSpec`, `AttributeSpec` | `Schema`, `NodeType`, `MarkType`, `SchemaSpec`, `NodeSpec`, `MarkSpec`, `AttributeSpec`; `SchemaSpec::from_json` reads a spec from JSON |
 | `Node`, `Fragment`, `Mark`, `Slice`, `ResolvedPos`, `NodeRange`, `ContentMatch` | The same names, in `tarnish` |
 | `Node.fromJSON`, `node.toJSON()` | `Node::from_json`, `Node::to_json`, `Node::to_json_string` |
-| `Transform` and every operation on it | `transform::Transform` |
+| `node.textBetween`, `node.textContent` | `Node::text_between`, `Node::text_content`; `api::text_between`, `api::text_content` for the bindings |
+| `Transform` and every operation on it | `transform::Transform`; `api::transform` applies ops, from JSON, for the bindings |
 | `ReplaceStep`, `ReplaceAroundStep`, `AddMarkStep`, `RemoveMarkStep`, `AddNodeMarkStep`, `RemoveNodeMarkStep`, `AttrStep`, `DocAttrStep` | `transform::Step`, one variant each |
 | A `Step` subclass, `Step.jsonID`, `step instanceof MyStep` | A `transform::CustomStep`, `transform::register_step`, `Step::custom::<MyStep>()` |
 | `StepMap`, `Mapping`, `MapResult` | `transform::StepMap`, `Mapping`, `MapResult` |
@@ -113,11 +159,12 @@ one that splits a surrogate pair.
 tarnish is ProseMirror's model and transform layer: what a server needs to hold documents and
 change them.
 
-- Read, check, compare and write documents in ProseMirror's JSON.
+- Read, check, compare and write documents in ProseMirror's JSON, and read their text.
 - Apply the steps editors send, of ProseMirror's types and of an application's own.
 - Invert, map, merge and rebase steps, and map positions through them, as a collaboration
   authority does.
-- Change documents on the server with every `Transform` operation.
+- Change documents on the server with every `Transform` operation, from Rust, and from Elixir and
+  C as ops.
 - Parse and serialize with `DOMParser` and `DOMSerializer`, over the DOM you plug in, as
   ProseMirror takes the browser's or jsdom's. The test bridge plugs in jsdom.
 
@@ -126,7 +173,8 @@ The editor is not part of it: `prosemirror-state` (editor state, selections, plu
 
 A schema's functions (`toDOM`, `getAttrs`, `leafText`) and a custom step's methods are code,
 which JSON can't carry. Rust gives them as closures and `CustomStep` implementations; a schema
-read from JSON, Elixir or C has none.
+read from JSON, Elixir or C has none, and the bindings' `text_between` takes the text for leaves
+as a string.
 
 ## How it's proven
 
@@ -147,19 +195,22 @@ The proof doesn't depend on anyone reading the Rust. CI checks it:
      resulting document and mapped positions;
    - what `prosemirror-model` does with inputs its tests don't give;
    - a step type defined with `Step.jsonID`: applied among ProseMirror's own steps, inverted,
-     mapped, merged, and its errors.
+     mapped, merged, and its errors;
+   - 273 lists of `Transform` operations, 96 of them failing, and `textBetween` and
+     `textContent`, as the bindings take them.
 
-   The Elixir tests apply every recorded transform, invert it and map its positions. The C test
-   does the same, and its JSON must equal `JSON.stringify`'s byte for byte. The Rust tests define
-   the same custom step in Rust and expect what JavaScript recorded.
+   The Elixir tests apply every recorded transform, invert it and map its positions, and run every
+   recorded op list and text read. The C test does the same, and its JSON must equal
+   `JSON.stringify`'s byte for byte. The Rust tests define the same custom step in Rust and expect
+   what JavaScript recorded.
 
 | Check | Result |
 | --- | --- |
 | prosemirror-model's suite, against tarnish | 309 passing |
 | prosemirror-transform's suite, against tarnish | 238 passing |
-| tarnish's own suite, against JavaScript and tarnish | 34 passing |
-| Elixir (`mix test`) | 203 tests |
-| C (`npm run test:c`) | 148 recorded transforms, the error cases and a 200,000-deep attribute |
+| tarnish's own suite, against JavaScript and tarnish | 36 passing |
+| Elixir (`mix test`) | 516 tests |
+| C (`npm run test:c`) | 148 recorded transforms, 308 op lists and texts, the error cases and a 200,000-deep attribute |
 | Rust (`cargo test`) | the recorded cases, and a 20,000-deep document through every operation on a 256 KB stack |
 
 ## Speed
