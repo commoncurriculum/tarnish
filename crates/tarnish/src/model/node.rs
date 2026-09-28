@@ -41,7 +41,6 @@ pub struct ChildAt<'a> {
 }
 
 impl<'a> Node<'a> {
-    /// The node at `id` in `chunk`.
     #[inline]
     pub(crate) fn at(chunk: Arc<Chunk<'a>>, id: u32) -> Node<'a> {
         let record = chunk.record(id);
@@ -279,7 +278,7 @@ impl<'a> Node<'a> {
         }
     }
 
-    /// Whether the nodes have the same markup and content.
+    /// Whether the nodes have the same type, attributes and marks.
     pub fn same_markup(&self, other: &Node) -> bool {
         self.view().same_markup(other.view())
     }
@@ -374,7 +373,6 @@ impl<'a> Node<'a> {
         })
     }
 
-    /// Writes [`text_part`](Self::text_part) into `builder`: its index.
     fn write_text_part(
         &self,
         builder: &mut Builder<'a>,

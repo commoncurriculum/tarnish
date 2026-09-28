@@ -245,7 +245,7 @@ impl<'a> Fragment<'a> {
         list.finish()
     }
 
-    /// The schema of the chunk the fragment's list is in; `None` for no children.
+    /// The schema of the chunk the fragment's list is in; `None` for a fragment made empty.
     pub fn schema(&self) -> Option<&Schema> {
         self.chunk.as_ref().map(|chunk| chunk.schema())
     }
@@ -284,7 +284,6 @@ impl<'a> Fragment<'a> {
             .expect("a fragment with children is in a chunk")
     }
 
-    /// Child `index`, borrowed.
     #[inline]
     pub(crate) fn child_ref(&self, index: usize) -> NodeRef<'_> {
         let (chunk, id) = self
@@ -299,7 +298,6 @@ impl<'a> Fragment<'a> {
         self.list_chunk().kid_size(self.start, index) as usize
     }
 
-    /// The children, borrowed.
     pub(crate) fn refs(
         &self,
     ) -> impl DoubleEndedIterator<Item = NodeRef<'_>> + ExactSizeIterator + Clone {

@@ -29,7 +29,6 @@ pub struct Marks<'a> {
 }
 
 impl<'a> Marks<'a> {
-    /// The set a ref in `chunk` names.
     pub(crate) fn at(chunk: &Arc<Chunk<'a>>, reference: u32) -> Marks<'a> {
         let (chunk, set) = chunk.resolve(reference);
         match set {

@@ -33,7 +33,6 @@ impl<'k, 'a> Copier<'k, 'a> {
         }
     }
 
-    /// `chunk`, when it is a chunk kept.
     fn kept_chunk(&self, chunk: &Chunk) -> Option<&'k Arc<Chunk<'a>>> {
         self.kept.iter().find(|kept| kept.ptr_eq(chunk))
     }

@@ -78,7 +78,6 @@ pub enum Kind<'c> {
 }
 
 impl<'c> ValueRef<'c> {
-    /// The value a ref in `chunk` names.
     pub(crate) fn at(chunk: &'c Chunk<'c>, reference: u32) -> ValueRef<'c> {
         let (chunk, index) = chunk.resolve(reference);
         ValueRef { chunk, index }
@@ -271,7 +270,8 @@ pub(crate) trait JsonView<'v>: Copy {
             .map(|(_, value)| value)
     }
 
-    /// Where the value is held, when that tells values apart: two held in one place are one.
+    /// Where the value is held, for a view that knows: values held in one place are equal
+    /// without being read.
     fn place(self) -> Option<(usize, u32)> {
         None
     }

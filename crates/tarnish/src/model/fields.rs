@@ -1,5 +1,5 @@
-//! The fields of a node's or mark's JSON, as `toJSON` makes them. The JSON value, its text, and
-//! the Erlang term each write them, from the chunk.
+//! The fields of a node's or mark's JSON, as `toJSON` makes them, read from the chunk for each
+//! form the JSON is written in.
 
 use super::mark::Mark;
 use super::node::Node;

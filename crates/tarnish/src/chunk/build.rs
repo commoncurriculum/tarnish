@@ -18,7 +18,6 @@ use crate::model::{Schema, TextRef};
 use crate::stack;
 use crate::text::Text;
 
-/// A chunk being written.
 pub(crate) struct Builder<'a> {
     schema: Schema,
     imports: Vec<Arc<Chunk<'a>>>,
@@ -289,7 +288,6 @@ impl<'a> Builder<'a> {
         written
     }
 
-    /// A value written here, from wherever it's held.
     pub fn write<'v>(&mut self, value: impl JsonView<'v>) -> u32 {
         match value.kind() {
             Kind::Null => self.push_value(Tag::Null, 0, 0),
@@ -497,21 +495,18 @@ impl<'a> Builder<'a> {
         self.scratch.sections[NODES][at..at + 24].copy_from_slice(&record.to_bytes());
     }
 
-    /// Sets a flag of node `id`.
     pub fn flag(&mut self, id: u32, flag: u16) {
         let mut record = self.record(id);
         record.flags |= flag;
         self.set_record(id, record);
     }
 
-    /// Take back the last node written.
     pub fn pop_node(&mut self) {
         let len = self.scratch.sections[NODES].len() - 24;
         self.scratch.sections[NODES].truncate(len);
         self.counts[NODES] -= 1;
     }
 
-    /// Where the text section ends.
     pub fn text_end(&self) -> u32 {
         self.counts[TEXT]
     }

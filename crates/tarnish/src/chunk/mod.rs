@@ -78,8 +78,8 @@ const IMPORTS_IN_PLACE: usize = 16;
 /// changes copy their parents' lists.
 pub(crate) const LOCAL: u32 = u32::MAX;
 
-/// A node in a list of kids: the slot of the chunk that holds it, or [`LOCAL`], its index there,
-/// and its size, which positions are found by without reading the node.
+/// A node in a list of kids. It holds the node's size so that positions are found without
+/// reading the node.
 #[derive(Clone, Copy)]
 pub(crate) struct Kid {
     pub slot: u32,
@@ -257,8 +257,6 @@ impl Record {
         }
     }
 
-    /// The positions the node takes: a text's length, 1 for another leaf, and anything else's
-    /// content with its start and end tokens.
     #[inline]
     pub fn node_size(self, schema: &Schema) -> usize {
         if self.flags & TEXT_NODE != 0 {
@@ -451,14 +449,12 @@ impl<'a> Chunk<'a> {
         )
     }
 
-    /// A record's flags, read alone.
     #[inline]
     pub(crate) fn flags(&self, id: u32) -> u16 {
         let at = self.at(NODES, id);
         u16::from_le_bytes([self.bytes[at + 2], self.bytes[at + 3]])
     }
 
-    /// Kid `index` of the kids section.
     #[inline]
     fn kid(&self, index: u32) -> Kid {
         let at = self.at(KIDS, index);
@@ -594,7 +590,6 @@ impl<'a> Chunk<'a> {
         self.span(UNITS, start, len)
     }
 
-    /// Whether this is the very chunk `other` is.
     #[inline]
     pub fn ptr_eq(&self, other: &Chunk) -> bool {
         std::ptr::eq(self.bytes.as_ptr(), other.bytes.as_ptr())

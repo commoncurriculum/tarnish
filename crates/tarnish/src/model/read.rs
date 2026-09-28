@@ -42,7 +42,8 @@ impl<'s, 'a> Reader<'s, 'a> {
         self.builder.seal()
     }
 
-    /// Tells the value a node was read from what it read.
+    /// Hands `json`, the value a node was read from, what reading made of it, and flags the
+    /// node when `json` asks to.
     fn read<'j>(&mut self, json: impl Json<'j>, read: ReadNode) -> u32 {
         let id = read.index;
         if json.read_node(&read) {
@@ -51,7 +52,6 @@ impl<'s, 'a> Reader<'s, 'a> {
         id
     }
 
-    /// Reads a node: its index in the chunk.
     pub fn node<'j>(&mut self, json: impl Json<'j>) -> Result<u32> {
         // The likeliest first, for a reader that looks each up and stops once it has found as
         // many as the object has.
