@@ -31,10 +31,12 @@ fn expect_error(case: &Value, error: tarnish::Error) {
     assert_eq!(error.message(), recorded["message"], "{case}");
 }
 
+/// Text with a lone surrogate is recorded as its JSON.
 fn expect_text(case: &Value, text: Result<Text>) {
-    match text {
-        Ok(text) => assert_eq!(text.as_str(), case["result"].as_str(), "{case}"),
-        Err(error) => expect_error(case, error),
+    match (text, case.get("resultJSON")) {
+        (Ok(text), Some(json)) => assert_eq!(json, &text.to_json_string(), "{case}"),
+        (Ok(text), None) => assert_eq!(text.as_str(), case["result"].as_str(), "{case}"),
+        (Err(error), _) => expect_error(case, error),
     }
 }
 

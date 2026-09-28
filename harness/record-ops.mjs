@@ -748,6 +748,8 @@ const textBetween = [
   [0, leaves, 3, 11, " ", "□"],
   [0, doc(p("a😀b"), p("é")), 1, 8, "¶"],
   [0, doc(p("a😀b"), p("é")), 2, 4],
+  [0, doc(p("a😀b"), p("é")), 1, 3],
+  [0, doc(p("a😀b"), p("é")), 3, 8, "|"],
   [0, p("in ", text("a", em), " paragraph"), 1, 4],
   [0, text("hello"), 1, 3],
   [0, text("hello"), 0, 100],
@@ -761,9 +763,13 @@ const textBetween = [
   to,
   ...(blockSeparator != null && { blockSeparator }),
   ...(leafText != null && { leafText }),
-  ...outcome(() => ({
-    result: Node.fromJSON(built[schema], doc).textBetween(from, to, blockSeparator ?? undefined, leafText ?? undefined),
-  })),
+  ...outcome(() => {
+    const node = Node.fromJSON(built[schema], doc)
+    const result = node.textBetween(from, to, blockSeparator ?? undefined, leafText ?? undefined)
+    // Jason, among other JSON readers, refuses a lone surrogate, so text holding one is recorded
+    // as the text JSON.stringify writes for it.
+    return result.isWellFormed() ? { result } : { resultJSON: JSON.stringify(result) }
+  }),
 }))
 
 const textContent = [
@@ -778,7 +784,7 @@ const textContent = [
   [4, docs.text],
 ].map(([schema, doc]) => ({ schema, doc, result: Node.fromJSON(built[schema], doc).textContent }))
 
-const list =records => `[\n${records.map(record => `    ${JSON.stringify(record)}`).join(",\n")}\n  ]`
+const list = records =>`[\n${records.map(record => `    ${JSON.stringify(record)}`).join(",\n")}\n  ]`
 writeFileSync(
   new URL("../fixtures/ops.json", import.meta.url),
   `{\n  "schemas": ${list(schemas)},\n  "transforms": ${list(transforms)},\n` +
