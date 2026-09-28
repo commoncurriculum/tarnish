@@ -50,7 +50,8 @@ pub fn escape_text(out: &mut String, text: &str) {
     escape(out, text, false);
 }
 
-/// Write an attribute's value, escaping `&`, `"` and U+00A0.
+/// Write an attribute's value, escaping `&`, `"`, `<`, `>` and U+00A0. The standard escapes
+/// `<` and `>` in attributes since <https://github.com/whatwg/html/pull/6362>.
 pub fn escape_attribute(out: &mut String, value: &str) {
     escape(out, value, true);
 }
@@ -62,9 +63,9 @@ fn escape(out: &mut String, text: &str, attribute: bool) {
     while index < bytes.len() {
         let (escaped, length) = match bytes[index] {
             b'&' => ("&amp;", 1),
+            b'<' => ("&lt;", 1),
+            b'>' => ("&gt;", 1),
             b'"' if attribute => ("&quot;", 1),
-            b'<' if !attribute => ("&lt;", 1),
-            b'>' if !attribute => ("&gt;", 1),
             0xC2 if bytes.get(index + 1) == Some(&0xA0) => ("&nbsp;", 2),
             _ => {
                 index += 1;
@@ -205,7 +206,7 @@ mod tests {
         escape_attribute(&mut out, "a<b>&\"c\u{a0}é\u{120}");
         assert_eq!(
             out,
-            "a&lt;b&gt;&amp;\"c&nbsp;é\u{120}|a<b>&amp;&quot;c&nbsp;é\u{120}"
+            "a&lt;b&gt;&amp;\"c&nbsp;é\u{120}|a&lt;b&gt;&amp;&quot;c&nbsp;é\u{120}"
         );
     }
 
