@@ -5,7 +5,9 @@ use std::borrow::Cow;
 
 use super::compare_deep::deep_equal;
 use super::schema::{MarkType, NodeType};
-use crate::chunk::{ASCII, BINDING, Chunk, HELD_AS_UNITS, NODES, Record, TEXT_NODE, ValueRef};
+use crate::chunk::{
+    ASCII, BINDING, Chunk, HELD_AS_UNITS, Holder, NODES, Record, TEXT_NODE, ValueRef,
+};
 use crate::js;
 use crate::text::{self, Raw, Text, byte_offset};
 

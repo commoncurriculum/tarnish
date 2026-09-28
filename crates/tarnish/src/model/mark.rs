@@ -7,7 +7,7 @@ use super::attrs::Attrs;
 use super::read::Reader;
 use super::schema::{MarkType, Schema};
 use super::view::{MarkRef, SetRef};
-use crate::chunk::{Builder, Chunk, ValueRef};
+use crate::chunk::{Builder, Chunk, Holder, ValueRef};
 use crate::error::Result;
 use crate::js::Json;
 use crate::json::Map;
@@ -31,7 +31,7 @@ pub struct Marks<'a> {
 impl<'a> Marks<'a> {
     /// The set a ref in `chunk` names.
     pub(crate) fn at(chunk: &Arc<Chunk<'a>>, reference: u32) -> Marks<'a> {
-        let (chunk, set) = Chunk::resolve_shared(chunk, reference);
+        let (chunk, set) = chunk.resolve(reference);
         match set {
             0 => Marks::default(),
             set => Marks {
@@ -67,7 +67,7 @@ impl<'a> Marks<'a> {
                 .chunk
                 .as_ref()
                 .expect("a set with members is in a chunk");
-            let (chunk, index) = Chunk::resolve_shared(chunk, chunk.member(member));
+            let (chunk, index) = chunk.resolve(chunk.member(member));
             Mark {
                 chunk: chunk.clone(),
                 index,
@@ -171,7 +171,7 @@ impl<'a> Mark<'a> {
     }
 
     pub fn attrs(&self) -> Attrs<'a> {
-        let (chunk, value) = Chunk::resolve_shared(&self.chunk, self.chunk.mark(self.index).1);
+        let (chunk, value) = self.chunk.resolve(self.chunk.mark(self.index).1);
         Attrs {
             chunk: chunk.clone(),
             value,

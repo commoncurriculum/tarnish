@@ -103,6 +103,94 @@ impl Kid {
         bytes[8..].copy_from_slice(&self.size.to_le_bytes());
         bytes
     }
+
+    #[inline]
+    fn from_bytes(bytes: &[u8; 12]) -> Kid {
+        let word = |at: usize| {
+            u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
+        };
+        Kid {
+            slot: word(0),
+            index: word(4),
+            size: word(8),
+        }
+    }
+}
+
+/// A chunk, or the `Arc` that holds one: finding a node or a value through a chunk gives back
+/// the one it was found through, so that a caller holding an `Arc` gets an `Arc`.
+pub(crate) trait Holder<'a>: std::borrow::Borrow<Chunk<'a>> + Sized {
+    fn from_import<'s>(import: &'s Arc<Chunk<'a>>) -> &'s Self;
+
+    /// The chunk a ref points into, and the index there.
+    #[inline]
+    fn resolve<'s>(&'s self, reference: u32) -> (&'s Self, u32)
+    where
+        'a: 's,
+    {
+        if reference & EXTERN == 0 {
+            return (self, reference);
+        }
+        let chunk: &Chunk<'a> = self.borrow();
+        let (slot, index) = chunk.external(reference);
+        (Self::from_import(chunk.import(slot)), index)
+    }
+
+    /// Where the kids of node `id` are, `first` being its kids ref: the chunk that holds their
+    /// list, where it starts there, and the bound its kids in that chunk must be below. A list
+    /// in an import can't lead back here, since imports are older, so it has no bound.
+    #[inline]
+    fn kids_of<'s>(&'s self, id: u32, first: u32) -> (&'s Self, u32, u32)
+    where
+        'a: 's,
+    {
+        match first & EXTERN {
+            0 => (self, first, id),
+            _ => {
+                let (chunk, start) = self.resolve(first);
+                (chunk, start, u32::MAX)
+            }
+        }
+    }
+
+    /// The node of kid `position` of the list starting at `first`: its chunk and its index.
+    #[inline]
+    fn child<'s>(&'s self, first: u32, position: u32, bound: u32) -> (&'s Self, u32)
+    where
+        'a: 's,
+    {
+        let chunk: &Chunk<'a> = self.borrow();
+        let kid = chunk.kid(first.checked_add(position).unwrap_or_else(|| corrupt()));
+        (self.holder(kid, bound), kid.index)
+    }
+
+    /// The chunk that holds a kid's node, which must be before `bound` if it is this one.
+    #[inline]
+    fn holder<'s>(&'s self, kid: Kid, bound: u32) -> &'s Self
+    where
+        'a: 's,
+    {
+        let chunk: &Chunk<'a> = self.borrow();
+        match kid.slot {
+            LOCAL if kid.index < bound => self,
+            LOCAL => corrupt(),
+            slot => Self::from_import(chunk.import(slot)),
+        }
+    }
+}
+
+impl<'a> Holder<'a> for Chunk<'a> {
+    #[inline]
+    fn from_import<'s>(import: &'s Arc<Chunk<'a>>) -> &'s Self {
+        import
+    }
+}
+
+impl<'a> Holder<'a> for Arc<Chunk<'a>> {
+    #[inline]
+    fn from_import<'s>(import: &'s Arc<Chunk<'a>>) -> &'s Self {
+        import
+    }
 }
 
 /// A record's flag for text held as UTF-16 units, because it has a lone surrogate.
@@ -223,15 +311,21 @@ fn layout(bytes: &[u8]) -> Result<([u32; SECTIONS], [u32; SECTIONS])> {
     Ok((starts, counts))
 }
 
+/// The ids of the chunks a chunk imports, as its header lays them out.
+fn import_ids(
+    bytes: &[u8],
+    (starts, counts): ([u32; SECTIONS], [u32; SECTIONS]),
+) -> impl ExactSizeIterator<Item = u64> + '_ {
+    let start = starts[IMPORTS] as usize;
+    (0..counts[IMPORTS] as usize).map(move |slot| double_word(bytes, start + slot * 8))
+}
+
 impl Header {
     pub fn read(bytes: &[u8]) -> Result<Header> {
-        let (starts, counts) = layout(bytes)?;
-        let start = starts[IMPORTS] as usize;
+        let imports = import_ids(bytes, layout(bytes)?).collect();
         Ok(Header {
             id: double_word(bytes, 16),
-            imports: (0..counts[IMPORTS] as usize)
-                .map(|slot| double_word(bytes, start + slot * 8))
-                .collect(),
+            imports,
         })
     }
 }
@@ -249,9 +343,8 @@ impl<'a> Chunk<'a> {
                 "Document chunk from a different schema".into(),
             ));
         }
-        let named = (0..counts[IMPORTS] as usize)
-            .map(|slot| double_word(&bytes, starts[IMPORTS] as usize + slot * 8));
-        if imports.len() != counts[IMPORTS] as usize
+        let named = import_ids(&bytes, (starts, counts));
+        if imports.len() != named.len()
             || !named.zip(&imports).all(|(id, import)| id == import.id)
             || imports.iter().any(|import| import.schema != *schema)
         {
@@ -348,104 +441,33 @@ impl<'a> Chunk<'a> {
         u16::from_le_bytes([self.bytes[at + 2], self.bytes[at + 3]])
     }
 
-    /// Kid `index` of the kids section: its slot, which is [`LOCAL`] for a node here, and the
-    /// node's index.
+    /// Kid `index` of the kids section.
     #[inline]
-    fn kid(&self, index: u32) -> (u32, u32) {
+    fn kid(&self, index: u32) -> Kid {
         let at = self.at(KIDS, index);
-        (word(&self.bytes, at), word(&self.bytes, at + 4))
+        Kid::from_bytes(
+            self.bytes[at..at + 12]
+                .try_into()
+                .unwrap_or_else(|_| corrupt()),
+        )
     }
 
     /// The size of the node at `position` in a list of kids starting at `first`.
     #[inline]
     pub(crate) fn kid_size(&self, first: u32, position: u32) -> u32 {
-        let at = self.at(
-            KIDS,
-            first.checked_add(position).unwrap_or_else(|| corrupt()),
-        );
-        word(&self.bytes, at + 8)
+        self.kid(first.checked_add(position).unwrap_or_else(|| corrupt()))
+            .size
     }
 
-    /// The sizes of the nodes of `count` kids listed from `first`.
+    /// `count` kids listed from `first`, as they're held.
     #[inline]
-    pub(crate) fn kid_sizes(&self, first: u32, count: u32) -> impl Iterator<Item = u32> + '_ {
-        let kids = self.span(KIDS, first, count).as_chunks::<12>().0;
-        kids.iter()
-            .map(|kid| u32::from_le_bytes([kid[8], kid[9], kid[10], kid[11]]))
-    }
-
-    /// The import slot and index an extern names.
-    #[inline]
-    fn external(&self, reference: u32) -> (usize, u32) {
-        let index = reference & !EXTERN;
-        (
-            self.word_of(EXTERNS, index, 0) as usize,
-            self.word_of(EXTERNS, index, 1),
-        )
-    }
-
-    /// The chunk a ref points into, and the index there.
-    #[inline]
-    pub(crate) fn resolve(&self, reference: u32) -> (&Chunk<'a>, u32) {
-        if reference & EXTERN == 0 {
-            return (self, reference);
-        }
-        let (slot, index) = self.external(reference);
-        (self.imports.get(slot).unwrap_or_else(|| corrupt()), index)
-    }
-
-    /// [`resolve`](Self::resolve), to the chunk's owner.
-    #[inline]
-    pub(crate) fn resolve_shared<'s>(
-        this: &'s Arc<Chunk<'a>>,
-        reference: u32,
-    ) -> (&'s Arc<Chunk<'a>>, u32) {
-        if reference & EXTERN == 0 {
-            return (this, reference);
-        }
-        let (slot, index) = this.external(reference);
-        (this.imports.get(slot).unwrap_or_else(|| corrupt()), index)
-    }
-
-    /// Where the kids of node `id` are, `first` being its kids ref: the chunk that holds their
-    /// list, where it starts there, and the bound its kids in that chunk must be below. A list
-    /// in an import can't lead back here, since imports are older, so it has no bound.
-    #[inline]
-    pub(crate) fn kids_of(&self, id: u32, first: u32) -> (&Chunk<'a>, u32, u32) {
-        match first & EXTERN {
-            0 => (self, first, id),
-            _ => {
-                let (chunk, start) = self.resolve(first);
-                (chunk, start, u32::MAX)
-            }
-        }
-    }
-
-    /// [`kids_of`](Self::kids_of), to the list chunk's owner.
-    #[inline]
-    pub(crate) fn kids_of_shared<'s>(
-        this: &'s Arc<Chunk<'a>>,
-        id: u32,
+    pub(crate) fn kid_list(
+        &self,
         first: u32,
-    ) -> (&'s Arc<Chunk<'a>>, u32, u32) {
-        match first & EXTERN {
-            0 => (this, first, id),
-            _ => {
-                let (chunk, start) = Chunk::resolve_shared(this, first);
-                (chunk, start, u32::MAX)
-            }
-        }
-    }
-
-    /// A node's kid at `position` among a list starting at `first`, which must be a node before
-    /// `bound` when it is in this chunk.
-    #[inline]
-    pub(crate) fn child(&self, first: u32, position: u32, bound: u32) -> (&Chunk<'a>, u32) {
-        match self.kid(first.checked_add(position).unwrap_or_else(|| corrupt())) {
-            (LOCAL, index) if index < bound => (self, index),
-            (LOCAL, _) => corrupt(),
-            (slot, index) => (self.import(slot), index),
-        }
+        count: u32,
+    ) -> impl DoubleEndedIterator<Item = Kid> + ExactSizeIterator + '_ {
+        let kids = self.span(KIDS, first, count).as_chunks::<12>().0;
+        kids.iter().map(Kid::from_bytes)
     }
 
     /// The nodes of `count` kids listed from `first`, which must be before `bound` where they
@@ -457,68 +479,23 @@ impl<'a> Chunk<'a> {
         count: u32,
         bound: u32,
     ) -> impl DoubleEndedIterator<Item = (&Chunk<'a>, u32)> + ExactSizeIterator {
-        self.kids(first, count, bound)
-            .map(|(chunk, index, _)| (chunk, index))
+        self.kid_list(first, count)
+            .map(move |kid| (self.holder(kid, bound), kid.index))
     }
 
-    /// `count` kids listed from `first`, as they're held: each one's slot, index and size.
+    /// The import slot and index an extern names.
     #[inline]
-    pub(crate) fn kid_list(&self, first: u32, count: u32) -> impl Iterator<Item = Kid> + '_ {
-        let kids = self.span(KIDS, first, count).as_chunks::<12>().0;
-        kids.iter().map(|kid| Kid {
-            slot: u32::from_le_bytes([kid[0], kid[1], kid[2], kid[3]]),
-            index: u32::from_le_bytes([kid[4], kid[5], kid[6], kid[7]]),
-            size: u32::from_le_bytes([kid[8], kid[9], kid[10], kid[11]]),
-        })
-    }
-
-    /// The chunk a kid's slot names: an import, or this one for [`LOCAL`].
-    #[inline]
-    pub(crate) fn slot_chunk(&self, slot: u32) -> &Chunk<'a> {
-        match slot {
-            LOCAL => self,
-            slot => self.import(slot),
-        }
-    }
-
-    /// [`children`](Self::children), with the size each kid holds.
-    #[inline]
-    pub(crate) fn kids(
-        &self,
-        first: u32,
-        count: u32,
-        bound: u32,
-    ) -> impl DoubleEndedIterator<Item = (&Chunk<'a>, u32, u32)> + ExactSizeIterator {
-        let kids = self.span(KIDS, first, count).as_chunks::<12>().0;
-        kids.iter().map(move |kid| {
-            let slot = u32::from_le_bytes([kid[0], kid[1], kid[2], kid[3]]);
-            let index = u32::from_le_bytes([kid[4], kid[5], kid[6], kid[7]]);
-            let size = u32::from_le_bytes([kid[8], kid[9], kid[10], kid[11]]);
-            match slot {
-                LOCAL if index < bound => (self, index, size),
-                LOCAL => corrupt(),
-                slot => (&**self.import(slot), index, size),
-            }
-        })
+    fn external(&self, reference: u32) -> (u32, u32) {
+        let index = reference & !EXTERN;
+        (
+            self.word_of(EXTERNS, index, 0),
+            self.word_of(EXTERNS, index, 1),
+        )
     }
 
     #[inline]
     fn import(&self, slot: u32) -> &Arc<Chunk<'a>> {
         self.imports.get(slot as usize).unwrap_or_else(|| corrupt())
-    }
-
-    #[inline]
-    pub(crate) fn child_shared<'s>(
-        this: &'s Arc<Chunk<'a>>,
-        first: u32,
-        position: u32,
-        bound: u32,
-    ) -> (&'s Arc<Chunk<'a>>, u32) {
-        match this.kid(first.checked_add(position).unwrap_or_else(|| corrupt())) {
-            (LOCAL, index) if index < bound => (this, index),
-            (LOCAL, _) => corrupt(),
-            (slot, index) => (this.import(slot), index),
-        }
     }
 
     /// A set's first member and size.
@@ -608,7 +585,10 @@ impl<'a> Chunk<'a> {
 
     /// The import slot and index a ref to another chunk names; `None` for a ref into this one.
     pub(crate) fn external_ref(&self, reference: u32) -> Option<(usize, u32)> {
-        (reference & EXTERN != 0).then(|| self.external(reference))
+        (reference & EXTERN != 0).then(|| {
+            let (slot, index) = self.external(reference);
+            (slot as usize, index)
+        })
     }
 
     /// An import, to change in place: `None` unless the chunk holds it alone.

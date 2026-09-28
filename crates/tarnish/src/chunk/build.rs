@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use super::value::{JsonView, Kind, Tag};
 use super::{
-    ASCII, BINDING, Chunk, ELEMENTS, ENTRIES, EXTERN, EXTERNS, HEADER, HELD_AS_UNITS, IMPORTS,
-    KIDS, Kid, LOCAL, MAGIC, MARKS, MEMBERS, NODES, Record, SECTIONS, SETS, STRINGS, TEXT,
+    ASCII, BINDING, Chunk, ELEMENTS, ENTRIES, EXTERN, EXTERNS, HEADER, HELD_AS_UNITS, Holder,
+    IMPORTS, KIDS, Kid, LOCAL, MAGIC, MARKS, MEMBERS, NODES, Record, SECTIONS, SETS, STRINGS, TEXT,
     TEXT_NODE, UNITS, VALUES, corrupt,
 };
 use crate::model::compare_deep::deep_equal;
@@ -166,7 +166,7 @@ impl<'a> Builder<'a> {
 
     /// A ref, in this chunk, to what `reference` names in `chunk`.
     pub fn reference(&mut self, chunk: &Arc<Chunk<'a>>, reference: u32) -> u32 {
-        let (chunk, index) = Chunk::resolve_shared(chunk, reference);
+        let (chunk, index) = chunk.resolve(reference);
         self.external(chunk, index)
     }
 
@@ -207,12 +207,16 @@ impl<'a> Builder<'a> {
         let mut own = LOCAL;
         let mut slots = [LOCAL; 8];
         let mut size = 0;
-        for (kid, copy) in kids.as_chunks::<12>().0.iter().zip(copies) {
-            size += u64::from(u32::from_le_bytes([kid[8], kid[9], kid[10], kid[11]]));
-            let theirs = u32::from_le_bytes([kid[0], kid[1], kid[2], kid[3]]);
-            let index = u32::from_le_bytes([kid[4], kid[5], kid[6], kid[7]]);
-            let slot = match theirs {
-                LOCAL if index >= bound => corrupt(),
+        for (kid, copy) in kids
+            .as_chunks::<12>()
+            .0
+            .iter()
+            .map(Kid::from_bytes)
+            .zip(copies)
+        {
+            size += u64::from(kid.size);
+            let slot = match kid.slot {
+                LOCAL if kid.index >= bound => corrupt(),
                 LOCAL if own != LOCAL => own,
                 LOCAL => {
                     own = self.import(chunk);
@@ -230,8 +234,7 @@ impl<'a> Builder<'a> {
                     }
                 }
             };
-            copy[..4].copy_from_slice(&slot.to_le_bytes());
-            copy[4..].copy_from_slice(&kid[4..]);
+            *copy = Kid { slot, ..kid }.to_bytes();
         }
         self.scratch.sections[KIDS] = list;
         size
@@ -504,7 +507,8 @@ impl<'a> Builder<'a> {
 
     pub fn record(&self, id: u32) -> Record {
         let at = id as usize * 24;
-        Record::from_bytes_of(&self.scratch.sections[NODES][at..at + 24])
+        let bytes = &self.scratch.sections[NODES][at..at + 24];
+        Record::from_bytes(bytes.try_into().unwrap_or_else(|_| corrupt()))
     }
 
     fn push_record(&mut self, record: Record) -> u32 {
@@ -754,14 +758,6 @@ impl<'b> JsonView<'b> for Written<'b, '_> {
 
     fn place(self) -> Option<(usize, u32)> {
         Some((std::ptr::from_ref(self.builder).addr(), self.index))
-    }
-}
-
-impl Record {
-    fn from_bytes_of(bytes: &[u8]) -> Record {
-        let mut record = [0; 24];
-        record.copy_from_slice(bytes);
-        Record::from_bytes(&record)
     }
 }
 

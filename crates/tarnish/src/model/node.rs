@@ -12,7 +12,9 @@ use super::replace::{self, Slice};
 use super::resolved_pos::ResolvedPos;
 use super::schema::{MarkType, NodeType, Schema};
 use super::view::{NodeRef, TextRef};
-use crate::chunk::{ASCII, Builder, Chunk, EXTERN, Kid, NODES, Record, TEXT_NODE, ValueRef};
+use crate::chunk::{
+    ASCII, Builder, Chunk, EXTERN, Holder, Kid, NODES, Record, TEXT_NODE, ValueRef,
+};
 use crate::error::{Error, Result};
 use crate::js::Json;
 use crate::json::{self, Map};
@@ -51,7 +53,7 @@ impl<'a> Node<'a> {
                 None,
             )
         } else {
-            let (list, start, bound) = Chunk::kids_of_shared(&chunk, id, record.a);
+            let (list, start, bound) = chunk.kids_of(id, record.a);
             let content = Fragment::of(list.clone(), start, record.b, record.size, bound);
             (content, Some(chunk))
         };
@@ -162,7 +164,7 @@ impl<'a> Node<'a> {
     }
 
     pub fn attrs(&self) -> Attrs<'a> {
-        let (chunk, value) = Chunk::resolve_shared(self.chunk(), self.record.attrs);
+        let (chunk, value) = self.chunk().resolve(self.record.attrs);
         Attrs {
             chunk: chunk.clone(),
             value,
@@ -384,7 +386,7 @@ impl<'a> Node<'a> {
         let Some((start, end)) = text.byte_range(from, to) else {
             return builder.text_of(self.record.ty, marks, &text.slice(from, to));
         };
-        let (chunk, offset) = Chunk::resolve_shared(self.chunk(), self.record.a);
+        let (chunk, offset) = self.chunk().resolve(self.record.a);
         let ascii = self.record.flags & ASCII != 0
             || text
                 .as_str()

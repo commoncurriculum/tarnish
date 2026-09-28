@@ -7,7 +7,7 @@ use super::node::Node;
 use super::read::Reader;
 use super::schema::Schema;
 use super::view::NodeRef;
-use crate::chunk::{Builder, Chunk, Kid};
+use crate::chunk::{Builder, Chunk, Holder, Kid};
 use crate::error::{Error, Result};
 use crate::js::Json;
 use crate::json::Value;
@@ -287,35 +287,27 @@ impl<'a> Fragment<'a> {
         self.count as usize
     }
 
-    /// The owner and index of child `index`, which must be one.
+    /// The chunk the list is in, which a fragment with children has.
     #[inline]
-    fn kid(&self, index: u32) -> (&Arc<Chunk<'a>>, u32) {
-        let chunk = self
-            .chunk
+    fn list_chunk(&self) -> &Arc<Chunk<'a>> {
+        self.chunk
             .as_ref()
-            .expect("a fragment with children is in a chunk");
-        Chunk::child_shared(chunk, self.start, index, self.bound)
+            .expect("a fragment with children is in a chunk")
     }
 
     /// Child `index`, borrowed.
     #[inline]
     pub(crate) fn child_ref(&self, index: usize) -> NodeRef<'_> {
-        let chunk = self
-            .chunk
-            .as_ref()
-            .expect("a fragment with children is in a chunk");
-        let (chunk, id) = chunk.child(self.start, index as u32, self.bound);
+        let (chunk, id) = self
+            .list_chunk()
+            .child(self.start, index as u32, self.bound);
         NodeRef::at(chunk, id)
     }
 
     /// The size of child `index`, which the list holds with the child.
     #[inline]
     pub(crate) fn child_size(&self, index: u32) -> usize {
-        let chunk = self
-            .chunk
-            .as_ref()
-            .expect("a fragment with children is in a chunk");
-        chunk.kid_size(self.start, index) as usize
+        self.list_chunk().kid_size(self.start, index) as usize
     }
 
     /// The children, borrowed.
@@ -327,7 +319,7 @@ impl<'a> Fragment<'a> {
 
     #[inline]
     fn node(&self, index: u32) -> Node<'a> {
-        let (chunk, id) = self.kid(index);
+        let (chunk, id) = self.list_chunk().child(self.start, index, self.bound);
         Node::at(chunk.clone(), id)
     }
 
@@ -588,13 +580,10 @@ impl<'a> Fragment<'a> {
                 self.to_debug_string()?
             )));
         }
-        let chunk = self
-            .chunk
-            .as_ref()
-            .expect("a fragment with children is in a chunk");
+        let kids = self.list_chunk().kid_list(self.start, self.count);
         let mut offset = 0;
-        for (index, size) in chunk.kid_sizes(self.start, self.count).enumerate() {
-            let end = offset + size as usize;
+        for (index, kid) in kids.enumerate() {
+            let end = offset + kid.size as usize;
             if end >= pos {
                 if end == pos {
                     return Ok((index + 1, end));

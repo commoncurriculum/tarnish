@@ -6,7 +6,7 @@ use std::sync::Arc;
 use super::node::Node;
 use super::schema::Schema;
 use super::view::{NodeRef, SetRef};
-use crate::chunk::{Builder, Chunk, Kid, LOCAL, Record, ValueRef, corrupt};
+use crate::chunk::{Builder, Chunk, Holder, Kid, Record, ValueRef};
 use crate::stack;
 
 /// What a copy has written of what it copies: each value and set it copied, by where it was,
@@ -111,13 +111,10 @@ impl<'k, 'a> Copier<'k, 'a> {
         // a run.
         let mut run: Option<(u32, Option<u32>)> = None;
         for kid in list.kid_list(start, count) {
-            if kid.slot == LOCAL && kid.index >= bound {
-                corrupt();
-            }
+            let chunk = list.holder(kid, bound);
             let slot = match run {
                 Some((last, slot)) if last == kid.slot => slot,
                 _ => {
-                    let chunk = list.slot_chunk(kid.slot);
                     let slot = self.kept_chunk(chunk).map(|kept| self.builder.import(kept));
                     run = Some((kid.slot, slot));
                     slot
@@ -126,7 +123,7 @@ impl<'k, 'a> Copier<'k, 'a> {
             kids.push(match slot {
                 Some(slot) => Kid { slot, ..kid },
                 None => {
-                    let node = NodeRef::at(list.slot_chunk(kid.slot), kid.index);
+                    let node = NodeRef::at(chunk, kid.index);
                     Kid::local(stack::grow(|| self.copy(node)), kid.size)
                 }
             });

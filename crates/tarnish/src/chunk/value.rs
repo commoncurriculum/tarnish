@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 use std::fmt;
 
-use super::{Chunk, corrupt};
+use super::{Chunk, Holder, corrupt};
 use crate::js::TypeOf;
 use crate::js::json::{write_number, write_string};
 use crate::json::{EMPTY, Key, Map, Number, Value};
