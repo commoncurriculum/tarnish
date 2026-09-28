@@ -23,6 +23,18 @@ const DIFFERENT_TREES: &[(&str, &str)] = &[
         "html5ever 0.40 parses <select> as the standard now does, keeping the elements inside \
          it. parse5 7 predates that, and drops their tags.",
     ),
+    (
+        "<p><span>a<isindex>b</span>c</p>",
+        "html5ever still counts <isindex> among the special elements, which an end tag doesn't \
+         close past, as the standard did before it dropped <isindex>. parse5 knows no \
+         <isindex>, so </span> closes it.",
+    ),
+    (
+        "<math><mi><![CDATA[x<y]]></mi></math>",
+        "The standard reads a CDATA section as text wherever the current element isn't HTML's, \
+         <mi> among them. parse5 reads one as a comment in a MathML text integration point \
+         such as <mi>, as it does in HTML.",
+    ),
 ];
 
 fn fixtures() -> (Schema, Value) {

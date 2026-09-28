@@ -253,6 +253,7 @@ const html = [
   "<p>x</p><html lang=en><p>y</p>",
   "<image src=x.png>",
   "<isindex>",
+  "<p><span>a<isindex>b</span>c</p>",
   "<listing>\nlisting</listing>",
 
   // Attributes with quotes.
@@ -296,6 +297,7 @@ const html = [
   "<svg><![CDATA[x<y]]></svg>",
   '<math><mi>x</mi><annotation-xml encoding="text/html"><p>y</p></annotation-xml></math>',
   "<math><mtext><b>bold</b></mtext></math>",
+  "<math><mi><![CDATA[x<y]]></mi></math>",
   "<svg viewBox='0 0 1 1' xlink:href='#a' xml:lang='en'><path d='M0'/></svg>",
   "<p><svg><p>breaks out</p></svg></p>",
   "<template><p>inner</p></template><p>outer</p>",

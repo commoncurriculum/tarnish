@@ -109,13 +109,18 @@ This example is `tarnish-html`'s doctest.
 - **Fragments and documents.** `parse_html` parses HTML as a `<template>`'s content holds it.
   `HtmlDom::parse_document` parses a whole document, whose `body()` a parser can read.
 - **Proven against jsdom.** `npm run test:js` records to `fixtures/dom.json` what ProseMirror
-  does in jsdom with prosemirror-schema-basic and prosemirror-schema-list: 293 parses of 283
+  does in jsdom with prosemirror-schema-basic and prosemirror-schema-list: 295 parses of 285
   HTML inputs, as a template's content and as a document, 448 documents written as HTML, 85
   inline styles and 40 DOM output specs. The crate's tests write those schemas' rules and
   `toDOM`s in Rust, and must build the same trees, documents and HTML.
-- **Where the trees differ.** The tests print both trees for two inputs: text moved out of a
-  table, which jsdom puts after the table instead of before it, and elements in a `<select>`,
-  which html5ever keeps, as the HTML standard now does, and jsdom's parse5 drops.
+- **Where the trees differ.** The tests print both trees for four inputs, where html5ever
+  follows the HTML standard and jsdom doesn't, but for `<isindex>`:
+  - text moved out of a table, which jsdom puts after the table instead of before it;
+  - elements in a `<select>`, which html5ever keeps, as the standard now does, and jsdom's
+    parse5 drops;
+  - a CDATA section in MathML's `<mi>`, text to html5ever and a comment to parse5;
+  - an end tag past an `<isindex>`, which html5ever still treats as special, as the standard
+    did before it dropped `<isindex>`.
 
 ### Elixir
 
