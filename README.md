@@ -118,7 +118,7 @@ This example is `tarnish-html`'s doctest.
 - **Proven against the linkedom fork.** `npm run test:js` records to `fixtures/dom.json` what
   ProseMirror does in the fork with prosemirror-schema-basic and prosemirror-schema-list: 297
   parses of 287 HTML inputs, as a template's content and as a document, 450 documents written
-  as HTML, 85 inline styles and 40 DOM output specs. The crate's tests write those schemas'
+  as HTML, 85 inline styles and 42 DOM output specs. The crate's tests write those schemas'
   rules and `toDOM`s in Rust, and must build the same trees, documents and HTML.
 - **Where the trees differ.** The tests print both trees for three inputs, where html5ever
   follows the HTML standard and parse5 8 doesn't, but for `<isindex>`:

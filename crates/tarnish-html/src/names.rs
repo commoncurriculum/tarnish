@@ -1,21 +1,83 @@
-//! Checking element and attribute names as the DOM does before it creates them, and the
-//! interfaces the standard gives elements, which `String(element)` names.
+//! The DOM's checks on the names `createElement`, `createElementNS`, `setAttribute` and
+//! `setAttributeNS` take: <https://dom.spec.whatwg.org/#namespaces>.
 
-use html5ever::{Namespace, Prefix, QualName, ns};
-use tarnish::{Error, Result};
+use std::fmt;
 
-/// The standard's valid element local name: an ASCII letter and then anything but whitespace,
-/// `/`, `>` and NUL, or else a `:`, `_` or non-ASCII character and then only those, ASCII
-/// alphanumerics, `-` and `.`.
-fn is_element_local_name(name: &str) -> bool {
+/// Which local name a name must be.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NameKind {
+    Element,
+    Attribute,
+}
+
+impl NameKind {
+    pub fn is_valid(self, name: &str) -> bool {
+        match self {
+            NameKind::Element => is_element_local_name(name),
+            NameKind::Attribute => is_attribute_local_name(name),
+        }
+    }
+
+    /// Refuse a local name as `createElement` or `setAttribute` does.
+    pub fn validate(self, name: &str) -> Result<(), NameError> {
+        match self.is_valid(name) {
+            true => Ok(()),
+            false => Err(invalid_character(name, self.noun())),
+        }
+    }
+
+    fn noun(self) -> &'static str {
+        match self {
+            NameKind::Element => "element local name",
+            NameKind::Attribute => "attribute local name",
+        }
+    }
+}
+
+/// A name the DOM refuses: the `DOMException` it throws, by its name and its message, which are
+/// the linkedom fork's. It displays as `"{name}: {message}"`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NameError {
+    /// `InvalidCharacterError` or `NamespaceError`.
+    pub name: &'static str,
+    pub message: String,
+}
+
+impl fmt::Display for NameError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {}", self.name, self.message)
+    }
+}
+
+impl std::error::Error for NameError {}
+
+impl From<NameError> for tarnish::Error {
+    fn from(error: NameError) -> Self {
+        tarnish::Error::Other(error.to_string())
+    }
+}
+
+fn invalid_character(name: &str, noun: &str) -> NameError {
+    NameError {
+        name: "InvalidCharacterError",
+        message: format!("\"{name}\" is not a valid {noun}"),
+    }
+}
+
+fn namespace_error(message: &str) -> NameError {
+    NameError {
+        name: "NamespaceError",
+        message: message.to_owned(),
+    }
+}
+
+const FORBIDDEN: [char; 8] = ['\0', '\t', '\n', '\x0c', '\r', ' ', '/', '>'];
+
+/// <https://dom.spec.whatwg.org/#valid-element-local-name>
+pub fn is_element_local_name(name: &str) -> bool {
     let mut characters = name.chars();
     match characters.next() {
-        Some(first) if first.is_ascii_alphabetic() => characters.all(|character| {
-            !matches!(
-                character,
-                '\0' | '\t' | '\n' | '\x0c' | '\r' | ' ' | '/' | '>'
-            )
-        }),
+        Some(first) if first.is_ascii_alphabetic() => !characters.as_str().contains(FORBIDDEN),
         Some(first) if matches!(first, ':' | '_') || !first.is_ascii() => {
             characters.all(|character| {
                 character.is_ascii_alphanumeric()
@@ -27,50 +89,27 @@ fn is_element_local_name(name: &str) -> bool {
     }
 }
 
-/// The standard's valid attribute local name: not empty, and no whitespace, `/`, `=`, `>` or NUL.
-fn is_attribute_local_name(name: &str) -> bool {
-    !name.is_empty() && !name.contains(['\0', '\t', '\n', '\x0c', '\r', ' ', '/', '=', '>'])
+/// <https://dom.spec.whatwg.org/#valid-attribute-local-name>
+pub fn is_attribute_local_name(name: &str) -> bool {
+    !name.is_empty() && !name.contains(FORBIDDEN) && !name.contains('=')
 }
 
-/// The standard's valid namespace prefix: not empty, and no whitespace, `/`, `>` or NUL.
+/// <https://dom.spec.whatwg.org/#valid-namespace-prefix>
 fn is_namespace_prefix(prefix: &str) -> bool {
-    !prefix.is_empty() && !prefix.contains(['\0', '\t', '\n', '\x0c', '\r', ' ', '/', '>'])
+    !prefix.is_empty() && !prefix.contains(FORBIDDEN)
 }
 
-fn invalid_character(name: &str, kind: &str) -> Error {
-    Error::Other(format!(
-        "InvalidCharacterError: \"{name}\" is not a valid {kind}"
-    ))
-}
+const XML: &str = "http://www.w3.org/XML/1998/namespace";
+const XMLNS: &str = "http://www.w3.org/2000/xmlns/";
 
-fn namespace_error(message: &str) -> Error {
-    Error::Other(format!("NamespaceError: {message}"))
-}
-
-/// Refuse a name `createElement` refuses.
-pub(crate) fn validate_element(name: &str) -> Result<()> {
-    match is_element_local_name(name) {
-        true => Ok(()),
-        false => Err(invalid_character(name, "element local name")),
-    }
-}
-
-/// Refuse a name `setAttribute` refuses.
-pub(crate) fn validate_attribute(name: &str) -> Result<()> {
-    match is_attribute_local_name(name) {
-        true => Ok(()),
-        false => Err(invalid_character(name, "attribute local name")),
-    }
-}
-
-/// The DOM's "validate and extract": the qualified name's namespace, prefix and local name, as
-/// `createElementNS` and `setAttributeNS` take them.
-pub(crate) fn validate_and_extract(
-    namespace: Option<&str>,
-    qualified: &str,
-    is_element: bool,
-) -> Result<QualName> {
-    let namespace = namespace.filter(|namespace| !namespace.is_empty());
+/// <https://dom.spec.whatwg.org/#validate-and-extract>: the namespace, `None` for the empty
+/// string, the prefix and the local name.
+pub fn validate_and_extract<'a>(
+    namespace: &'a str,
+    qualified: &'a str,
+    kind: NameKind,
+) -> Result<(Option<&'a str>, Option<&'a str>, &'a str), NameError> {
+    let namespace = Some(namespace).filter(|namespace| !namespace.is_empty());
     let (prefix, local) = match qualified.split_once(':') {
         Some((prefix, local)) => (Some(prefix), local),
         None => (None, qualified),
@@ -78,12 +117,7 @@ pub(crate) fn validate_and_extract(
     if let Some(prefix) = prefix.filter(|prefix| !is_namespace_prefix(prefix)) {
         return Err(invalid_character(prefix, "namespace prefix"));
     }
-    match is_element {
-        true => validate_element(local)?,
-        false => validate_attribute(local)?,
-    }
-    const XML: &str = "http://www.w3.org/XML/1998/namespace";
-    const XMLNS: &str = "http://www.w3.org/2000/xmlns/";
+    kind.validate(local)?;
     if prefix.is_some() && namespace.is_none() {
         return Err(namespace_error(
             "A prefix was given but no namespace was provided",
@@ -104,131 +138,38 @@ pub(crate) fn validate_and_extract(
             "The XMLNS namespace was given but neither the prefix nor qualifiedName was \"xmlns\"",
         ));
     }
-    Ok(QualName::new(
-        prefix.map(Prefix::from),
-        namespace.map_or(ns!(), Namespace::from),
-        local.into(),
-    ))
+    Ok((namespace, prefix, local))
 }
 
-/// The interface an element of this namespace and local name has.
-pub(crate) fn interface(namespace: &Namespace, local: &str) -> &'static str {
-    if *namespace == ns!(svg) {
-        return "SVGElement";
-    }
-    if *namespace == ns!(mathml) {
-        return "MathMLElement";
-    }
-    if *namespace != ns!(html) {
-        return "Element";
-    }
-    match local {
-        "applet" | "bgsound" | "blink" | "isindex" | "keygen" | "multicol" | "nextid"
-        | "spacer" => "HTMLUnknownElement",
-        "abbr" | "address" | "article" | "aside" | "b" | "bdi" | "bdo" | "cite" | "code" | "dd"
-        | "dfn" | "dt" | "em" | "figcaption" | "figure" | "footer" | "header" | "hgroup" | "i"
-        | "kbd" | "main" | "mark" | "nav" | "noscript" | "rp" | "rt" | "ruby" | "s" | "samp"
-        | "search" | "section" | "small" | "strong" | "sub" | "summary" | "sup" | "u" | "var"
-        | "wbr" | "acronym" | "basefont" | "big" | "center" | "nobr" | "noembed" | "noframes"
-        | "plaintext" | "rb" | "rtc" | "strike" | "tt" => "HTMLElement",
-        "a" => "HTMLAnchorElement",
-        "area" => "HTMLAreaElement",
-        "audio" => "HTMLAudioElement",
-        "base" => "HTMLBaseElement",
-        "body" => "HTMLBodyElement",
-        "br" => "HTMLBRElement",
-        "button" => "HTMLButtonElement",
-        "canvas" => "HTMLCanvasElement",
-        "data" => "HTMLDataElement",
-        "datalist" => "HTMLDataListElement",
-        "details" => "HTMLDetailsElement",
-        "dialog" => "HTMLDialogElement",
-        "dir" => "HTMLDirectoryElement",
-        "div" => "HTMLDivElement",
-        "dl" => "HTMLDListElement",
-        "embed" => "HTMLEmbedElement",
-        "fieldset" => "HTMLFieldSetElement",
-        "font" => "HTMLFontElement",
-        "form" => "HTMLFormElement",
-        "frame" => "HTMLFrameElement",
-        "frameset" => "HTMLFrameSetElement",
-        "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => "HTMLHeadingElement",
-        "head" => "HTMLHeadElement",
-        "hr" => "HTMLHRElement",
-        "html" => "HTMLHtmlElement",
-        "iframe" => "HTMLIFrameElement",
-        "img" => "HTMLImageElement",
-        "input" => "HTMLInputElement",
-        "label" => "HTMLLabelElement",
-        "legend" => "HTMLLegendElement",
-        "li" => "HTMLLIElement",
-        "link" => "HTMLLinkElement",
-        "map" => "HTMLMapElement",
-        "marquee" => "HTMLMarqueeElement",
-        "menu" => "HTMLMenuElement",
-        "meta" => "HTMLMetaElement",
-        "meter" => "HTMLMeterElement",
-        "del" | "ins" => "HTMLModElement",
-        "object" => "HTMLObjectElement",
-        "ol" => "HTMLOListElement",
-        "optgroup" => "HTMLOptGroupElement",
-        "option" => "HTMLOptionElement",
-        "output" => "HTMLOutputElement",
-        "p" => "HTMLParagraphElement",
-        "param" => "HTMLParamElement",
-        "picture" => "HTMLPictureElement",
-        "listing" | "pre" | "xmp" => "HTMLPreElement",
-        "progress" => "HTMLProgressElement",
-        "blockquote" | "q" => "HTMLQuoteElement",
-        "script" => "HTMLScriptElement",
-        "select" => "HTMLSelectElement",
-        "slot" => "HTMLSlotElement",
-        "source" => "HTMLSourceElement",
-        "span" => "HTMLSpanElement",
-        "style" => "HTMLStyleElement",
-        "caption" => "HTMLTableCaptionElement",
-        "th" | "td" => "HTMLTableCellElement",
-        "col" | "colgroup" => "HTMLTableColElement",
-        "table" => "HTMLTableElement",
-        "time" => "HTMLTimeElement",
-        "title" => "HTMLTitleElement",
-        "tr" => "HTMLTableRowElement",
-        "thead" | "tbody" | "tfoot" => "HTMLTableSectionElement",
-        "template" => "HTMLTemplateElement",
-        "textarea" => "HTMLTextAreaElement",
-        "track" => "HTMLTrackElement",
-        "ul" => "HTMLUListElement",
-        "video" => "HTMLVideoElement",
-        _ if is_custom_element_name(local) => "HTMLElement",
-        _ => "HTMLUnknownElement",
-    }
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-/// HTML's valid custom element name: a lower-case ASCII letter, a hyphen among its characters,
-/// no upper-case ASCII letter, and not one of the names SVG and MathML already use.
-fn is_custom_element_name(name: &str) -> bool {
-    const RESERVED: [&str; 8] = [
-        "annotation-xml",
-        "color-profile",
-        "font-face",
-        "font-face-src",
-        "font-face-uri",
-        "font-face-format",
-        "font-face-name",
-        "missing-glyph",
-    ];
-    let mut characters = name.chars();
-    characters
-        .next()
-        .is_some_and(|first| first.is_ascii_lowercase())
-        && name.contains('-')
-        && characters.all(|character| {
-            matches!(character,
-                '-' | '.' | '0'..='9' | '_' | 'a'..='z' | '\u{b7}' | '\u{c0}'..='\u{d6}'
-                | '\u{d8}'..='\u{f6}' | '\u{f8}'..='\u{37d}' | '\u{37f}'..='\u{1fff}'
-                | '\u{200c}'..='\u{200d}' | '\u{203f}'..='\u{2040}' | '\u{2070}'..='\u{218f}'
-                | '\u{2c00}'..='\u{2fef}' | '\u{3001}'..='\u{d7ff}' | '\u{f900}'..='\u{fdcf}'
-                | '\u{fdf0}'..='\u{fffd}' | '\u{10000}'..='\u{effff}')
-        })
-        && !RESERVED.contains(&name)
+    #[test]
+    fn names_are_checked_as_the_dom_checks_them() {
+        assert!(is_element_local_name("a\u{1}b"));
+        assert!(is_element_local_name("_a.b"));
+        assert!(!is_element_local_name("_a~b"));
+        assert!(!is_element_local_name("1a"));
+        assert!(!is_element_local_name("a b"));
+        assert!(is_attribute_local_name("@x"));
+        assert!(!is_attribute_local_name("a=b"));
+        assert!(!is_attribute_local_name(""));
+        let error = NameKind::Element.validate("1a").expect_err("refused");
+        assert_eq!(error.name, "InvalidCharacterError");
+        assert_eq!(error.message, "\"1a\" is not a valid element local name");
+        assert_eq!(
+            validate_and_extract("urn:x", "p:q", NameKind::Attribute),
+            Ok((Some("urn:x"), Some("p"), "q"))
+        );
+        assert_eq!(
+            validate_and_extract("", "q", NameKind::Element),
+            Ok((None, None, "q"))
+        );
+        let error = validate_and_extract("", "p:q", NameKind::Element).expect_err("refused");
+        assert_eq!(
+            error.to_string(),
+            "NamespaceError: A prefix was given but no namespace was provided"
+        );
+    }
 }

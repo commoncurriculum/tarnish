@@ -5,11 +5,12 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use html5ever::{LocalName, QualName, local_name, ns};
+use html5ever::{LocalName, Namespace, Prefix, QualName, local_name, ns};
 use tarnish::dom::{Dom, NodeKind};
 use tarnish::{Error, Result, Text, Value, js};
 
-use crate::names;
+use crate::interface::interface;
+use crate::names::{self, NameKind};
 use crate::select::{self, Selectors};
 use crate::serialize;
 use crate::tree::{Attr, Data, Element, FOLLOWING, NodeId, PRECEDING, Tree};
@@ -257,6 +258,14 @@ fn node_name(tree: &Tree, id: NodeId) -> String {
     }
 }
 
+fn qual_name((namespace, prefix, local): (Option<&str>, Option<&str>, &str)) -> QualName {
+    QualName::new(
+        prefix.map(Prefix::from),
+        namespace.map_or(ns!(), Namespace::from),
+        LocalName::from(local),
+    )
+}
+
 fn hierarchy_error(message: &str) -> Error {
     Error::Other(format!("HierarchyRequestError: {message}"))
 }
@@ -403,11 +412,14 @@ impl Dom for HtmlDom {
     fn create_element(&self, namespace: Option<&str>, name: &str) -> Result<HtmlNode> {
         let name = match namespace {
             None => {
-                names::validate_element(name)?;
+                NameKind::Element.validate(name)?;
                 let local = LocalName::from(name.to_ascii_lowercase());
                 QualName::new(None, ns!(html), local)
             }
-            Some(namespace) => names::validate_and_extract(Some(namespace), name, true)?,
+            Some(namespace) => {
+                let name = names::validate_and_extract(namespace, name, NameKind::Element)?;
+                qual_name(name)
+            }
         };
         let mut tree = self.tree();
         let is_template = name.ns == ns!(html) && name.local == local_name!("template");
@@ -445,7 +457,7 @@ impl Dom for HtmlDom {
         let element = tree.element_mut(id).expect("an element");
         match namespace {
             None => {
-                names::validate_attribute(name)?;
+                NameKind::Attribute.validate(name)?;
                 let name = match element.is_html() {
                     true => name.to_ascii_lowercase(),
                     false => name.to_owned(),
@@ -463,7 +475,8 @@ impl Dom for HtmlDom {
                 }
             }
             Some(namespace) => {
-                let name = names::validate_and_extract(Some(namespace), name, false)?;
+                let name = names::validate_and_extract(namespace, name, NameKind::Attribute)?;
+                let name = qual_name(name);
                 let existing = element
                     .attrs
                     .iter_mut()
@@ -512,7 +525,7 @@ impl Dom for HtmlDom {
             }
             Data::Element(element) => format!(
                 "[object {}]",
-                names::interface(&element.name.ns, &element.name.local)
+                interface(&element.name.ns, &element.name.local)
             ),
             Data::Text(_) => "[object Text]".into(),
             Data::Comment(_) => "[object Comment]".into(),
