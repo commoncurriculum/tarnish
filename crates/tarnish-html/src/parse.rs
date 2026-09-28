@@ -27,7 +27,6 @@ fn options() -> ParseOpts {
     }
 }
 
-/// Parse a document into a new document node.
 pub(crate) fn document(tree: &mut Tree, html: &str) -> NodeId {
     let document = tree.push(Data::Document);
     let sink = Sink::new(tree, document);
@@ -65,7 +64,8 @@ impl<'t> Sink<'t> {
     }
 }
 
-/// The attributes, with the empty prefix html5ever gives `xmlns` as none, as jsdom does.
+/// The attributes, with the empty prefix html5ever gives `xmlns` as none, as the standard's
+/// "adjust foreign attributes" does.
 fn attrs(attrs: Vec<Attribute>) -> Vec<Attr> {
     let attrs = attrs.into_iter().map(|mut attr| {
         if attr
@@ -207,7 +207,7 @@ impl TreeSink for Sink<'_> {
             .is_some_and(|element| element.integration_point)
     }
 
-    // parse5 7, which jsdom 20 parses with, has no declarative shadow roots.
+    // DOMParser and innerHTML never make declarative shadow roots; markup5ever's default does.
     fn allow_declarative_shadow_roots(&self, _: &NodeId) -> bool {
         false
     }

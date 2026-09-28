@@ -2,10 +2,9 @@
 import ist from "ist"
 import {DOMParser, DOMSerializer, DOMOutputSpec, Schema} from "prosemirror-model"
 import {schema as basic} from "prosemirror-schema-basic"
+import {parseHTML} from "linkedom"
 
-// @ts-ignore
-import {JSDOM} from "jsdom"
-const document = new JSDOM().window.document
+const {document} = parseHTML("")
 
 function html(spec: DOMOutputSpec) {
   return (DOMSerializer.renderSpec(document, spec).dom as HTMLElement).outerHTML

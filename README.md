@@ -353,8 +353,9 @@ tarnish reads two things:
   ProseMirror has.
 
 HTML comes in through the `Dom` trait. `tarnish-html` parses it with html5ever, which follows the
-HTML standard as parse5 does, and holds inline styles in stylo, Servo's CSS engine. oxc and Yuku have no HTML parser, and Biome's builds a
-lossless syntax tree for its formatter and isn't published as a crate.
+HTML standard, and holds inline styles in stylo, Servo's CSS engine. oxc and Yuku have no HTML
+parser, and Biome's builds a lossless syntax tree for its formatter and isn't published as a
+crate.
 
 - **Yuku** is a JavaScript and TypeScript compiler written in Zig. Its idea of a tree as flat
   arrays of fixed-size nodes linked by index, instead of a tree of heap objects, is the idea

@@ -9,6 +9,9 @@
 // - Each inline style records what an element's style holds with the style attribute set to it,
 //   and the attribute that setting style.cssText to it writes.
 // - Each DOM output spec records the outerHTML of what DOMSerializer.renderSpec makes of it.
+// - Each node records what an attribute set to it holds, as renderSpec sets one to a
+//   {dom, contentDOM}: a link's href, resolved against its document's base URL, or else the name
+//   of its interface.
 import { readFileSync, writeFileSync } from "node:fs"
 import { parseHTML } from "linkedom"
 import { DOMParser, DOMSerializer, Node, Schema } from "prosemirror-model"
@@ -428,8 +431,6 @@ const serializes = docs.map(doc => ({
   }),
 }))
 
-// cssstyle rewrites or refuses more values than tarnish-html's port does, which reads those mark
-// rules read: fonts and colors. See crates/tarnish-html/src/style/mod.rs.
 const css = [
   "font-weight: bold",
   "font-weight:bold;font-style:italic",
@@ -589,9 +590,8 @@ const renders = specs.map(spec => ({
   }),
 }))
 
-// What an attribute set to a node holds, as renderSpec sets one to a {dom, contentDOM}: the name of
-// the node's interface, or a link's href, resolved against the document's base URL. An element is
-// named as a DOM spec names it; a document, if given, is parsed to make the node in.
+// An element is named as a DOM spec names it. A record's document, if it has one, is parsed to make
+// the node in.
 const tags = [
   ...["a", "abbr", "acronym", "address", "applet", "area", "article", "aside", "audio", "b", "base", "basefont"],
   ...["bdi", "bdo", "bgsound", "big", "blink", "blockquote", "body", "br", "button", "canvas", "caption"],
