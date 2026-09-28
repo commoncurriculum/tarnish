@@ -227,22 +227,8 @@ pub(crate) enum Replaced<'a> {
     Child(usize, Node<'a>),
 }
 
-/// The document `from` is in, with `from` to `to` replaced by `slice`.
-pub(crate) fn replace<'a>(
-    from: &ResolvedPos<'a>,
-    to: &ResolvedPos<'a>,
-    slice: &Slice<'a>,
-) -> Result<Node<'a>> {
-    Ok(match replace_top(from, to, slice)? {
-        Replaced::Node(node) => node,
-        Replaced::Child(index, child) => {
-            let node = from.node(0);
-            node.copy(node.content().replace_child(index, child))
-        }
-    })
-}
-
-/// `replace`, leaving the top node for the caller to put a child it made anew in.
+/// The document `from` is in, with `from` to `to` replaced by `slice`, leaving the top node for
+/// the caller to put a child it made anew in.
 pub(crate) fn replace_top<'a>(
     from: &ResolvedPos<'a>,
     to: &ResolvedPos<'a>,

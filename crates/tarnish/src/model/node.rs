@@ -16,7 +16,6 @@ use crate::chunk::{ASCII, Builder, Chunk, EXTERN, Kid, NODES, Record, TEXT_NODE,
 use crate::error::{Error, Result};
 use crate::js::Json;
 use crate::json::{self, Map};
-use crate::stack;
 use crate::text::Text;
 
 /// A node of a document: a record in a chunk. Nodes are persistent: changing one writes a new
@@ -120,7 +119,7 @@ impl<'a> Node<'a> {
     /// A text node, which may not be empty.
     pub(crate) fn new_text(schema: &Schema, text: &Text, marks: &Marks<'a>) -> Result<Node<'a>> {
         if text.is_empty() {
-            return Err(Error::Range("Empty text nodes are not allowed".into()));
+            return Err(empty_text());
         }
         Ok(Node::build(schema, |builder| {
             let marks = marks.write(builder);
@@ -340,25 +339,26 @@ impl<'a> Node<'a> {
     ///
     /// When this isn't a text node.
     pub fn with_text(&self, text: Text) -> Result<Node<'a>> {
-        assert!(
-            self.is_text(),
-            "with_text on a {} node",
-            self.node_type().name()
-        );
+        let Some(own) = self.text() else {
+            panic!("with_text on a {} node", self.node_type().name());
+        };
         if text.is_empty() {
-            return Err(Error::Range("Empty text nodes are not allowed".into()));
+            return Err(empty_text());
         }
-        Ok(self.with_nonempty_text(&text))
+        if own == text {
+            return Ok(self.clone());
+        }
+        Ok(Node::build(self.schema(), |builder| {
+            let marks = builder.reference_markup(self.chunk(), self.record.marks);
+            builder.text_of(self.record.ty, marks, &text)
+        }))
     }
 
-    pub(crate) fn with_nonempty_text(&self, text: &Text) -> Node<'a> {
-        if self.text().is_some_and(|own| own == *text) {
-            return self.clone();
-        }
-        Node::build(self.chunk().schema(), |builder| {
-            let marks = builder.reference_markup(self.chunk(), self.record.marks);
-            builder.text_of(self.record.ty, marks, text)
-        })
+    /// A text node's text, and `from` and `to` as UTF-16 offsets clamped to it.
+    fn text_range(&self, from: usize, to: usize) -> Option<(TextRef<'_>, usize, usize)> {
+        let text = self.text()?;
+        let to = to.min(text.len());
+        Some((text, from.min(to), to))
     }
 
     /// This text node's text from UTF-16 offset `from` to `to`, which mustn't be empty: its own
@@ -410,9 +410,7 @@ impl<'a> Node<'a> {
         from: usize,
         to: usize,
     ) -> Option<Kid> {
-        let text = self.text()?;
-        let to = to.min(text.len());
-        let from = from.min(to);
+        let (text, from, to) = self.text_range(from, to)?;
         Some(match from == 0 && to == text.len() {
             true => builder.kid(self.chunk(), self.id, to),
             false => {
@@ -458,15 +456,9 @@ impl<'a> Node<'a> {
     /// The node with only its content between `from` and `to`; for a text node, only that part
     /// of its text, which may not be empty.
     pub fn cut(&self, from: usize, to: usize) -> Result<Node<'a>> {
-        match self.text() {
-            Some(text) => {
-                let to = to.min(text.len());
-                let from = from.min(to);
-                if from == to {
-                    return Err(Error::Range("Empty text nodes are not allowed".into()));
-                }
-                Ok(self.text_part(text, from, to))
-            }
+        match self.text_range(from, to) {
+            Some((_, from, to)) if from == to => Err(empty_text()),
+            Some((text, from, to)) => Ok(self.text_part(text, from, to)),
             None => Ok(self.cut_content(from, to)),
         }
     }
@@ -481,9 +473,7 @@ impl<'a> Node<'a> {
     /// A text node with only its text from `from` to `to`, which mustn't be empty; `None` for
     /// a node that isn't text.
     pub(crate) fn cut_text(&self, from: usize, to: usize) -> Option<Node<'a>> {
-        let text = self.text()?;
-        let to = to.min(text.len());
-        let from = from.min(to);
+        let (text, from, to) = self.text_range(from, to)?;
         Some(self.text_part(text, from, to))
     }
 
@@ -514,7 +504,7 @@ impl<'a> Node<'a> {
 
     /// The document with `from` to `to` replaced by `slice`, which must fit there.
     pub fn replace(&self, from: usize, to: usize, slice: &Slice<'a>) -> Result<Node<'a>> {
-        replace::replace(&self.resolve(from)?, &self.resolve(to)?, slice)
+        self.clone().into_replaced(from, to, slice)
     }
 
     /// [`replace`](Self::replace), on a document the caller gives up. When the range lies inside
@@ -803,26 +793,6 @@ impl<'a> Node<'a> {
         }
     }
 
-    /// Raise an error if this node or a descendant doesn't fit the schema.
-    pub fn check(&self) -> Result<()> {
-        let mut walk = Walk {
-            path: Vec::new(),
-            kids: Vec::new(),
-        };
-        match walk.check(self.view()) {
-            Ok(()) => Ok(()),
-            Err(Failed::Error(error)) => Err(error),
-            // The error describes the content, for which the schema's hooks need nodes.
-            Err(Failed::Content) => {
-                let mut node = self.clone();
-                for index in walk.path {
-                    node = node.child(index as usize)?;
-                }
-                node.node_type().check_content(node.content())
-            }
-        }
-    }
-
     pub fn from_json<'j>(schema: &Schema, json: impl Json<'j>) -> Result<Node<'static>> {
         let mut reader = Reader::new(schema);
         let id = reader.node(json)?;
@@ -853,133 +823,8 @@ fn set_child<'a>(
     Some(())
 }
 
-enum Failed {
-    /// The content of the node the path leads to doesn't fit its type.
-    Content,
-    Error(Error),
-}
-
-impl From<Error> for Failed {
-    fn from(error: Error) -> Failed {
-        Failed::Error(error)
-    }
-}
-
-/// A walk over a document checking it: the path of child indices to the node it's at, and the
-/// children of the nodes on the path, each node's after its parent's, read once.
-struct Walk<'c> {
-    path: Vec<u32>,
-    kids: Vec<NodeRef<'c>>,
-}
-
-impl<'c> Walk<'c> {
-    fn check(&mut self, node: NodeRef<'c>) -> Result<(), Failed> {
-        let node_type = node.node_type();
-        let data = node_type.data();
-        let schema = node_type.schema();
-        let base = self.kids.len();
-        self.kids.extend(node.children());
-        let kids = &self.kids[base..];
-        let types = kids
-            .iter()
-            .map(|kid| (kid.chunk.schema() == schema).then(|| usize::from(kid.record.ty)));
-        let allowed = data.mark_set.is_none()
-            || kids
-                .iter()
-                .all(|kid| kid.marks().iter().all(|mark| data.allows_mark(mark.rank())));
-        if !(data.content.accepts(types) && allowed) {
-            return Err(Failed::Content);
-        }
-        data.attrs.check_ref(node.attrs())?;
-        check_marks(node)?;
-        for index in base..self.kids.len() {
-            let child = self.kids[index];
-            // Text has no content and no attributes, so only its marks can be wrong.
-            if child.is_text() {
-                check_marks(child)?;
-                continue;
-            }
-            self.path.push((index - base) as u32);
-            stack::grow(|| self.check(child))?;
-            self.path.pop();
-        }
-        self.kids.truncate(base);
-        Ok(())
-    }
-}
-
-/// Checks a node's marks' attributes, and that they make a set.
-#[inline]
-fn check_marks(node: NodeRef) -> Result<(), Failed> {
-    // Set 0 is the empty set in every chunk.
-    if node.record.marks == 0 {
-        return Ok(());
-    }
-    let marks = node.marks();
-    let mut count = 0;
-    for mark in marks.iter() {
-        mark.mark_type().data().attrs.check_ref(mark.attrs())?;
-        count += 1;
-    }
-    // Adding one mark to no marks gives that mark, so only a longer set can be invalid.
-    if count > 1 && !valid_set(marks) {
-        return Err(Failed::Error(invalid_set(node, marks)));
-    }
-    Ok(())
-}
-
-#[cold]
-fn invalid_set(node: NodeRef, marks: super::view::SetRef) -> Error {
-    let names: Vec<&str> = marks.iter().map(|mark| mark.mark_type().name()).collect();
-    Error::Range(format!(
-        "Invalid collection of marks for node {}: {}",
-        node.node_type().name(),
-        names.join(",")
-    ))
-}
-
-/// Whether adding each mark in turn to no marks gives the set back: sorted by rank, with no
-/// mark excluding another, and no mark twice.
-fn valid_set(marks: super::view::SetRef) -> bool {
-    let marks: Vec<_> = marks.iter().collect();
-    let mut built: Vec<super::view::MarkRef> = Vec::with_capacity(marks.len());
-    for &mark in &marks {
-        let mark_type = mark.mark_type();
-        let mut copy: Option<Vec<super::view::MarkRef>> = None;
-        let mut placed = false;
-        let mut kept = true;
-        for (index, &other) in built.iter().enumerate() {
-            if mark.equals(other) {
-                kept = false;
-                break;
-            }
-            let other_type = other.mark_type();
-            if mark_type.excludes(&other_type) {
-                copy.get_or_insert_with(|| built[..index].to_vec());
-            } else if other_type.excludes(&mark_type) {
-                kept = false;
-                break;
-            } else {
-                if !placed && other_type.rank() > mark_type.rank() {
-                    copy.get_or_insert_with(|| built[..index].to_vec())
-                        .push(mark);
-                    placed = true;
-                }
-                if let Some(copy) = &mut copy {
-                    copy.push(other);
-                }
-            }
-        }
-        if !kept {
-            continue;
-        }
-        let mut next = copy.unwrap_or_else(|| built.clone());
-        if !placed {
-            next.push(mark);
-        }
-        built = next;
-    }
-    built.len() == marks.len() && built.iter().zip(&marks).all(|(a, b)| a.equals(*b))
+fn empty_text() -> Error {
+    Error::Range("Empty text nodes are not allowed".into())
 }
 
 impl PartialEq for Node<'_> {

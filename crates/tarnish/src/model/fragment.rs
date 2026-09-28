@@ -319,7 +319,9 @@ impl<'a> Fragment<'a> {
     }
 
     /// The children, borrowed.
-    pub(crate) fn refs(&self) -> impl DoubleEndedIterator<Item = NodeRef<'_>> + ExactSizeIterator {
+    pub(crate) fn refs(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = NodeRef<'_>> + ExactSizeIterator + Clone {
         (0..self.child_count()).map(|index| self.child_ref(index))
     }
 

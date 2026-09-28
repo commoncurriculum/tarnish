@@ -9,6 +9,7 @@ use super::content::{Automaton, ContentMatch};
 use super::fragment::Fragment;
 use super::mark::{Mark, Marks};
 use super::node::Node;
+use super::view::NodeRef;
 use crate::error::{Error, Result};
 use crate::js::Given;
 use crate::json::Map;
@@ -97,10 +98,25 @@ impl NodeTypeData {
         !(self.is_text || self.attrs.has_required())
     }
 
-    pub fn allows_mark(&self, rank: usize) -> bool {
-        self.mark_set
-            .as_ref()
-            .is_none_or(|allowed| allowed.contains(&rank))
+    /// Whether these children, in order, are content a node of the type may hold, `schema`
+    /// being the type's.
+    pub fn valid_content<'c>(
+        &self,
+        schema: &Schema,
+        children: impl Iterator<Item = NodeRef<'c>> + Clone,
+    ) -> bool {
+        let types = children
+            .clone()
+            .map(|child| (child.chunk.schema() == schema).then(|| usize::from(child.record.ty)));
+        self.content.accepts(types)
+            && self.mark_set.as_ref().is_none_or(|allowed| {
+                children.into_iter().all(|child| {
+                    child
+                        .marks()
+                        .iter()
+                        .all(|mark| mark.chunk.schema() == schema && allowed.contains(&mark.rank()))
+                })
+            })
     }
 }
 
@@ -630,17 +646,7 @@ impl<'s> NodeType<'s> {
     }
 
     pub fn valid_content(&self, content: &Fragment) -> bool {
-        let types = content.refs().map(|child| {
-            (child.node_type().schema == self.schema).then(|| usize::from(child.record.ty))
-        });
-        self.data().content.accepts(types)
-            && (self.data().mark_set.is_none()
-                || content.refs().all(|child| {
-                    child
-                        .marks()
-                        .iter()
-                        .all(|mark| self.allows_mark_type(&mark.mark_type()))
-                }))
+        self.data().valid_content(self.schema, content.refs())
     }
 
     pub fn check_content(&self, content: &Fragment) -> Result<()> {
