@@ -6,13 +6,13 @@ use std::collections::HashMap;
 use std::hash::BuildHasher;
 use std::sync::Arc;
 
-use super::value::{Kind, Tag, ValueRef};
+use super::value::{JsonView, Kind, Tag};
 use super::{
     ASCII, BINDING, Chunk, ELEMENTS, ENTRIES, EXTERN, EXTERNS, HEADER, HELD_AS_UNITS, IMPORTS,
     KIDS, Kid, LOCAL, MAGIC, MARKS, MEMBERS, NODES, Record, SECTIONS, SETS, STRINGS, TEXT,
     TEXT_NODE, UNITS, VALUES, corrupt,
 };
-use crate::json::Value;
+use crate::model::compare_deep::deep_equal;
 use crate::model::{Schema, TextRef};
 use crate::stack;
 use crate::text::Text;
@@ -286,30 +286,31 @@ impl<'a> Builder<'a> {
         written
     }
 
-    pub fn value(&mut self, value: &Value) -> u32 {
-        match value {
-            Value::Null => self.push_value(Tag::Null, 0, 0),
-            Value::Bool(false) => self.push_value(Tag::False, 0, 0),
-            Value::Bool(true) => self.push_value(Tag::True, 0, 0),
-            Value::Number(number) => self.number(number),
-            Value::String(string) => {
+    /// A value written here, from wherever it's held.
+    pub fn write<'v>(&mut self, value: impl JsonView<'v>) -> u32 {
+        match value.kind() {
+            Kind::Null => self.push_value(Tag::Null, 0, 0),
+            Kind::Bool(false) => self.push_value(Tag::False, 0, 0),
+            Kind::Bool(true) => self.push_value(Tag::True, 0, 0),
+            Kind::Number(number) => self.number(&number),
+            Kind::String(string) => {
                 let (start, len) = self.string(string);
                 self.push_value(Tag::String, start, len)
             }
-            Value::Array(items) => {
+            Kind::Array(_) => {
                 let base = self.scratch.items.len();
-                for item in items {
-                    let item = stack::grow(|| self.value(item));
+                for item in value.items() {
+                    let item = stack::grow(|| self.write(item));
                     self.scratch.items.push(item);
                 }
                 self.array(base)
             }
-            Value::Object(map) => {
+            Kind::Object(_) => {
                 let base = self.scratch.entries.len();
-                for (key, value) in map {
-                    let value = stack::grow(|| self.value(value));
+                for (key, item) in value.entries() {
+                    let item = stack::grow(|| self.write(item));
                     let (start, len) = self.key(key);
-                    self.scratch.entries.push((start, len, value));
+                    self.scratch.entries.push((start, len, item));
                 }
                 self.object(base)
             }
@@ -323,7 +324,7 @@ impl<'a> Builder<'a> {
         }
         let base = self.scratch.entries.len();
         for (key, value) in map {
-            let value = stack::grow(|| self.value(value));
+            let value = stack::grow(|| self.write(value));
             let (start, len) = self.key(key);
             self.scratch.entries.push((start, len, value));
         }
@@ -377,37 +378,6 @@ impl<'a> Builder<'a> {
         self.object(base)
     }
 
-    /// A value in another chunk, copied into this one.
-    pub fn copy_value(&mut self, value: ValueRef) -> u32 {
-        match value.kind() {
-            Kind::Null => self.push_value(Tag::Null, 0, 0),
-            Kind::Bool(false) => self.push_value(Tag::False, 0, 0),
-            Kind::Bool(true) => self.push_value(Tag::True, 0, 0),
-            Kind::Number(number) => self.number(&number),
-            Kind::String(string) => {
-                let (start, len) = self.string(string);
-                self.push_value(Tag::String, start, len)
-            }
-            Kind::Array(..) => {
-                let base = self.scratch.items.len();
-                for item in value.items() {
-                    let item = stack::grow(|| self.copy_value(item));
-                    self.scratch.items.push(item);
-                }
-                self.array(base)
-            }
-            Kind::Object(..) => {
-                let base = self.scratch.entries.len();
-                for (key, item) in value.entries() {
-                    let item = stack::grow(|| self.copy_value(item));
-                    let (start, len) = self.key(key);
-                    self.scratch.entries.push((start, len, item));
-                }
-                self.object(base)
-            }
-        }
-    }
-
     /// The value of a node type's default attributes, written once.
     pub fn defaults(&mut self, type_index: usize, defaults: &crate::json::Map) -> u32 {
         if defaults.is_empty() {
@@ -421,7 +391,7 @@ impl<'a> Builder<'a> {
         }
         let base = self.scratch.entries.len();
         for (key, value) in defaults {
-            let value = self.value(value);
+            let value = self.write(value);
             let (start, len) = self.key(key);
             self.scratch.entries.push((start, len, value));
         }
@@ -437,17 +407,23 @@ impl<'a> Builder<'a> {
         u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
     }
 
-    fn written_string(&self, start: u32, len: u32) -> &[u8] {
-        &self.scratch.sections[STRINGS][start as usize..(start + len) as usize]
+    fn written_str(&self, start: u32, len: u32) -> &str {
+        let bytes = &self.scratch.sections[STRINGS][start as usize..(start + len) as usize];
+        std::str::from_utf8(bytes).unwrap_or_else(|_| corrupt())
     }
 
-    /// Whether two sets written here hold equal marks, as `Mark.sameSet` compares them.
+    /// Whether two sets written here hold equal marks, as `Mark.sameSet` compares them. Their
+    /// marks, and the marks' attributes, must be written here too, as a reader writes them.
     pub fn sets_equal(&self, a: u32, b: u32) -> bool {
         if a == b {
             return true;
         }
         let (a_start, a_len) = (self.written(SETS, a, 0), self.written(SETS, a, 1));
         let (b_start, b_len) = (self.written(SETS, b, 0), self.written(SETS, b, 1));
+        let attrs = |mark| Written {
+            builder: self,
+            index: self.written(MARKS, mark, 1),
+        };
         a_len == b_len
             && (0..a_len).all(|at| {
                 let (a, b) = (
@@ -455,80 +431,9 @@ impl<'a> Builder<'a> {
                     self.written(MEMBERS, b_start + at, 0),
                 );
                 a == b
-                    || (a & EXTERN == 0
-                        && b & EXTERN == 0
-                        && self.written(MARKS, a, 0) == self.written(MARKS, b, 0)
-                        && self.values_equal(self.written(MARKS, a, 1), self.written(MARKS, b, 1)))
+                    || (self.written(MARKS, a, 0) == self.written(MARKS, b, 0)
+                        && deep_equal(attrs(a), attrs(b)))
             })
-    }
-
-    /// `compareDeep` of two values written here.
-    fn values_equal(&self, a: u32, b: u32) -> bool {
-        if a == b {
-            return true;
-        }
-        if a & EXTERN != 0 || b & EXTERN != 0 {
-            return false;
-        }
-        let tag = |value| Tag::from_word(self.written(VALUES, value, 0));
-        let words = |value| {
-            (
-                self.written(VALUES, value, 1),
-                self.written(VALUES, value, 2),
-            )
-        };
-        let number = |value| {
-            let (low, high) = words(value);
-            let bits = u64::from(low) | u64::from(high) << 32;
-            match tag(value) {
-                Tag::Int => bits as i64 as f64,
-                Tag::UInt => bits as f64,
-                _ => f64::from_bits(bits),
-            }
-        };
-        let ((a_start, a_len), (b_start, b_len)) = (words(a), words(b));
-        match (tag(a), tag(b)) {
-            (Tag::Int | Tag::UInt | Tag::Float, Tag::Int | Tag::UInt | Tag::Float) => {
-                number(a) == number(b)
-            }
-            (Tag::String, Tag::String) => {
-                self.written_string(a_start, a_len) == self.written_string(b_start, b_len)
-            }
-            (Tag::Array, Tag::Array) => {
-                a_len == b_len
-                    && (0..a_len).all(|at| {
-                        let (a, b) = (
-                            self.written(ELEMENTS, a_start + at, 0),
-                            self.written(ELEMENTS, b_start + at, 0),
-                        );
-                        stack::grow(|| self.values_equal(a, b))
-                    })
-            }
-            (Tag::Object, Tag::Object) => {
-                a_len == b_len
-                    && (0..a_len).all(|at| {
-                        let key = self.written_string(
-                            self.written(ENTRIES, a_start + at, 0),
-                            self.written(ENTRIES, a_start + at, 1),
-                        );
-                        let value = self.written(ENTRIES, a_start + at, 2);
-                        (0..b_len).any(|other| {
-                            let other_key = self.written_string(
-                                self.written(ENTRIES, b_start + other, 0),
-                                self.written(ENTRIES, b_start + other, 1),
-                            );
-                            other_key == key
-                                && stack::grow(|| {
-                                    self.values_equal(
-                                        value,
-                                        self.written(ENTRIES, b_start + other, 2),
-                                    )
-                                })
-                        })
-                    })
-            }
-            (a, b) => a == b,
-        }
     }
 
     /// The text of a text node written here.
@@ -570,7 +475,7 @@ impl<'a> Builder<'a> {
         } else {
             let base = self.scratch.entries.len();
             for (key, value) in defaults {
-                let value = self.value(value);
+                let value = self.write(value);
                 let (start, len) = self.key(key);
                 self.scratch.entries.push((start, len, value));
             }
@@ -792,6 +697,60 @@ impl<'a> Builder<'a> {
         } = self;
         recycle(scratch);
         Arc::new(Chunk::from_parts(bytes, schema, imports, starts, counts))
+    }
+}
+
+/// A value a builder has written, read back.
+#[derive(Clone, Copy)]
+struct Written<'b, 'a> {
+    builder: &'b Builder<'a>,
+    index: u32,
+}
+
+impl Written<'_, '_> {
+    /// Where an array's items, or an object's entries, start, and how many there are: none for
+    /// a value of another tag.
+    fn span(self, of: Tag) -> (u32, u32) {
+        let word = |at| self.builder.written(VALUES, self.index, at);
+        match Tag::from_word(word(0)) == of {
+            true => (word(1), word(2)),
+            false => (0, 0),
+        }
+    }
+}
+
+impl<'b> JsonView<'b> for Written<'b, '_> {
+    fn kind(self) -> Kind<'b> {
+        let (builder, word) = (self.builder, |at| {
+            self.builder.written(VALUES, self.index, at)
+        });
+        Tag::from_word(word(0)).kind(word(1), word(2), |start, len| {
+            builder.written_str(start, len)
+        })
+    }
+
+    fn items(self) -> impl ExactSizeIterator<Item = Self> {
+        let (start, len) = self.span(Tag::Array);
+        (start..start + len).map(move |at| Written {
+            builder: self.builder,
+            index: self.builder.written(ELEMENTS, at, 0),
+        })
+    }
+
+    fn entries(self) -> impl ExactSizeIterator<Item = (&'b str, Self)> {
+        let (builder, (start, len)) = (self.builder, self.span(Tag::Object));
+        (start..start + len).map(move |at| {
+            let key = builder.written_str(
+                builder.written(ENTRIES, at, 0),
+                builder.written(ENTRIES, at, 1),
+            );
+            let index = builder.written(ENTRIES, at, 2);
+            (key, Written { builder, index })
+        })
+    }
+
+    fn place(self) -> Option<(usize, u32)> {
+        Some((std::ptr::from_ref(self.builder).addr(), self.index))
     }
 }
 

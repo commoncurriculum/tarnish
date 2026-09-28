@@ -187,7 +187,7 @@ impl Schema {
                     }
                     _ => Vec::new(),
                 },
-                attrs: AttrSet::new(&name, &spec.attrs),
+                attrs: AttrSet::new("node", &name, &spec.attrs),
                 is_block: !(spec.inline || name == "text"),
                 is_text: name == "text",
                 content: Automaton::empty(),
@@ -221,7 +221,7 @@ impl Schema {
             .marks
             .into_iter()
             .map(|(name, spec)| MarkTypeData {
-                attrs: AttrSet::new(&name, &spec.attrs),
+                attrs: AttrSet::new("mark", &name, &spec.attrs),
                 excluded: Vec::new(),
                 name: Arc::from(name),
                 spec,
@@ -656,7 +656,7 @@ impl<'s> NodeType<'s> {
     }
 
     pub fn check_attrs(&self, attrs: &Map) -> Result<()> {
-        self.data().attrs.check_map(attrs, "node", self.name())
+        self.data().attrs.check_map(attrs)
     }
 
     pub fn allows_mark_type(&self, mark_type: &MarkType) -> bool {
@@ -791,7 +791,7 @@ impl<'s> MarkType<'s> {
     }
 
     pub fn check_attrs(&self, attrs: &Map) -> Result<()> {
-        self.data().attrs.check_map(attrs, "mark", self.name())
+        self.data().attrs.check_map(attrs)
     }
 
     /// The mark types this one excludes.

@@ -1,12 +1,14 @@
 //! JSON values as a chunk holds them: attributes, read in place.
 
+use std::borrow::Cow;
 use std::fmt;
 
 use super::{Chunk, corrupt};
 use crate::js::TypeOf;
 use crate::js::json::{write_number, write_string};
-use crate::json::{Map, Number, Value};
-use crate::{js, stack};
+use crate::json::{EMPTY, Key, Map, Number, Value};
+use crate::model::compare_deep::entries_equal;
+use crate::stack;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Tag {
@@ -22,6 +24,25 @@ pub(crate) enum Tag {
 }
 
 impl Tag {
+    /// The value a record with this tag holds in its words `a` and `b`, `string` reading a
+    /// string's text.
+    pub fn kind<'v>(self, a: u32, b: u32, string: impl FnOnce(u32, u32) -> &'v str) -> Kind<'v> {
+        let bits = u64::from(a) | u64::from(b) << 32;
+        match self {
+            Tag::Null => Kind::Null,
+            Tag::False => Kind::Bool(false),
+            Tag::True => Kind::Bool(true),
+            Tag::Int => Kind::Number(Number::from(bits as i64)),
+            Tag::UInt => Kind::Number(Number::from(bits)),
+            Tag::Float => {
+                Kind::Number(Number::from_f64(f64::from_bits(bits)).unwrap_or_else(|| corrupt()))
+            }
+            Tag::String => Kind::String(string(a, b)),
+            Tag::Array => Kind::Array(b),
+            Tag::Object => Kind::Object(b),
+        }
+    }
+
     pub fn from_word(word: u32) -> Tag {
         match word {
             0 => Tag::Null,
@@ -65,20 +86,7 @@ impl<'c> ValueRef<'c> {
 
     pub fn kind(self) -> Kind<'c> {
         let (tag, a, b) = self.chunk.value(self.index);
-        let bits = u64::from(a) | u64::from(b) << 32;
-        match Tag::from_word(tag) {
-            Tag::Null => Kind::Null,
-            Tag::False => Kind::Bool(false),
-            Tag::True => Kind::Bool(true),
-            Tag::Int => Kind::Number(Number::from(bits as i64)),
-            Tag::UInt => Kind::Number(Number::from(bits)),
-            Tag::Float => {
-                Kind::Number(Number::from_f64(f64::from_bits(bits)).unwrap_or_else(|| corrupt()))
-            }
-            Tag::String => Kind::String(self.chunk.string(a, b)),
-            Tag::Array => Kind::Array(b),
-            Tag::Object => Kind::Object(b),
-        }
+        Tag::from_word(tag).kind(a, b, |start, len| self.chunk.string(start, len))
     }
 
     /// Where an array's items, or an object's entries, start, and how many there are: none for
@@ -93,7 +101,7 @@ impl<'c> ValueRef<'c> {
 
     /// Whether this is the very value `other` is.
     pub fn ptr_eq(self, other: ValueRef) -> bool {
-        self.index == other.index && self.chunk.ptr_eq(other.chunk)
+        self.id() == other.id()
     }
 
     /// An identity for the value: its chunk's, and its index there.
@@ -199,35 +207,12 @@ impl<'c> ValueRef<'c> {
     }
 
     pub fn to_value(self) -> Value {
-        match self.kind() {
-            Kind::Null => Value::Null,
-            Kind::Bool(boolean) => Value::Bool(boolean),
-            Kind::Number(number) => Value::Number(number),
-            Kind::String(string) => Value::String(string.into()),
-            Kind::Array(..) => Value::Array(
-                self.items()
-                    .map(|item| stack::grow(|| item.to_value()))
-                    .collect(),
-            ),
-            Kind::Object(..) => Value::Object(self.to_map()),
-        }
+        JsonView::to_value(self).into_owned()
     }
 
     /// An object's entries as a map; empty for anything else.
     pub fn to_map(self) -> Map {
-        self.entries()
-            .map(|(key, value)| (key.into(), stack::grow(|| value.to_value())))
-            .collect()
-    }
-
-    pub fn type_of(self) -> TypeOf {
-        match Tag::from_word(self.chunk.value(self.index).0) {
-            Tag::Null => TypeOf::Null,
-            Tag::False | Tag::True => TypeOf::Boolean,
-            Tag::Int | Tag::UInt | Tag::Float => TypeOf::Number,
-            Tag::String => TypeOf::String,
-            Tag::Array | Tag::Object => TypeOf::Object,
-        }
+        to_map(self)
     }
 
     /// `JSON.stringify(value)`.
@@ -262,60 +247,135 @@ impl<'c> ValueRef<'c> {
         }
     }
 
-    /// `compareDeep` with a value outside the chunk.
-    pub fn equals(self, other: &Value) -> bool {
-        match (self.kind(), other) {
-            (Kind::Null, Value::Null) => true,
-            (Kind::Bool(a), Value::Bool(b)) => a == *b,
-            (Kind::Number(a), Value::Number(b)) => js::same_number(&a, b),
-            (Kind::String(a), Value::String(b)) => a == b,
-            (Kind::Array(..), Value::Array(items)) => {
-                self.len() == items.len()
-                    && self
-                        .items()
-                        .zip(items)
-                        .all(|(a, b)| stack::grow(|| a.equals(b)))
-            }
-            (Kind::Object(..), Value::Object(map)) => self.equals_map(map),
-            _ => false,
-        }
-    }
-
-    /// `compareDeep` of an object with `map`: the same keys, with deeply equal values.
+    /// `compareDeep` of an object with `map`.
     pub fn equals_map(self, map: &Map) -> bool {
-        self.is_object()
-            && self.len() == map.len()
-            && self
-                .entries()
-                .all(|(key, value)| map.get(key).is_some_and(|other| value.equals(other)))
+        self.is_object() && entries_equal(self.entries(), map.len(), |key| map.get(key))
     }
 }
 
-/// `compareDeep` of two values in chunks: arrays and objects by their contents, everything else
-/// with `===`.
-pub(crate) fn value_equals(a: ValueRef, b: ValueRef) -> bool {
-    if a.ptr_eq(b) {
-        return true;
+/// A JSON value however it's held, as `compareDeep`, an attribute's check and a builder read
+/// it: a [`Value`], a value in a chunk, or one a builder has written.
+pub(crate) trait JsonView<'v>: Copy {
+    fn kind(self) -> Kind<'v>;
+
+    /// An array's items; none for anything else.
+    fn items(self) -> impl ExactSizeIterator<Item = Self>;
+
+    /// An object's keys and values, in order; none for anything else.
+    fn entries(self) -> impl ExactSizeIterator<Item = (&'v str, Self)>;
+
+    /// An object's value for `key`.
+    fn get(self, key: &str) -> Option<Self> {
+        self.entries()
+            .find(|&(name, _)| name == key)
+            .map(|(_, value)| value)
     }
-    match (a.kind(), b.kind()) {
-        (Kind::Null, Kind::Null) => true,
-        (Kind::Bool(a), Kind::Bool(b)) => a == b,
-        (Kind::Number(a), Kind::Number(b)) => js::same_number(&a, &b),
-        (Kind::String(a), Kind::String(b)) => a == b,
-        (Kind::Array(a_len), Kind::Array(b_len)) => {
-            a_len == b_len
-                && a.items()
-                    .zip(b.items())
-                    .all(|(a, b)| stack::grow(|| value_equals(a, b)))
+
+    /// Where the value is held, when that tells values apart: two held in one place are one.
+    fn place(self) -> Option<(usize, u32)> {
+        None
+    }
+
+    fn type_of(self) -> TypeOf {
+        match self.kind() {
+            Kind::Null => TypeOf::Null,
+            Kind::Bool(_) => TypeOf::Boolean,
+            Kind::Number(_) => TypeOf::Number,
+            Kind::String(_) => TypeOf::String,
+            Kind::Array(_) | Kind::Object(_) => TypeOf::Object,
         }
-        (Kind::Object(a_len), Kind::Object(b_len)) => {
-            a_len == b_len
-                && a.entries().all(|(key, value)| {
-                    b.get(key)
-                        .is_some_and(|other| stack::grow(|| value_equals(value, other)))
-                })
+    }
+
+    fn to_value(self) -> Cow<'v, Value> {
+        Cow::Owned(match self.kind() {
+            Kind::Null => Value::Null,
+            Kind::Bool(boolean) => Value::Bool(boolean),
+            Kind::Number(number) => Value::Number(number),
+            Kind::String(string) => Value::String(string.into()),
+            Kind::Array(_) => Value::Array(
+                self.items()
+                    .map(|item| stack::grow(|| item.to_value().into_owned()))
+                    .collect(),
+            ),
+            Kind::Object(_) => Value::Object(to_map(self)),
+        })
+    }
+}
+
+fn to_map<'v>(object: impl JsonView<'v>) -> Map {
+    object
+        .entries()
+        .map(|(key, value)| {
+            (
+                Key::from(key),
+                stack::grow(|| value.to_value().into_owned()),
+            )
+        })
+        .collect()
+}
+
+impl<'c> JsonView<'c> for ValueRef<'c> {
+    #[inline]
+    fn kind(self) -> Kind<'c> {
+        ValueRef::kind(self)
+    }
+
+    fn items(self) -> impl ExactSizeIterator<Item = Self> {
+        ValueRef::items(self)
+    }
+
+    fn entries(self) -> impl ExactSizeIterator<Item = (&'c str, Self)> {
+        ValueRef::entries(self)
+    }
+
+    fn get(self, key: &str) -> Option<Self> {
+        ValueRef::get(self, key)
+    }
+
+    #[inline]
+    fn place(self) -> Option<(usize, u32)> {
+        Some(self.id())
+    }
+
+    /// The tag's type, without reading a string or a number.
+    #[inline]
+    fn type_of(self) -> TypeOf {
+        match Tag::from_word(self.chunk.value(self.index).0) {
+            Tag::Null => TypeOf::Null,
+            Tag::False | Tag::True => TypeOf::Boolean,
+            Tag::Int | Tag::UInt | Tag::Float => TypeOf::Number,
+            Tag::String => TypeOf::String,
+            Tag::Array | Tag::Object => TypeOf::Object,
         }
-        _ => false,
+    }
+}
+
+impl<'v> JsonView<'v> for &'v Value {
+    #[inline]
+    fn kind(self) -> Kind<'v> {
+        match self {
+            Value::Null => Kind::Null,
+            Value::Bool(boolean) => Kind::Bool(*boolean),
+            Value::Number(number) => Kind::Number(number.clone()),
+            Value::String(string) => Kind::String(string),
+            Value::Array(items) => Kind::Array(items.len() as u32),
+            Value::Object(map) => Kind::Object(map.len() as u32),
+        }
+    }
+
+    fn items(self) -> impl ExactSizeIterator<Item = Self> {
+        self.as_array().map_or(&[][..], Vec::as_slice).iter()
+    }
+
+    fn entries(self) -> impl ExactSizeIterator<Item = (&'v str, Self)> {
+        self.as_object()
+            .unwrap_or(&EMPTY)
+            .iter()
+            .map(|(key, value)| (key.as_str(), value))
+    }
+
+    fn to_value(self) -> Cow<'v, Value> {
+        Cow::Borrowed(self)
     }
 }
 

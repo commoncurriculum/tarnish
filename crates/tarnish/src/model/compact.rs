@@ -54,7 +54,7 @@ impl<'k, 'a> Copier<'k, 'a> {
         }
         let written = match self.kept(value.chunk, value.index) {
             Some(kept) => kept,
-            None => self.builder.copy_value(value),
+            None => self.builder.write(value),
         };
         self.values.insert(key, written);
         written

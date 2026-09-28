@@ -2,7 +2,7 @@
 
 mod attrs;
 mod compact;
-mod compare_deep;
+pub(crate) mod compare_deep;
 mod content;
 mod diff;
 mod fields;

@@ -5,6 +5,7 @@ pub mod json;
 
 use std::borrow::Cow;
 
+use crate::chunk::JsonView;
 use crate::json::{EMPTY, Map, Number, Value};
 
 /// `Number.MAX_SAFE_INTEGER`.
@@ -86,14 +87,7 @@ impl TypeOf {
 
     /// `None` being `undefined`.
     pub fn of(value: Option<&Value>) -> TypeOf {
-        match value {
-            None => TypeOf::Undefined,
-            Some(Value::Null) => TypeOf::Null,
-            Some(Value::Bool(_)) => TypeOf::Boolean,
-            Some(Value::Number(_)) => TypeOf::Number,
-            Some(Value::String(_)) => TypeOf::String,
-            Some(Value::Array(_) | Value::Object(_)) => TypeOf::Object,
-        }
+        value.map_or(TypeOf::Undefined, JsonView::type_of)
     }
 
     /// The type a name gives, when a JSON value can have it.

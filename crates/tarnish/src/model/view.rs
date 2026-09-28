@@ -3,10 +3,9 @@
 
 use std::borrow::Cow;
 
+use super::compare_deep::deep_equal;
 use super::schema::{MarkType, NodeType};
-use crate::chunk::{
-    ASCII, BINDING, Chunk, HELD_AS_UNITS, NODES, Record, TEXT_NODE, ValueRef, value_equals,
-};
+use crate::chunk::{ASCII, BINDING, Chunk, HELD_AS_UNITS, NODES, Record, TEXT_NODE, ValueRef};
 use crate::js;
 use crate::text::{self, Raw, Text, byte_offset};
 
@@ -137,7 +136,7 @@ impl<'c> NodeRef<'c> {
     /// Whether the nodes have the same type, attributes and marks.
     pub fn same_markup(self, other: NodeRef) -> bool {
         self.node_type() == other.node_type()
-            && value_equals(self.attrs(), other.attrs())
+            && deep_equal(self.attrs(), other.attrs())
             && self.marks().same(other.marks())
     }
 
@@ -269,7 +268,7 @@ impl<'c> MarkRef<'c> {
     /// `Mark.eq`: the same type, and deeply equal attributes.
     pub fn equals(self, other: MarkRef) -> bool {
         self.ptr_eq(other)
-            || (self.mark_type() == other.mark_type() && value_equals(self.attrs(), other.attrs()))
+            || (self.mark_type() == other.mark_type() && deep_equal(self.attrs(), other.attrs()))
     }
 }
 

@@ -909,8 +909,7 @@ impl<'c> Walk<'c> {
         if !(data.content.accepts(types) && allowed) {
             return Err(Failed::Content);
         }
-        data.attrs
-            .check_ref(node.attrs(), "node", node_type.name())?;
+        data.attrs.check_ref(node.attrs())?;
         check_marks(node)?;
         for index in base..self.kids.len() {
             let child = self.kids[index];
@@ -938,11 +937,7 @@ fn check_marks(node: NodeRef) -> Result<(), Failed> {
     let marks = node.marks();
     let mut count = 0;
     for mark in marks.iter() {
-        let mark_type = mark.mark_type();
-        mark_type
-            .data()
-            .attrs
-            .check_ref(mark.attrs(), "mark", mark_type.name())?;
+        mark.mark_type().data().attrs.check_ref(mark.attrs())?;
         count += 1;
     }
     // Adding one mark to no marks gives that mark, so only a longer set can be invalid.

@@ -37,7 +37,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 pub(crate) use build::Builder;
-pub(crate) use value::value_equals;
+pub(crate) use value::JsonView;
 pub use value::{Kind, ValueRef};
 
 use crate::error::{Error, Result};

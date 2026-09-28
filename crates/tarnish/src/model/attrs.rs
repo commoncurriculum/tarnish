@@ -4,7 +4,8 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::chunk::{Builder, Chunk, ValueRef, value_equals};
+use super::compare_deep::deep_equal;
+use crate::chunk::{Builder, Chunk, JsonView, ValueRef};
 use crate::error::{Error, Result};
 use crate::js::{AttrKeys, Given, Keys, TypeOf};
 use crate::json::{Key, Map, Value};
@@ -88,7 +89,7 @@ impl<'a> Attrs<'a> {
 
 impl PartialEq for Attrs<'_> {
     fn eq(&self, other: &Attrs) -> bool {
-        value_equals(self.view(), other.view())
+        deep_equal(self.view(), other.view())
     }
 }
 
@@ -98,13 +99,6 @@ impl fmt::Debug for Attrs<'_> {
     }
 }
 
-/// An attribute's value, in a chunk or outside one.
-#[derive(Clone, Copy)]
-enum Found<'v> {
-    Json(&'v Value),
-    Chunk(ValueRef<'v>),
-}
-
 /// A node or mark type's attributes.
 pub(crate) struct AttrSet {
     attrs: Vec<(Key, Attribute)>,
@@ -112,6 +106,8 @@ pub(crate) struct AttrSet {
     defaults: Option<Map>,
     /// Whether any attribute has a check.
     checked: bool,
+    /// The type, as an error names it: `node of type paragraph`.
+    owner: String,
 }
 
 /// The attributes computed from what a type is given: its defaults, or each attribute's value,
@@ -122,7 +118,8 @@ pub(crate) enum Computed<'g> {
 }
 
 impl AttrSet {
-    pub fn new(type_name: &str, specs: &[(String, AttributeSpec)]) -> AttrSet {
+    /// A type's attributes, `kind` being `node` or `mark`.
+    pub fn new(kind: &str, type_name: &str, specs: &[(String, AttributeSpec)]) -> AttrSet {
         let attrs: Vec<(Key, Attribute)> = specs
             .iter()
             .map(|(name, spec)| {
@@ -152,6 +149,7 @@ impl AttrSet {
             defaults: defaults(&attrs),
             checked: attrs.iter().any(|(_, attr)| attr.check.is_some()),
             attrs,
+            owner: format!("{kind} of type {type_name}"),
         }
     }
 
@@ -217,12 +215,12 @@ impl AttrSet {
             Computed::Defaults => {
                 let defaults = self.defaults.as_ref().expect("defaults");
                 for (name, attr) in &self.attrs {
-                    check_value(attr, defaults.get(name).map(Found::Json))?;
+                    check_value(attr, defaults.get(name))?;
                 }
             }
             Computed::Values(values) => {
                 for ((_, attr), (_, value)) in self.attrs.iter().zip(values) {
-                    check_value(attr, value.map(Found::Json))?;
+                    check_value(attr, *value)?;
                 }
             }
         }
@@ -249,7 +247,7 @@ impl AttrSet {
                 }
                 let written: Vec<(&str, u32)> = values
                     .iter()
-                    .filter_map(|(name, value)| Some((name.as_str(), builder.value((*value)?))))
+                    .filter_map(|(name, value)| Some((name.as_str(), builder.write((*value)?))))
                     .collect();
                 builder.object_of(written)
             }
@@ -257,23 +255,26 @@ impl AttrSet {
     }
 
     /// Raise an error for attributes the type doesn't have, or values it doesn't accept.
-    pub fn check_map(&self, values: &Map, kind: &str, type_name: &str) -> Result<()> {
-        self.check_keys(values.keys().map(|key| key.as_str()), kind, type_name)?;
-        for (name, attr) in &self.attrs {
-            check_value(attr, values.get(name).map(Found::Json))?;
-        }
-        Ok(())
+    pub fn check_map(&self, values: &Map) -> Result<()> {
+        self.check(values.iter().map(|(key, value)| (key.as_bytes(), value)))
     }
 
     /// [`check_map`](Self::check_map) of attributes a chunk holds.
-    pub fn check_ref(&self, values: ValueRef, kind: &str, type_name: &str) -> Result<()> {
-        // Value 0 is the empty object, which only a check can refuse.
+    pub fn check_ref(&self, values: ValueRef) -> Result<()> {
+        // Only a check can refuse the empty object.
         if values.index == 0 && !self.checked {
             return Ok(());
         }
+        self.check(values.entries_bytes())
+    }
+
+    fn check<'v, V: JsonView<'v>>(
+        &self,
+        values: impl Iterator<Item = (&'v [u8], V)>,
+    ) -> Result<()> {
         // Each attribute's value, found as the keys are checked, for the checks that follow.
         let (mut few, mut many);
-        let found: &mut [Option<ValueRef>] = match self.attrs.len() {
+        let found: &mut [Option<V>] = match self.attrs.len() {
             len @ ..=8 => {
                 few = [None; 8];
                 &mut few[..len]
@@ -283,7 +284,7 @@ impl AttrSet {
                 &mut many
             }
         };
-        for (at, (key, value)) in values.entries_bytes().enumerate() {
+        for (at, (key, value)) in values.enumerate() {
             // Attributes a type computed are written in its order.
             let index = match self.attrs.get(at) {
                 Some((known, _)) if known.as_bytes() == key => Some(at),
@@ -294,49 +295,31 @@ impl AttrSet {
             };
             match index {
                 Some(index) => found[index] = Some(value),
-                None => return Err(unsupported(key, kind, type_name)),
+                None => return Err(self.unsupported(key)),
             }
         }
         if self.checked {
             for ((_, attr), value) in self.attrs.iter().zip(found.iter()) {
-                check_value(attr, value.map(Found::Chunk))?;
+                check_value(attr, *value)?;
             }
         }
         Ok(())
     }
 
-    fn check_keys<'k>(
-        &self,
-        keys: impl Iterator<Item = &'k str>,
-        kind: &str,
-        type_name: &str,
-    ) -> Result<()> {
-        for attr in keys {
-            if !self.attrs.iter().any(|(known, _)| known == attr) {
-                return Err(Error::Range(format!(
-                    "Unsupported attribute {attr} for {kind} of type {type_name}"
-                )));
-            }
-        }
-        Ok(())
+    #[cold]
+    fn unsupported(&self, key: &[u8]) -> Error {
+        let key = String::from_utf8_lossy(key);
+        Error::Range(format!("Unsupported attribute {key} for {}", self.owner))
     }
 }
 
 #[inline(always)]
-fn check_value(attr: &Attribute, value: Option<Found>) -> Result<()> {
+fn check_value<'v>(attr: &Attribute, value: Option<impl JsonView<'v>>) -> Result<()> {
     match &attr.check {
         None => Ok(()),
-        Some(Check::Hook(hook)) => match value {
-            None => hook(None),
-            Some(Found::Json(value)) => hook(Some(value)),
-            Some(Found::Chunk(value)) => hook(Some(&value.to_value())),
-        },
+        Some(Check::Hook(hook)) => hook(value.map(JsonView::to_value).as_deref()),
         Some(Check::Types(allowed, expected)) => {
-            let type_of = match value {
-                None => TypeOf::Undefined,
-                Some(Found::Json(value)) => TypeOf::of(Some(value)),
-                Some(Found::Chunk(value)) => value.type_of(),
-            };
+            let type_of = value.map_or(TypeOf::Undefined, JsonView::type_of);
             match allowed & bit(type_of) {
                 0 => Err(wrong_type(expected, type_of)),
                 _ => Ok(()),
@@ -348,14 +331,6 @@ fn check_value(attr: &Attribute, value: Option<Found>) -> Result<()> {
 #[cold]
 fn wrong_type(expected: &str, type_of: TypeOf) -> Error {
     Error::Range(format!("{expected}, got {}", type_of.name()))
-}
-
-#[cold]
-fn unsupported(key: &[u8], kind: &str, type_name: &str) -> Error {
-    let key = String::from_utf8_lossy(key);
-    Error::Range(format!(
-        "Unsupported attribute {key} for {kind} of type {type_name}"
-    ))
 }
 
 /// The attributes' defaults, when every attribute has one.
