@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+
+  # ProseMirror's own test suites, unedited: first against the real packages, to show the
+  # suites and the harness are sound, then against tarnish.
+  upstream-suites:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [js, rust]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        if: matrix.target == 'rust'
+      - uses: Swatinem/rust-cache@v2
+        if: matrix.target == 'rust'
+      - run: npm ci
+      # The suites are the submodules' own tests, so they must be of the versions installed.
+      - name: Check the suites are the installed packages' own
+        run: |
+          for package in prosemirror-model prosemirror-transform; do
+            test "$(git -C upstream/$package describe --tags)" = \
+              "$(node -p "require('$package/package.json').version")"
+          done
+      - run: npm run test:${{ matrix.target }}
+      # The run against the real packages records fixtures/transform.json again. The Elixir and
+      # C tests expect what it records, so it must be exactly what JavaScript writes today.
+      - run: git diff --exit-code fixtures
+        if: matrix.target == 'js'
+
+  elixir:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: elixir
+    env:
+      MIX_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "25.3.2.21"
+          elixir-version: "1.17.3"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: mix deps.get
+      - run: mix format --check-formatted
+      - run: mix test
+
+  c:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check the header declares the library as it is
+        run: |
+          cargo run -p tarnish-c --example header --features headers
+          git diff --exit-code crates/tarnish-c/include
+      - run: npm run test:c

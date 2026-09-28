@@ -1,0 +1,20 @@
+[package]
+name = "tarnish"
+version = "0.1.0"
+description = "ProseMirror's document model and transforms"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+ryu-js = "1"
+compact_str = "0.9"
+json-event-parser = "0.2"
+serde = "1"
+# JSON.parse rounds every number correctly; serde_json does only with float_roundtrip.
+serde_json = { version = "1", features = ["float_roundtrip"] }
+stacker = "0.1"
+
+[dev-dependencies]
+mimalloc = { version = "0.1", default-features = false, features = ["v2"] }

@@ -1,0 +1,27 @@
+[package]
+name = "tarnish-c"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "tarnish as a C library: ProseMirror's JSON in and out, for any language with a C FFI."
+
+[lib]
+name = "tarnish_c"
+crate-type = ["cdylib", "staticlib", "rlib"]
+test = false
+doctest = false
+
+[features]
+headers = ["safer-ffi/headers"]
+
+[dependencies]
+mimalloc = { version = "0.1", default-features = false, features = ["v2"] }
+safer-ffi = "0.1"
+tarnish = { path = "../tarnish" }
+
+[[example]]
+name = "header"
+required-features = ["headers"]

@@ -1,0 +1,18 @@
+[package]
+name = "tarnish_elixir"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "The Elixir binding of tarnish: a Rustler NIF that takes and returns Erlang terms."
+
+[lib]
+crate-type = ["cdylib"]
+doctest = false
+
+[dependencies]
+mimalloc = { version = "0.1", default-features = false, features = ["v2"] }
+rustler = { version = "0.38", features = ["big_integer"] }
+tarnish = { path = "../tarnish" }
