@@ -1,6 +1,3 @@
-//! tarnish-css for JavaScript, which `harness/css-wasm.mjs` writes into the linkedom fork as
-//! the engine behind `element.style`.
-
 #![forbid(unsafe_code)]
 
 use wasm_bindgen::prelude::wasm_bindgen;
@@ -27,6 +24,10 @@ impl Declarations {
 
     pub fn item(&self, index: usize) -> Option<String> {
         self.0.item(index)
+    }
+
+    pub fn names(&self) -> Vec<String> {
+        self.0.names()
     }
 
     pub fn value(&self, name: &str) -> String {

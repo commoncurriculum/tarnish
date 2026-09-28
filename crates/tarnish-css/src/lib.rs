@@ -1,12 +1,9 @@
 //! A CSS declaration block, as an element's `style` holds one: stylo, Servo's CSS engine,
-//! parses, changes and writes it as Firefox does. The linkedom fork's `element.style` is this
-//! crate compiled to WebAssembly, so the two agree on every declaration.
-//!
-//! Declarations parse as in a no-quirks document, as a `<template>`'s content is.
+//! parses, changes and writes it as Firefox does.
 
 #![forbid(unsafe_code)]
 
-use std::sync::{LazyLock, Once};
+use std::sync::LazyLock;
 
 use style::context::QuirksMode;
 use style::properties::{
@@ -21,51 +18,51 @@ use style_traits::ParsingMode;
 /// `engine()`, so a test can check that JavaScript and Rust run the same engine.
 pub const ENGINE: &str = concat!(env!("CARGO_PKG_VERSION"), "+stylo-0.21.0");
 
-/// The document's URL, which only `url()` values would resolve against, and they keep what
-/// they were written as.
-static URL: LazyLock<UrlExtraData> =
-    LazyLock::new(|| UrlExtraData(Arc::new(url::Url::parse("about:blank").expect("a URL"))));
+const QUIRKS: QuirksMode = QuirksMode::NoQuirks;
 
-/// Servo turns off the properties its layout doesn't draw yet, but stylo parses them all.
-fn enable_properties() {
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| {
-        stylo_static_prefs::set_pref!("layout.columns.enabled", true);
-        stylo_static_prefs::set_pref!("layout.container-queries.enabled", true);
-        stylo_static_prefs::set_pref!("layout.grid.enabled", true);
-        stylo_static_prefs::set_pref!("layout.unimplemented", true);
-        stylo_static_prefs::set_pref!("layout.variable_fonts.enabled", true);
-        stylo_static_prefs::set_pref!("layout.writing-mode.enabled", true);
-    });
+struct Settings {
+    /// `about:blank`: only `url()` values would resolve against it, and they keep what they
+    /// were written as.
+    url: UrlExtraData,
 }
 
+static SETTINGS: LazyLock<Settings> = LazyLock::new(|| {
+    // Servo turns off the properties its layout doesn't draw yet, but stylo parses them all.
+    stylo_static_prefs::set_pref!("layout.columns.enabled", true);
+    stylo_static_prefs::set_pref!("layout.container-queries.enabled", true);
+    stylo_static_prefs::set_pref!("layout.grid.enabled", true);
+    stylo_static_prefs::set_pref!("layout.unimplemented", true);
+    stylo_static_prefs::set_pref!("layout.variable_fonts.enabled", true);
+    stylo_static_prefs::set_pref!("layout.writing-mode.enabled", true);
+    Settings {
+        url: UrlExtraData(Arc::new(url::Url::parse("about:blank").expect("a URL"))),
+    }
+});
+
 fn property(name: &str) -> Option<PropertyId> {
-    enable_properties();
+    LazyLock::force(&SETTINGS);
     PropertyId::parse_enabled_for_all_content(name).ok()
 }
 
 /// Every property name a declaration can have, aliases among them, but not custom
 /// properties.
 pub fn property_names() -> impl Iterator<Item = String> {
-    enable_properties();
+    LazyLock::force(&SETTINGS);
     NonCustomPropertyId::iter()
         .filter(|id| id.to_property_id().enabled_for_all_content())
         .map(|id| id.name().to_owned())
 }
 
 /// The declarations of a `style` attribute, with CSSOM's operations on them.
-#[derive(Default)]
 pub struct Declarations(PropertyDeclarationBlock);
 
 impl Declarations {
-    /// Parse a `style` attribute.
     pub fn parse(css: &str) -> Self {
-        enable_properties();
         Declarations(parse_style_attribute(
             css,
-            &URL,
+            &SETTINGS.url,
             None,
-            QuirksMode::NoQuirks,
+            QUIRKS,
             CssRuleType::Style,
         ))
     }
@@ -92,14 +89,24 @@ impl Declarations {
         Some(declaration.id().name().into_owned())
     }
 
+    /// Every `item(index)`, in order.
+    pub fn names(&self) -> Vec<String> {
+        let declarations = self.0.declarations().iter();
+        declarations
+            .map(|declaration| declaration.id().name().into_owned())
+            .collect()
+    }
+
     /// `getPropertyValue(name)`.
     pub fn value(&self, name: &str) -> String {
+        property(name).map_or_else(String::new, |id| self.value_of(&id))
+    }
+
+    fn value_of(&self, id: &PropertyId) -> String {
         let mut value = String::new();
-        if let Some(id) = property(name) {
-            self.0
-                .property_value_to_css(&id, &mut value)
-                .expect("writing to a string");
-        }
+        self.0
+            .property_value_to_css(id, &mut value)
+            .expect("writing to a string");
         value
     }
 
@@ -118,7 +125,7 @@ impl Declarations {
             return false;
         };
         if value.is_empty() {
-            return self.remove(name).is_some();
+            return self.remove_id(&id).is_some();
         }
         let importance = match priority.eq_ignore_ascii_case("important") {
             true => Importance::Important,
@@ -131,10 +138,10 @@ impl Declarations {
             id,
             value,
             Origin::Author,
-            &URL,
+            &SETTINGS.url,
             None,
             ParsingMode::DEFAULT,
-            QuirksMode::NoQuirks,
+            QUIRKS,
             CssRuleType::Style,
         );
         let mut updates = Default::default();
@@ -152,10 +159,13 @@ impl Declarations {
 
     /// `removeProperty(name)`: the value it had, if it was declared.
     pub fn remove(&mut self, name: &str) -> Option<String> {
-        let id = property(name)?;
-        let first = self.0.first_declaration_to_remove(&id)?;
-        let value = self.value(name);
-        self.0.remove_property(&id, first);
+        self.remove_id(&property(name)?)
+    }
+
+    fn remove_id(&mut self, id: &PropertyId) -> Option<String> {
+        let first = self.0.first_declaration_to_remove(id)?;
+        let value = self.value_of(id);
+        self.0.remove_property(id, first);
         Some(value)
     }
 }
@@ -173,6 +183,14 @@ mod tests {
             style.css_text(),
             "font: italic bold 12px / 30px Georgia, serif; color: rgb(255, 0, 0);"
         );
+        let names = style.names();
+        assert_eq!(names.len(), style.len());
+        assert_eq!(names[0], "font-style");
+        assert_eq!(names.last().map(String::as_str), Some("color"));
+        let items: Vec<String> = (0..style.len())
+            .filter_map(|index| style.item(index))
+            .collect();
+        assert_eq!(names, items);
     }
 
     #[test]
@@ -191,6 +209,11 @@ mod tests {
         assert_eq!(style.remove("color"), None);
         assert!(style.set("font-weight", "", ""));
         assert!(style.is_empty());
+    }
+
+    #[test]
+    fn styles_parse_as_in_a_no_quirks_document() {
+        assert!(Declarations::parse("width: 10; color: f00").is_empty());
     }
 
     #[test]

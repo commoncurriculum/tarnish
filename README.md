@@ -112,6 +112,9 @@ This example is `tarnish-html`'s doctest.
   attributes and inline style. `parseDOM` and `toDOM` aren't read from a spec's JSON.
 - **Fragments and documents.** `parse_html` parses HTML as a `<template>`'s content holds it.
   `HtmlDom::parse_document` parses a whole document, whose `body()` a parser can read.
+- **Styles ignore quirks mode.** Inline styles parse as in a no-quirks document, in Rust and in
+  the fork, even in a document without a doctype. Selectors do follow quirks mode. So
+  `width: 10` and `color: f00` are dropped where a browser, in quirks mode, would take them.
 - **Proven against the linkedom fork.** `npm run test:js` records to `fixtures/dom.json` what
   ProseMirror does in the fork with prosemirror-schema-basic and prosemirror-schema-list: 297
   parses of 287 HTML inputs, as a template's content and as a document, 450 documents written
