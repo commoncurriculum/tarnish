@@ -7,26 +7,26 @@ use super::transform::Transform;
 use crate::error::{Error, Result};
 use crate::js;
 use crate::json::Map;
-use crate::model::{Attrs, Fragment, Mark, Node, NodeRange, NodeType, Slice, Whitespace};
+use crate::model::{Fragment, Mark, Node, NodeRange, NodeType, Slice, Whitespace};
 
 /// A node type to wrap content in, and its attributes.
 #[derive(Clone, Debug)]
-pub struct Wrapper {
-    pub node_type: NodeType,
-    pub attrs: Option<Attrs>,
+pub struct Wrapper<'s> {
+    pub node_type: NodeType<'s>,
+    pub attrs: Option<Map>,
 }
 
-impl Wrapper {
-    fn create(&self, content: Fragment) -> Result<Node> {
-        self.node_type.create(self.attrs.as_deref(), content, &[])
+impl Wrapper<'_> {
+    fn create<'a>(&self, content: Fragment<'a>) -> Result<Node<'a>> {
+        self.node_type.create(self.attrs.as_ref(), content, &[])
     }
 }
 
 /// The attributes `set_block_type` gives each textblock: the same for all, or from a function
 /// of the old block.
-pub enum BlockAttrs<'a> {
-    Fixed(Option<&'a Map>),
-    Hook(&'a mut dyn FnMut(&Node) -> Result<Option<Attrs>>),
+pub enum BlockAttrs<'f, 'a> {
+    Fixed(Option<&'f Map>),
+    Hook(&'f mut dyn FnMut(&Node<'a>) -> Result<Option<Map>>),
 }
 
 fn can_cut(node: &Node, start: usize, end: usize) -> Result<bool> {
@@ -69,32 +69,35 @@ pub fn lift_target(range: &NodeRange) -> Result<Option<usize>> {
 
 /// A way to wrap the range's content in a node of this type: the wrappers around it and inside
 /// it, with the node itself. With `inner_range`, that range's content is what must fit.
-pub fn find_wrapping(
-    range: &NodeRange,
-    node_type: &NodeType,
-    attrs: Option<Attrs>,
-    inner_range: Option<&NodeRange>,
-) -> Result<Option<Vec<Wrapper>>> {
+pub fn find_wrapping<'s>(
+    range: &'s NodeRange,
+    node_type: &NodeType<'s>,
+    attrs: Option<Map>,
+    inner_range: Option<&'s NodeRange>,
+) -> Result<Option<Vec<Wrapper<'s>>>> {
     let Some(around) = find_wrapping_outside(range, node_type)? else {
         return Ok(None);
     };
     let Some(inner) = find_wrapping_inside(inner_range.unwrap_or(range), node_type)? else {
         return Ok(None);
     };
-    let with_attrs = |node_type: NodeType| Wrapper {
+    let with_attrs = |node_type: NodeType<'s>| Wrapper {
         node_type,
         attrs: None,
     };
     let mut result: Vec<Wrapper> = around.into_iter().map(with_attrs).collect();
     result.push(Wrapper {
-        node_type: node_type.clone(),
+        node_type: *node_type,
         attrs,
     });
     result.extend(inner.into_iter().map(with_attrs));
     Ok(Some(result))
 }
 
-fn find_wrapping_outside(range: &NodeRange, node_type: &NodeType) -> Result<Option<Vec<NodeType>>> {
+fn find_wrapping_outside<'s>(
+    range: &'s NodeRange,
+    node_type: &NodeType<'s>,
+) -> Result<Option<Vec<NodeType<'s>>>> {
     let (parent, start, end) = (range.parent(), range.start_index(), range.end_index());
     let Some(around) = parent.content_match_at(start)?.find_wrapping(node_type) else {
         return Ok(None);
@@ -105,17 +108,23 @@ fn find_wrapping_outside(range: &NodeRange, node_type: &NodeType) -> Result<Opti
         .then_some(around))
 }
 
-fn find_wrapping_inside(range: &NodeRange, node_type: &NodeType) -> Result<Option<Vec<NodeType>>> {
+fn find_wrapping_inside<'s>(
+    range: &'s NodeRange,
+    node_type: &NodeType<'s>,
+) -> Result<Option<Vec<NodeType<'s>>>> {
     let (parent, start, end) = (range.parent(), range.start_index(), range.end_index());
     let inner = parent.child(start)?;
-    let Some(inside) = node_type.content_match().find_wrapping(inner.node_type()) else {
+    let Some(inside) = node_type
+        .content_match()
+        .find_wrapping(&inner.node_type())
+    else {
         return Ok(None);
     };
     let last = inside.last().unwrap_or(node_type);
     let mut inner_match = Some(last.content_match());
     for index in start..end {
         let Some(current) = inner_match else { break };
-        inner_match = current.match_type(parent.child(index)?.node_type());
+        inner_match = current.match_type(&parent.child(index)?.node_type());
     }
     Ok(inner_match
         .is_some_and(|found| found.valid_end())
@@ -124,15 +133,15 @@ fn find_wrapping_inside(range: &NodeRange, node_type: &NodeType) -> Result<Optio
 
 /// What becomes of line breaks in text moved into a textblock type, in a schema with a
 /// linebreak replacement node.
-enum NewlineConversion {
+enum NewlineConversion<'s> {
     /// The type keeps newlines, being `pre`, and doesn't allow the replacement node, which
     /// becomes a newline.
-    ToNewlines(NodeType),
+    ToNewlines(NodeType<'s>),
     /// The type allows the replacement node, which newlines become, and doesn't keep them.
-    ToLinebreaks(NodeType),
+    ToLinebreaks(NodeType<'s>),
 }
 
-fn newline_conversion(node_type: &NodeType) -> Option<NewlineConversion> {
+fn newline_conversion<'s>(node_type: &NodeType<'s>) -> Option<NewlineConversion<'s>> {
     let linebreak = node_type.schema().linebreak_replacement()?;
     let pre = node_type.whitespace() == Whitespace::Pre;
     let allowed = node_type.content_match().match_type(&linebreak).is_some();
@@ -144,9 +153,9 @@ fn newline_conversion(node_type: &NodeType) -> Option<NewlineConversion> {
 }
 
 /// Replace the line breaks in the node's text with `linebreak` nodes.
-fn replace_newlines(
-    tr: &mut Transform,
-    node: &Node,
+fn replace_newlines<'a>(
+    tr: &mut Transform<'a>,
+    node: &Node<'a>,
     pos: usize,
     map_from: usize,
     linebreak: &NodeType,
@@ -163,15 +172,15 @@ fn replace_newlines(
 }
 
 /// Replace the node's `linebreak` nodes with newlines.
-fn replace_linebreaks(
-    tr: &mut Transform,
-    node: &Node,
+fn replace_linebreaks<'a>(
+    tr: &mut Transform<'a>,
+    node: &Node<'a>,
     pos: usize,
     map_from: usize,
     linebreak: &NodeType,
 ) -> Result<()> {
     for (offset, child) in node.content().children_with_offsets() {
-        if child.node_type() == linebreak {
+        if child.node_type() == *linebreak {
             let start = tr.mapping_from(map_from).map(pos + 1 + offset, 1);
             let newline = linebreak.schema().text("\n", &[])?;
             tr.replace_with(start, start + 1, Fragment::from_node(newline))?;
@@ -218,7 +227,7 @@ pub fn can_split(
     let parent = resolved.parent();
     let index = resolved.index(resolved.depth());
     let inner_type = match types_after.last().and_then(Option::as_ref) {
-        Some(wrapper) => &wrapper.node_type,
+        Some(wrapper) => wrapper.node_type,
         None => parent.node_type(),
     };
     if parent.node_type().spec().isolating
@@ -239,7 +248,7 @@ pub fn can_split(
             rest = rest.replace_child(0, over.create(Fragment::empty())?);
         }
         let after = match type_after(i) {
-            Some(wrapper) => &wrapper.node_type,
+            Some(wrapper) => wrapper.node_type,
             None => node.node_type(),
         };
         if !node.can_replace(index + 1, node.child_count(), &Fragment::empty(), 0, 0)?
@@ -250,7 +259,7 @@ pub fn can_split(
     }
     let index = resolved.index_after(base);
     let base_type = match type_after(0) {
-        Some(wrapper) => &wrapper.node_type,
+        Some(wrapper) => wrapper.node_type,
         // A `depth` of 0 leaves no node below `base`, whose type JavaScript reads.
         None if base == resolved.depth() => {
             return Err(js::type_error(js::Nullish::Undefined, "type"));
@@ -259,7 +268,7 @@ pub fn can_split(
     };
     resolved
         .node(base)
-        .can_replace_with(index, index, base_type, None)
+        .can_replace_with(index, index, &base_type, None)
 }
 
 /// Whether the blocks before and after `pos` can be joined.
@@ -279,16 +288,17 @@ fn can_append_with_substituted_linebreaks(a: &Node, b: &Node) -> Result<bool> {
     let linebreak = schema.linebreak_replacement();
     let mut matched = a.content_match_at(a.child_count())?;
     for child in b.children() {
-        let node_type = if Some(child.node_type()) == linebreak.as_ref() {
+        let child_type = child.node_type();
+        let node_type = if Some(child_type) == linebreak {
             schema.text_type()
         } else {
-            child.node_type().clone()
+            child_type
         };
         let Some(next) = matched.match_type(&node_type) else {
             return Ok(false);
         };
         matched = next;
-        if !a.node_type().allows_marks(child.marks()) {
+        if !a.node_type().allows_marks(&child.marks()) {
             return Ok(false);
         }
     }
@@ -316,13 +326,12 @@ pub fn join_point(doc: &Node, pos: usize, dir: i32) -> Result<Option<usize>> {
             index += 1;
             (
                 Some(resolved.node(d + 1).clone()),
-                resolved.node(d).maybe_child(index).cloned(),
+                resolved.node(d).maybe_child(index),
             )
         } else {
             let before = index
                 .checked_sub(1)
-                .and_then(|i| resolved.node(d).maybe_child(i))
-                .cloned();
+                .and_then(|i| resolved.node(d).maybe_child(i));
             (before, Some(resolved.node(d + 1).clone()))
         };
         if let Some(before) = &before
@@ -427,7 +436,7 @@ pub fn drop_point(doc: &Node, pos: usize, slice: &Slice) -> Result<Option<usize>
                     .expect("a closed slice with a size has a first child");
                 match parent
                     .content_match_at(insert_pos)?
-                    .find_wrapping(first.node_type())
+                    .find_wrapping(&first.node_type())
                 {
                     Some(wrapping) if !wrapping.is_empty() => {
                         parent.can_replace_with(insert_pos, insert_pos, &wrapping[0], None)?
@@ -447,9 +456,9 @@ pub fn drop_point(doc: &Node, pos: usize, slice: &Slice) -> Result<Option<usize>
     Ok(None)
 }
 
-impl Transform {
+impl<'a> Transform<'a> {
     /// Lift the range's content out of its parent to `target` depth.
-    pub fn lift(&mut self, range: &NodeRange, target: usize) -> Result<&mut Self> {
+    pub fn lift(&mut self, range: &NodeRange<'a>, target: usize) -> Result<&mut Self> {
         let (from, to, depth) = (range.resolved_from(), range.resolved_to(), range.depth());
         let gap_start = from.before(depth + 1)?;
         let gap_end = to.after(depth + 1)?;
@@ -492,7 +501,7 @@ impl Transform {
     }
 
     /// Wrap the range in these nodes, outermost first.
-    pub fn wrap(&mut self, range: &NodeRange, wrappers: &[Wrapper]) -> Result<&mut Self> {
+    pub fn wrap(&mut self, range: &NodeRange<'a>, wrappers: &[Wrapper]) -> Result<&mut Self> {
         let mut content = Fragment::empty();
         for wrapper in wrappers.iter().rev() {
             if content.size() > 0 {
@@ -523,7 +532,7 @@ impl Transform {
         from: usize,
         to: usize,
         node_type: &NodeType,
-        mut attrs: BlockAttrs,
+        mut attrs: BlockAttrs<'_, 'a>,
     ) -> Result<&mut Self> {
         if !node_type.is_textblock() {
             return Err(Error::Range(
@@ -541,7 +550,7 @@ impl Transform {
                     BlockAttrs::Fixed(attrs) => *attrs,
                     BlockAttrs::Hook(hook) => {
                         hooked = hook(node)?;
-                        hooked.as_deref()
+                        hooked.as_ref()
                     }
                 };
                 if !(node.is_textblock()
@@ -562,7 +571,8 @@ impl Transform {
                 clear_incompatible(self, at, node_type, None, conversion.is_none())?;
                 let mapping = self.mapping_from(map_from);
                 let (start, end) = (mapping.map(pos, 1), mapping.map(pos + node.node_size(), 1));
-                let block = node_type.create(attrs_here, Fragment::empty(), node.marks())?;
+                let block =
+                    node_type.create(attrs_here, Fragment::empty(), &node.marks().to_vec())?;
                 self.step(retype(start, end, block))?;
                 if let Some(NewlineConversion::ToLinebreaks(linebreak)) = &conversion {
                     replace_newlines(self, node, pos, map_from, linebreak)?;
@@ -581,15 +591,15 @@ impl Transform {
         pos: usize,
         node_type: Option<&NodeType>,
         attrs: Option<&Map>,
-        marks: Option<&[Mark]>,
+        marks: Option<&[Mark<'a>]>,
     ) -> Result<&mut Self> {
         let node = self
             .doc()
             .node_at(pos)?
-            .cloned()
             .ok_or_else(|| Error::Range("No node at given position".into()))?;
-        let node_type = node_type.unwrap_or(node.node_type());
-        let new_node = node_type.create(attrs, Fragment::empty(), marks.unwrap_or(node.marks()))?;
+        let node_type = node_type.copied().unwrap_or(node.node_type());
+        let own = node.marks().to_vec();
+        let new_node = node_type.create(attrs, Fragment::empty(), marks.unwrap_or(&own))?;
         if node.is_leaf() {
             return self.replace_with(pos, pos + node.node_size(), Fragment::from_node(new_node));
         }
@@ -639,7 +649,8 @@ impl Transform {
             return Err(Error::Range(format!("Position {before_pos} out of range")));
         };
         let before = self.doc().resolve(before_pos)?;
-        let before_type = before.parent().node_type().clone();
+        let before_parent = before.parent().clone();
+        let before_type = before_parent.node_type();
         let conversion = if before_type.inline_content() {
             newline_conversion(&before_type)
         } else {
@@ -652,9 +663,7 @@ impl Transform {
             replace_linebreaks(self, &node, at, map_from, linebreak)?;
         }
         if before_type.inline_content() {
-            let start = before
-                .parent()
-                .content_match_at(before.index(before.depth()))?;
+            let start = before_parent.content_match_at(before.index(before.depth()))?;
             clear_incompatible(
                 self,
                 pos + depth - 1,

@@ -11,15 +11,15 @@ use crate::stack;
 
 /// A piece cut out of a document: its content, and how deep it is cut open at each end.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Slice {
-    content: Fragment,
+pub struct Slice<'a> {
+    content: Fragment<'a>,
     open_start: usize,
     open_end: usize,
 }
 
-impl Slice {
+impl<'a> Slice<'a> {
     /// A slice of `content` open to these depths, which its first and last nodes must reach.
-    pub fn new(content: Fragment, open_start: usize, open_end: usize) -> Slice {
+    pub fn new(content: Fragment<'a>, open_start: usize, open_end: usize) -> Slice<'a> {
         Slice {
             content,
             open_start,
@@ -27,11 +27,11 @@ impl Slice {
         }
     }
 
-    pub fn empty() -> Slice {
+    pub fn empty() -> Slice<'a> {
         Slice::new(Fragment::empty(), 0, 0)
     }
 
-    pub fn content(&self) -> &Fragment {
+    pub fn content(&self) -> &Fragment<'a> {
         &self.content
     }
 
@@ -53,7 +53,7 @@ impl Slice {
     }
 
     /// The slice with `fragment` put in at `pos`, or `None` where it doesn't fit.
-    pub fn insert_at(&self, pos: usize, fragment: &Fragment) -> Result<Option<Slice>> {
+    pub fn insert_at(&self, pos: usize, fragment: &Fragment<'a>) -> Result<Option<Slice<'a>>> {
         let content = insert_into(
             &self.content,
             pos + self.open_start,
@@ -66,7 +66,7 @@ impl Slice {
     }
 
     /// The slice without its content from `from` to `to`, which must be flat.
-    pub fn remove_between(&self, from: usize, to: usize) -> Result<Slice> {
+    pub fn remove_between(&self, from: usize, to: usize) -> Result<Slice<'a>> {
         let content = remove_range(&self.content, from + self.open_start, to + self.open_start)?;
         Ok(Slice::new(content, self.open_start, self.open_end))
     }
@@ -97,7 +97,7 @@ impl Slice {
         Value::Object(json)
     }
 
-    pub fn from_json(schema: &Schema, json: &Value) -> Result<Slice> {
+    pub fn from_json(schema: &Schema, json: &Value) -> Result<Slice<'static>> {
         if !js::truthy(Some(json)) {
             return Ok(Slice::empty());
         }
@@ -124,7 +124,7 @@ impl Slice {
 
     /// A slice of `fragment` open as deep as it goes at both ends, but not into isolating
     /// nodes unless `open_isolating`.
-    pub fn max_open(fragment: Fragment, open_isolating: bool) -> Slice {
+    pub fn max_open(fragment: Fragment<'a>, open_isolating: bool) -> Slice<'a> {
         let open_start = open_depth(
             &fragment,
             open_isolating,
@@ -141,11 +141,11 @@ impl Slice {
     }
 }
 
-fn open_depth(
-    fragment: &Fragment,
+fn open_depth<'a>(
+    fragment: &Fragment<'a>,
     open_isolating: bool,
-    edge: fn(&Fragment) -> Option<&Node>,
-    next: fn(&Node) -> Option<&Node>,
+    edge: fn(&Fragment<'a>) -> Option<Node<'a>>,
+    next: fn(&Node<'a>) -> Option<Node<'a>>,
 ) -> usize {
     let mut depth = 0;
     let mut node = edge(fragment);
@@ -154,16 +154,16 @@ fn open_depth(
         && (open_isolating || !current.node_type().spec().isolating)
     {
         depth += 1;
-        node = next(current);
+        node = next(&current);
     }
     depth
 }
 
-fn remove_range(content: &Fragment, from: usize, to: usize) -> Result<Fragment> {
+fn remove_range<'a>(content: &Fragment<'a>, from: usize, to: usize) -> Result<Fragment<'a>> {
     let (index, offset) = content.find_index(from)?;
     let child = content.maybe_child(index);
     let (index_to, offset_to) = content.find_index(to)?;
-    if offset == from || child.is_some_and(Node::is_text) {
+    if offset == from || child.as_ref().is_some_and(Node::is_text) {
         if offset_to != to && !content.child(index_to)?.is_text() {
             return Err(Error::Range("Removing non-flat range".into()));
         }
@@ -179,17 +179,17 @@ fn remove_range(content: &Fragment, from: usize, to: usize) -> Result<Fragment> 
     Ok(content.replace_child(index, child.copy(inner)))
 }
 
-fn insert_into(
-    content: &Fragment,
+fn insert_into<'a>(
+    content: &Fragment<'a>,
     dist: usize,
-    insert: &Fragment,
+    insert: &Fragment<'a>,
     open_start: usize,
     open_end: usize,
-    parent: Option<&Node>,
-) -> Result<Option<Fragment>> {
+    parent: Option<&Node<'a>>,
+) -> Result<Option<Fragment<'a>>> {
     let (index, offset) = content.find_index(dist)?;
     let child = content.maybe_child(index);
-    if offset == dist || child.is_some_and(Node::is_text) {
+    if offset == dist || child.as_ref().is_some_and(Node::is_text) {
         if let Some(parent) = parent
             && open_start == 0
             && open_end == 0
@@ -220,33 +220,18 @@ fn insert_into(
             } else {
                 0
             },
-            Some(child),
+            Some(&child),
         )
     })?;
     Ok(inner.map(|inner| content.replace_child(index, child.copy(inner))))
 }
 
 /// The document `from` is in, with `from` to `to` replaced by `slice`.
-/// What replacing a range makes of the top node.
-pub(crate) enum Replaced {
-    /// The node anew.
-    Node(Node),
-    /// The node's child at this index anew, the range lying inside it.
-    Child(usize, Node),
-}
-
-pub(crate) fn replace(from: &ResolvedPos, to: &ResolvedPos, slice: &Slice) -> Result<Node> {
-    Ok(match replace_top(from, to, slice)? {
-        Replaced::Node(node) => node,
-        Replaced::Child(index, child) => {
-            let node = from.node(0);
-            node.copy(node.content().replace_child(index, child))
-        }
-    })
-}
-
-/// `replace`, leaving the top node for the caller to put a child it made anew in.
-pub(crate) fn replace_top(from: &ResolvedPos, to: &ResolvedPos, slice: &Slice) -> Result<Replaced> {
+pub(crate) fn replace<'a>(
+    from: &ResolvedPos<'a>,
+    to: &ResolvedPos<'a>,
+    slice: &Slice<'a>,
+) -> Result<Node<'a>> {
     if slice.open_start > from.depth() {
         return Err(Error::Replace(
             "Inserted content deeper than insertion position".into(),
@@ -255,20 +240,15 @@ pub(crate) fn replace_top(from: &ResolvedPos, to: &ResolvedPos, slice: &Slice) -
     if from.depth() + slice.open_end != to.depth() + slice.open_start {
         return Err(Error::Replace("Inconsistent open depths".into()));
     }
-    let index = from.index(0);
-    if index == to.index(0) && 0 < from.depth() - slice.open_start {
-        let child = stack::grow(|| replace_outer(from, to, slice, 1))?;
-        return Ok(Replaced::Child(index, child));
-    }
-    replace_outer(from, to, slice, 0).map(Replaced::Node)
+    replace_outer(from, to, slice, 0)
 }
 
-fn replace_outer(
-    from: &ResolvedPos,
-    to: &ResolvedPos,
-    slice: &Slice,
+fn replace_outer<'a>(
+    from: &ResolvedPos<'a>,
+    to: &ResolvedPos<'a>,
+    slice: &Slice<'a>,
     depth: usize,
-) -> Result<Node> {
+) -> Result<Node<'a>> {
     let index = from.index(depth);
     let node = from.node(depth);
     if index == to.index(depth) && depth < from.depth() - slice.open_start {
@@ -297,7 +277,7 @@ fn replace_outer(
 }
 
 fn check_join(main: &Node, sub: &Node) -> Result<()> {
-    if !sub.node_type().compatible_content(main.node_type()) {
+    if !sub.node_type().compatible_content(&main.node_type()) {
         return Err(Error::Replace(format!(
             "Cannot join {} onto {}",
             sub.node_type().name(),
@@ -307,13 +287,17 @@ fn check_join(main: &Node, sub: &Node) -> Result<()> {
     Ok(())
 }
 
-fn joinable<'a>(before: &'a ResolvedPos, after: &ResolvedPos, depth: usize) -> Result<&'a Node> {
+fn joinable<'r, 'a>(
+    before: &'r ResolvedPos<'a>,
+    after: &ResolvedPos<'a>,
+    depth: usize,
+) -> Result<&'r Node<'a>> {
     let node = before.node(depth);
     check_join(node, after.node(depth))?;
     Ok(node)
 }
 
-fn add_node(child: Node, target: &mut Vec<Node>) {
+fn add_node<'a>(child: Node<'a>, target: &mut Vec<Node<'a>>) {
     if let Some(last) = target.last_mut()
         && let Some(joined) = last.join_text(&child)
     {
@@ -323,11 +307,11 @@ fn add_node(child: Node, target: &mut Vec<Node>) {
     }
 }
 
-fn add_range(
-    start: Option<&ResolvedPos>,
-    end: Option<&ResolvedPos>,
+fn add_range<'a>(
+    start: Option<&ResolvedPos<'a>>,
+    end: Option<&ResolvedPos<'a>>,
     depth: usize,
-    target: &mut Vec<Node>,
+    target: &mut Vec<Node<'a>>,
 ) {
     let node = end.or(start).expect("a position").node(depth);
     let mut start_index = 0;
@@ -341,8 +325,8 @@ fn add_range(
             start_index += 1;
         }
     }
-    for child in &node.children()[start_index.min(end_index)..end_index] {
-        add_node(child.clone(), target);
+    for index in start_index.min(end_index)..end_index {
+        add_node(node.maybe_child(index).expect("a child"), target);
     }
     if let Some(end) = end
         && end.depth() == depth
@@ -352,7 +336,7 @@ fn add_range(
     }
 }
 
-fn close(node: &Node, content: Fragment) -> Result<Node> {
+fn close<'a>(node: &Node<'a>, content: Fragment<'a>) -> Result<Node<'a>> {
     if !node.node_type().valid_content(&content) {
         return Err(Error::Replace(format!(
             "Invalid content for node {}",
@@ -362,13 +346,13 @@ fn close(node: &Node, content: Fragment) -> Result<Node> {
     Ok(node.copy(content))
 }
 
-fn replace_three_way(
-    from: &ResolvedPos,
-    start: &ResolvedPos,
-    end: &ResolvedPos,
-    to: &ResolvedPos,
+fn replace_three_way<'a>(
+    from: &ResolvedPos<'a>,
+    start: &ResolvedPos<'a>,
+    end: &ResolvedPos<'a>,
+    to: &ResolvedPos<'a>,
     depth: usize,
-) -> Result<Fragment> {
+) -> Result<Fragment<'a>> {
     let open_start = if from.depth() > depth {
         Some(joinable(from, start, depth + 1)?)
     } else {
@@ -410,10 +394,14 @@ fn replace_three_way(
         }
     }
     add_range(Some(to), None, depth, &mut content);
-    Ok(Fragment::new(content))
+    Ok(Fragment::new(&content))
 }
 
-fn replace_two_way(from: &ResolvedPos, to: &ResolvedPos, depth: usize) -> Result<Fragment> {
+fn replace_two_way<'a>(
+    from: &ResolvedPos<'a>,
+    to: &ResolvedPos<'a>,
+    depth: usize,
+) -> Result<Fragment<'a>> {
     let mut content = Vec::new();
     add_range(None, Some(from), depth, &mut content);
     if from.depth() > depth {
@@ -424,14 +412,14 @@ fn replace_two_way(from: &ResolvedPos, to: &ResolvedPos, depth: usize) -> Result
         );
     }
     add_range(Some(to), None, depth, &mut content);
-    Ok(Fragment::new(content))
+    Ok(Fragment::new(&content))
 }
 
 /// The slice placed in copies of `along`'s ancestors, and resolved where it starts and ends.
-fn prepare_slice_for_replace(
-    slice: &Slice,
-    along: &ResolvedPos,
-) -> Result<(ResolvedPos, ResolvedPos)> {
+fn prepare_slice_for_replace<'a>(
+    slice: &Slice<'a>,
+    along: &ResolvedPos<'a>,
+) -> Result<(ResolvedPos<'a>, ResolvedPos<'a>)> {
     let extra = along.depth() - slice.open_start;
     let mut node = along.node(extra).copy(slice.content.clone());
     for depth in (0..extra).rev() {

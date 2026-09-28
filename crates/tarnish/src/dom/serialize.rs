@@ -6,6 +6,7 @@ use std::sync::Arc;
 use super::{Dom, NodeKind};
 use crate::error::{Error, Result};
 use crate::json::{Map, Value};
+use crate::chunk::ValueRef;
 use crate::model::{Fragment, Mark, Node};
 use crate::stack;
 
@@ -17,12 +18,12 @@ pub enum DomSpec<N> {
     /// An element, and the element in it to put the content in: `{dom, contentDOM}`.
     Rendered(Rendered<N>),
     /// `[name, attrs?, ...children]`, with DOM nodes among its items. For an array made from
-    /// one in the node's or mark's attributes, `origin` is where that array's items are
-    /// (`Vec::as_ptr`): such an array is refused when it starts with a string, as an attacker
-    /// may have written it. Only this origin is checked.
+    /// one in the node's or mark's attributes, `origin` is that array's [`ValueRef::id`]: such
+    /// an array is refused when it starts with a string, as an attacker may have written it.
+    /// Only this origin is checked.
     Array {
         items: Vec<DomSpec<N>>,
-        origin: Option<usize>,
+        origin: Option<(usize, u32)>,
     },
     /// A value: a string, the content hole `0`, an attributes object, or an array spec of
     /// values. Its arrays aren't checked against the attributes, as a copy of one can't be told
@@ -38,10 +39,10 @@ pub struct Rendered<N> {
     pub content_dom: Option<N>,
 }
 
-pub type NodeToDom<N> = Arc<dyn Fn(&Node) -> Result<DomSpec<N>> + Send + Sync>;
+pub type NodeToDom<N> = Arc<dyn for<'a> Fn(&Node<'a>) -> Result<DomSpec<N>> + Send + Sync>;
 
 /// A mark's `toDOM`, told whether the mark's content is inline.
-pub type MarkToDom<N> = Arc<dyn Fn(&Mark, bool) -> Result<DomSpec<N>> + Send + Sync>;
+pub type MarkToDom<N> = Arc<dyn for<'a> Fn(&Mark<'a>, bool) -> Result<DomSpec<N>> + Send + Sync>;
 
 /// Serializes nodes and marks to a DOM with each type's `toDOM`.
 pub struct DomSerializer<N> {
@@ -70,7 +71,7 @@ impl<N: Clone> DomSerializer<N> {
         let mut top = target.clone();
         let mut active: Vec<(Mark, N)> = Vec::new();
         for node in fragment.children() {
-            let marks = node.marks();
+            let marks = node.marks().to_vec();
             if !active.is_empty() || !marks.is_empty() {
                 let (mut keep, mut rendered) = (0, 0);
                 while keep < active.len() && rendered < marks.len() {
@@ -98,7 +99,7 @@ impl<N: Clone> DomSerializer<N> {
                     }
                 }
             }
-            let inner = self.serialize_node_inner(dom, node)?;
+            let inner = self.serialize_node_inner(dom, &node)?;
             dom.append_child(&top, &inner)?;
         }
         Ok(target)
@@ -106,7 +107,7 @@ impl<N: Clone> DomSerializer<N> {
 
     fn serialize_node_inner<D: Dom<Node = N>>(&self, dom: &D, node: &Node) -> Result<N> {
         if let Some(text) = node.text() {
-            return dom.create_text(text);
+            return dom.create_text(&text.to_text());
         }
         let name = node.node_type().name();
         let to_dom = self
@@ -114,7 +115,7 @@ impl<N: Clone> DomSerializer<N> {
             .get(name)
             .ok_or_else(|| Error::Other(format!("No toDOM for node type {name}")))?;
         let spec = to_dom(node)?;
-        let rendered = render(dom, Item::Spec(&spec), None, Some(node.attrs()))?;
+        let rendered = render(dom, Item::Spec(&spec), None, Some(node.attrs_view()))?;
         if let Some(content_dom) = rendered.content_dom {
             if node.is_leaf() {
                 return Err(Error::Range(
@@ -130,7 +131,7 @@ impl<N: Clone> DomSerializer<N> {
     pub fn serialize_node<D: Dom<Node = N>>(&self, dom: &D, node: &Node) -> Result<N> {
         let mut element = self.serialize_node_inner(dom, node)?;
         for mark in node.marks().iter().rev() {
-            if let Some(wrap) = self.serialize_mark(dom, mark, node.is_inline())? {
+            if let Some(wrap) = self.serialize_mark(dom, &mark, node.is_inline())? {
                 dom.append_child(wrap.content_dom.as_ref().unwrap_or(&wrap.dom), &element)?;
                 element = wrap.dom;
             }
@@ -149,7 +150,7 @@ impl<N: Clone> DomSerializer<N> {
             return Ok(None);
         };
         let spec = to_dom(mark, inline)?;
-        render(dom, Item::Spec(&spec), None, Some(mark.attrs())).map(Some)
+        render(dom, Item::Spec(&spec), None, Some(mark.attrs_view())).map(Some)
     }
 }
 
@@ -234,7 +235,7 @@ fn render<D: Dom>(
     dom: &D,
     structure: Item<'_, D::Node>,
     xml_ns: Option<&str>,
-    block_arrays_in: Option<&Map>,
+    block_arrays_in: Option<ValueRef>,
 ) -> Result<Rendered<D::Node>> {
     let (items, origin) = match structure {
         Item::Spec(DomSpec::Node(node)) if dom.kind(node)? == NodeKind::Element => {
@@ -345,20 +346,21 @@ fn set_attributes<D: Dom>(dom: &D, element: &D::Node, attrs: &Map) -> Result<()>
     Ok(())
 }
 
-/// Whether the attributes hold the array whose items are at `origin` where it could be taken
-/// for a spec: starting with a string, and not inside another such array.
-fn holds_spec_array(attrs: &Map, origin: usize) -> bool {
-    fn scan(value: &Value, origin: usize) -> bool {
-        match value {
-            Value::Array(items) if matches!(items.first(), Some(Value::String(_))) => {
-                items.as_ptr() as usize == origin
+/// Whether the attributes hold the array `origin` where it could be taken for a spec: starting
+/// with a string, and not inside another such array.
+fn holds_spec_array(attrs: ValueRef, origin: (usize, u32)) -> bool {
+    fn scan(value: ValueRef, origin: (usize, u32)) -> bool {
+        let mut items = value.items();
+        match items.next() {
+            Some(first) if first.as_str().is_some() => value.id() == origin,
+            Some(first) => {
+                stack::grow(|| scan(first, origin))
+                    || items.any(|item| stack::grow(|| scan(item, origin)))
             }
-            Value::Array(items) => items.iter().any(|item| stack::grow(|| scan(item, origin))),
-            Value::Object(object) => object
-                .iter()
+            None => value
+                .entries()
                 .any(|(_, item)| stack::grow(|| scan(item, origin))),
-            _ => false,
         }
     }
-    attrs.iter().any(|(_, value)| scan(value, origin))
+    attrs.entries().any(|(_, value)| scan(value, origin))
 }

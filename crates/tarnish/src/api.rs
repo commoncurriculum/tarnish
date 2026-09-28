@@ -12,11 +12,10 @@ pub fn schema(spec: &Value) -> Result<Schema> {
     Schema::new(SchemaSpec::from_json(spec)?)
 }
 
-/// The document with the steps applied in order. Each step is given the document the one before
-/// it made, which nothing else holds, so a replace can change it in place.
-pub fn apply_steps(doc: &Node, steps: &Value) -> Result<Node> {
+/// The document with the steps applied in order.
+pub fn apply_steps<'a>(doc: &Node<'a>, steps: &Value) -> Result<Node<'a>> {
     let mut doc = doc.clone();
-    for step in step_list(doc.node_type().schema(), steps)? {
+    for step in step_list(doc.schema(), steps)? {
         doc = match step.apply(doc)? {
             StepResult::Ok(doc) => doc,
             StepResult::Failed(message) => return Err(Error::Transform(message)),
@@ -48,7 +47,7 @@ pub fn map_position(schema: &Schema, steps: &Value, pos: usize, assoc: i32) -> R
     Ok(mapping.map(pos, assoc))
 }
 
-fn step_list(schema: &Schema, json: &Value) -> Result<Vec<Step>> {
+fn step_list(schema: &Schema, json: &Value) -> Result<Vec<Step<'static>>> {
     match json {
         Value::Array(steps) => steps
             .iter()
@@ -58,9 +57,9 @@ fn step_list(schema: &Schema, json: &Value) -> Result<Vec<Step>> {
     }
 }
 
-fn transform(doc: &Node, steps: &Value) -> Result<Transform> {
+fn transform<'a>(doc: &Node<'a>, steps: &Value) -> Result<Transform<'a>> {
     let mut tr = Transform::new(doc.clone());
-    for step in step_list(doc.node_type().schema(), steps)? {
+    for step in step_list(doc.schema(), steps)? {
         tr.step(step)?;
     }
     Ok(tr)

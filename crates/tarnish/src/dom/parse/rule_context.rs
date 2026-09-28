@@ -5,7 +5,7 @@ use crate::dom::Dom;
 use crate::error::Result;
 use crate::text::is_js_space;
 
-impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
+impl<'p, D: Dom> ParseContext<'p, D> {
     /// Whether the context string matches the nodes being parsed into.
     pub(super) fn matches_context(&self, context: &str) -> Result<bool> {
         if context.contains('|') {
@@ -20,7 +20,9 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
         let option = self.options.context.as_ref();
         let use_root = !self.is_open
             && option.is_none_or(|option| {
-                Some(option.parent().node_type()) == self.nodes[0].node_type.as_ref()
+                self.nodes[0]
+                    .node_type
+                    .is_some_and(|top| top == option.parent().node_type())
             });
         let min_depth = -(option.map_or(0, |option| option.depth() as isize + 1))
             + if use_root { 0 } else { 1 };
@@ -58,16 +60,11 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
                 return Ok(false);
             }
             let next = if depth > 0 || (depth == 0 && use_root) {
-                self.nodes[depth as usize].node_type.clone()
+                self.nodes[depth as usize].node_type
             } else if let Some(option) = option
                 && depth >= min_depth
             {
-                Some(
-                    option
-                        .node((depth - min_depth) as usize)
-                        .node_type()
-                        .clone(),
-                )
+                Some(option.node((depth - min_depth) as usize).node_type())
             } else {
                 None
             };

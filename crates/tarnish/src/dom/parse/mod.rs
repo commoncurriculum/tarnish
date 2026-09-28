@@ -10,7 +10,8 @@ mod walk;
 
 use super::Dom;
 use crate::error::Result;
-use crate::model::{Attrs, ContentMatch, Node, ResolvedPos, Schema, Slice};
+use crate::json::Map;
+use crate::model::{ContentMatch, Node, ResolvedPos, Schema, Slice};
 use context::ParseContext;
 use node_context::NodeContext;
 
@@ -41,10 +42,10 @@ pub struct ParseOptions<'a, N> {
     /// The index of the child to stop parsing at.
     pub to: Option<usize>,
     /// The node whose type and attributes to parse into, instead of the schema's top node's.
-    pub top_node: Option<Node>,
-    pub top_match: Option<ContentMatch>,
+    pub top_node: Option<Node<'a>>,
+    pub top_match: Option<ContentMatch<'a>>,
     /// Nodes to count as the context above the top node.
-    pub context: Option<ResolvedPos>,
+    pub context: Option<ResolvedPos<'a>>,
     pub rule_from_node: Option<RuleFromNode<'a, N>>,
     pub top_open: bool,
 }
@@ -124,7 +125,7 @@ impl<N: Clone> DomParser<N> {
         dom: &D,
         node: &N,
         options: ParseOptions<'_, N>,
-    ) -> Result<Node> {
+    ) -> Result<Node<'static>> {
         let top_open = options.top_open;
         self.run(dom, node, options, false)?.finish_node(top_open)
     }
@@ -136,20 +137,20 @@ impl<N: Clone> DomParser<N> {
         dom: &D,
         node: &N,
         options: ParseOptions<'_, N>,
-    ) -> Result<Slice> {
+    ) -> Result<Slice<'static>> {
         let content = self.run(dom, node, options, true)?.finish_content(true)?;
         Ok(Slice::max_open(content, true))
     }
 
     /// Parse the node's children, and give back the top context, with every node above it
     /// closed.
-    fn run<D: Dom<Node = N>>(
-        &self,
-        dom: &D,
+    fn run<'p, D: Dom<Node = N>>(
+        &'p self,
+        dom: &'p D,
         node: &N,
-        options: ParseOptions<'_, N>,
+        options: ParseOptions<'p, N>,
         is_open: bool,
-    ) -> Result<NodeContext> {
+    ) -> Result<NodeContext<'p>> {
         let (from, to) = (options.from, options.to);
         let mut context = ParseContext::new(self, dom, options, is_open);
         context.add_all(node, &[], from, to)?;
@@ -161,7 +162,7 @@ impl<N: Clone> DomParser<N> {
         &self,
         dom: &D,
         node: &N,
-        context: &ParseContext<'_, '_, D>,
+        context: &ParseContext<'_, D>,
         after: Option<usize>,
     ) -> Result<Option<Matched<'_, N>>> {
         let start = after.map_or(0, |after| after + 1);
@@ -210,9 +211,9 @@ impl<N: Clone> DomParser<N> {
         &self,
         property: &str,
         value: &str,
-        context: &ParseContext<'_, '_, D>,
+        context: &ParseContext<'_, D>,
         after: Option<usize>,
-    ) -> Result<Option<(usize, Option<Attrs>)>> {
+    ) -> Result<Option<(usize, Option<Map>)>> {
         let start = after.map_or(0, |after| after + 1);
         for (index, rule) in self.styles.iter().enumerate().skip(start) {
             let style = &rule.kind.style;
@@ -250,7 +251,7 @@ struct Matched<'r, N> {
     element: &'r ElementRule<N>,
     mark: Option<&'r str>,
     ignore: bool,
-    attrs: Option<Attrs>,
+    attrs: Option<Map>,
     /// The index of the parser's rule, when it isn't consuming, for the rules after it to match
     /// the element too.
     continue_after: Option<usize>,

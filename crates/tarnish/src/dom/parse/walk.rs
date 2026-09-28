@@ -22,8 +22,8 @@ struct TextSource<'n, N> {
     value: Text,
 }
 
-impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
-    fn add_dom(&mut self, node: &D::Node, marks: &[Mark]) -> Result<()> {
+impl<'p, D: Dom> ParseContext<'p, D> {
+    fn add_dom(&mut self, node: &D::Node, marks: &[Mark<'static>]) -> Result<()> {
         match self.dom.kind(node)? {
             NodeKind::Text => {
                 let value = self.dom.text(node)?;
@@ -40,7 +40,7 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
         }
     }
 
-    fn add_text_node(&mut self, source: TextSource<'_, D::Node>, marks: &[Mark]) -> Result<()> {
+    fn add_text_node(&mut self, source: TextSource<'_, D::Node>, marks: &[Mark<'static>]) -> Result<()> {
         let local = match self.local_preserve_ws {
             true => PreserveWhitespace::Yes,
             false => PreserveWhitespace::No,
@@ -117,7 +117,7 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
         {
             return Ok(true);
         }
-        let last = before.text().and_then(Text::last_unit);
+        let last = before.text().and_then(|text| text.last_unit());
         Ok(last.is_some_and(is_html_space))
     }
 
@@ -125,7 +125,7 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
     fn add_element(
         &mut self,
         node: &D::Node,
-        marks: &[Mark],
+        marks: &[Mark<'static>],
         match_after: Option<usize>,
     ) -> Result<()> {
         let (dom, parser) = (self.dom, self.parser);
@@ -178,7 +178,7 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
         node: &D::Node,
         name: &str,
         lower_name: &str,
-        marks: &[Mark],
+        marks: &[Mark<'static>],
         rule: Option<&ElementRule<D::Node>>,
     ) -> Result<()> {
         // The context open when the element came, which closing its parent leaves on the stack.
@@ -230,7 +230,7 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
     }
 
     /// Called for a leaf DOM node, by its name, that would otherwise be ignored.
-    fn leaf_fallback(&mut self, name: &str, marks: &[Mark]) -> Result<()> {
+    fn leaf_fallback(&mut self, name: &str, marks: &[Mark<'static>]) -> Result<()> {
         if name == "BR"
             && self
                 .top()
@@ -248,7 +248,7 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
     }
 
     /// Called for an ignored node, by its name.
-    fn ignore_fallback(&mut self, name: &str, marks: &[Mark]) -> Result<()> {
+    fn ignore_fallback(&mut self, name: &str, marks: &[Mark<'static>]) -> Result<()> {
         // An ignored <br> still makes an inline context.
         if name == "BR"
             && !self
@@ -265,7 +265,7 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
 
     /// The marks with those the element's styles add or clear, `None` when a style's rule
     /// ignores the element.
-    fn read_styles(&mut self, node: &D::Node, marks: &[Mark]) -> Result<Option<Vec<Mark>>> {
+    fn read_styles(&mut self, node: &D::Node, marks: &[Mark<'static>]) -> Result<Option<Vec<Mark<'static>>>> {
         let mut marks = marks.to_vec();
         if self.dom.style_count(node)? == 0 {
             return Ok(Some(marks));
@@ -294,7 +294,7 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
                     }
                     None => {
                         let mark_type = self.rule_mark_type(rule.mark.as_deref())?;
-                        marks.push(mark_type.create(attrs.as_deref())?);
+                        marks.push(mark_type.create(attrs.as_ref())?);
                     }
                 }
                 if rule.consuming {
@@ -306,7 +306,7 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
         Ok(Some(marks))
     }
 
-    fn rule_mark_type(&self, mark: Option<&str>) -> Result<MarkType> {
+    fn rule_mark_type(&self, mark: Option<&str>) -> Result<MarkType<'p>> {
         let mark_type = mark.and_then(|name| self.schema().mark_type(name));
         mark_type.ok_or_else(|| {
             Error::Other(match mark {
@@ -322,7 +322,7 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
         node: &D::Node,
         name: &str,
         matched: &Matched<'_, D::Node>,
-        marks: &[Mark],
+        marks: &[Mark<'static>],
     ) -> Result<()> {
         let rule = matched.element;
         let mut marks = marks.to_vec();
@@ -333,7 +333,7 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
         };
         match &node_type {
             Some(node_type) if node_type.is_leaf() => {
-                let created = node_type.create(matched.attrs.as_deref(), Fragment::empty(), &[])?;
+                let created = node_type.create(matched.attrs.as_ref(), Fragment::empty(), &[])?;
                 if !self.insert_node(created, &marks, name == "BR")? {
                     self.leaf_fallback(name, &marks)?;
                 }
@@ -349,7 +349,7 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
             }
             None => {
                 let mark_type = self.rule_mark_type(matched.mark)?;
-                marks.push(mark_type.create(matched.attrs.as_deref())?);
+                marks.push(mark_type.create(matched.attrs.as_ref())?);
             }
         }
         let start_in = self.top().id;
@@ -361,8 +361,9 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
             let content_dom = match &rule.content {
                 Content::Get(get_content) => {
                     self.find_inside(node)?;
-                    for child in get_content(node, self.schema())?.children() {
-                        self.insert_node(child.clone(), &marks, false)?;
+                    let content = get_content(node, self.schema())?;
+                    for child in content.children() {
+                        self.insert_node(child, &marks, false)?;
                     }
                     None
                 }
@@ -392,7 +393,7 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
     pub(super) fn add_all(
         &mut self,
         parent: &D::Node,
-        marks: &[Mark],
+        marks: &[Mark<'static>],
         start: Option<usize>,
         end: Option<usize>,
     ) -> Result<()> {

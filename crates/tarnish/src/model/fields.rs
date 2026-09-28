@@ -1,20 +1,22 @@
 //! The fields of a node's or mark's JSON, as `toJSON` makes them. The JSON value, its text, and
-//! the Erlang term each write them.
+//! the Erlang term each write them, from the chunk.
 
 use super::mark::Mark;
 use super::node::Node;
+use super::view::{MarkRef, NodeRef, SetRef, TextRef};
+use crate::chunk::ValueRef;
 use crate::js::json;
 use crate::json::{Map, Value};
 use crate::stack;
-use crate::text::Text;
 
 #[derive(Clone, Copy)]
-pub enum Field<'a> {
-    Type(&'a str),
-    Attrs(&'a Map),
-    Content(&'a [Node]),
-    Marks(&'a [Mark]),
-    Text(&'a Text),
+pub enum Field<'c> {
+    Type(&'c str),
+    Attrs(ValueRef<'c>),
+    /// The node whose children the content is.
+    Content(NodeRef<'c>),
+    Marks(SetRef<'c>),
+    Text(TextRef<'c>),
 }
 
 impl Field<'_> {
@@ -30,77 +32,80 @@ impl Field<'_> {
 }
 
 /// A node or mark, as the fields of its JSON.
-pub trait Fields {
+pub trait Fields<'c>: Copy {
     /// Each field `toJSON` writes, in its order.
-    fn fields<'a>(&'a self, field: impl FnMut(Field<'a>));
+    fn fields(self, field: impl FnMut(Field<'c>));
 
-    fn field_count(&self) -> usize {
-        let mut count = 0;
-        self.fields(|_| count += 1);
-        count
-    }
+    fn field_count(self) -> usize;
 }
 
-impl Fields for Node {
+impl<'c> Fields<'c> for NodeRef<'c> {
     #[inline]
-    fn fields<'a>(&'a self, mut field: impl FnMut(Field<'a>)) {
+    fn fields(self, mut field: impl FnMut(Field<'c>)) {
         field(Field::Type(self.node_type().name()));
-        if !self.attrs().is_empty() {
-            field(Field::Attrs(self.attrs()));
+        let attrs = self.attrs();
+        if !attrs.is_empty() {
+            field(Field::Attrs(attrs));
         }
-        if self.child_count() > 0 {
-            field(Field::Content(self.children()));
+        if self.content_size() > 0 {
+            field(Field::Content(self));
         }
-        if !self.marks().is_empty() {
-            field(Field::Marks(self.marks()));
+        let marks = self.marks();
+        if !marks.is_empty() {
+            field(Field::Marks(marks));
         }
         if let Some(text) = self.text() {
             field(Field::Text(text));
         }
     }
 
-    fn field_count(&self) -> usize {
+    fn field_count(self) -> usize {
         1 + usize::from(!self.attrs().is_empty())
-            + usize::from(self.child_count() > 0)
+            + usize::from(self.content_size() > 0)
             + usize::from(!self.marks().is_empty())
-            + usize::from(self.text().is_some())
+            + usize::from(self.is_text())
     }
 }
 
-impl Fields for Mark {
+impl<'c> Fields<'c> for MarkRef<'c> {
     #[inline]
-    fn fields<'a>(&'a self, mut field: impl FnMut(Field<'a>)) {
+    fn fields(self, mut field: impl FnMut(Field<'c>)) {
         field(Field::Type(self.mark_type().name()));
-        if !self.attrs().is_empty() {
-            field(Field::Attrs(self.attrs()));
+        let attrs = self.attrs();
+        if !attrs.is_empty() {
+            field(Field::Attrs(attrs));
         }
     }
 
-    fn field_count(&self) -> usize {
+    fn field_count(self) -> usize {
         1 + usize::from(!self.attrs().is_empty())
     }
 }
 
-impl Node {
+impl Node<'_> {
     pub fn to_json(&self) -> Value {
-        to_value(self)
+        node_value(self.view())
     }
 
     /// `JSON.stringify(node.toJSON())`. Text keeps a lone surrogate, which a JSON value can't.
     pub fn to_json_string(&self) -> String {
         let mut out = String::new();
-        write_json(&mut out, self);
+        write_json(&mut out, self.view());
         out
     }
 }
 
-impl Mark {
+impl Mark<'_> {
     pub fn to_json(&self) -> Value {
-        to_value(self)
+        to_value(self.view())
     }
 }
 
-fn to_value(fields: &impl Fields) -> Value {
+pub(crate) fn node_value(node: NodeRef) -> Value {
+    to_value(node)
+}
+
+fn to_value<'c>(fields: impl Fields<'c>) -> Value {
     let mut object = Map::with_capacity(fields.field_count());
     fields.fields(|field| object.push(field.key().into(), field_value(field)));
     Value::Object(object)
@@ -109,19 +114,18 @@ fn to_value(fields: &impl Fields) -> Value {
 fn field_value(field: Field) -> Value {
     match field {
         Field::Type(name) => Value::String(name.into()),
-        Field::Attrs(attrs) => Value::Object(attrs.clone()),
-        Field::Content(children) => Value::Array(
-            children
-                .iter()
-                .map(|child| stack::grow(|| child.to_json()))
+        Field::Attrs(attrs) => attrs.to_value(),
+        Field::Content(node) => Value::Array(
+            node.children()
+                .map(|child| stack::grow(|| to_value(child)))
                 .collect(),
         ),
-        Field::Marks(marks) => Value::Array(marks.iter().map(Mark::to_json).collect()),
+        Field::Marks(marks) => Value::Array(marks.iter().map(to_value).collect()),
         Field::Text(text) => Value::String(text.to_string_lossy().into_owned()),
     }
 }
 
-fn write_json(out: &mut String, fields: &impl Fields) {
+pub(crate) fn write_json<'c>(out: &mut String, fields: impl Fields<'c>) {
     out.push('{');
     let mut first = true;
     fields.fields(|field| {
@@ -132,24 +136,29 @@ fn write_json(out: &mut String, fields: &impl Fields) {
         out.push(':');
         match field {
             Field::Type(name) => json::write_string(out, name),
-            Field::Attrs(attrs) => json::write_object(out, attrs),
-            Field::Content(children) => write_list(out, children, |out, child| {
-                stack::grow(|| write_json(out, child))
-            }),
-            Field::Marks(marks) => write_list(out, marks, write_json),
+            Field::Attrs(attrs) => attrs.write_json(out),
+            Field::Content(node) => {
+                out.push('[');
+                for (index, child) in node.children().enumerate() {
+                    if index > 0 {
+                        out.push(',');
+                    }
+                    stack::grow(|| write_json(out, child));
+                }
+                out.push(']');
+            }
+            Field::Marks(marks) => {
+                out.push('[');
+                for (index, mark) in marks.iter().enumerate() {
+                    if index > 0 {
+                        out.push(',');
+                    }
+                    write_json(out, mark);
+                }
+                out.push(']');
+            }
             Field::Text(text) => text.write_json(out),
         }
     });
     out.push('}');
-}
-
-fn write_list<T>(out: &mut String, items: &[T], mut write: impl FnMut(&mut String, &T)) {
-    out.push('[');
-    for (index, item) in items.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        write(out, item);
-    }
-    out.push(']');
 }

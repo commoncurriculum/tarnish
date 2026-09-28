@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-use super::attrs::{AttrSet, AttributeSpec, Attrs};
+use super::attrs::{AttrSet, AttributeSpec};
 use super::content::{Automaton, ContentMatch};
 use super::fragment::Fragment;
 use super::mark::{Mark, Marks};
@@ -15,7 +15,7 @@ use crate::json::Map;
 use crate::text::Text;
 
 /// A function the host gives a node spec, such as `leafText`.
-pub type NodeHook<T> = Arc<dyn Fn(&Node) -> Result<T> + Send + Sync>;
+pub type NodeHook<T> = Arc<dyn for<'a> Fn(&Node<'a>) -> Result<T> + Send + Sync>;
 
 /// What [`Schema::new`] builds a schema from. Its node and mark types are in order: the order
 /// decides which comes first in a group, and how marks sort in a set.
@@ -83,10 +83,20 @@ impl NodeTypeData {
         !self.is_block
     }
 
+    pub fn is_leaf(&self) -> bool {
+        self.content.is_empty_match()
+    }
+
     /// Whether nodes of the type can be made to fill content: text can't, nor can a type with
     /// attributes no defaults give.
     pub fn is_generatable(&self) -> bool {
         !(self.is_text || self.attrs.has_required())
+    }
+
+    pub fn allows_mark(&self, rank: usize) -> bool {
+        self.mark_set
+            .as_ref()
+            .is_none_or(|allowed| allowed.contains(&rank))
     }
 }
 
@@ -103,6 +113,8 @@ pub(crate) struct SchemaData {
     pub top_node: usize,
     pub text: usize,
     pub linebreak_replacement: Option<usize>,
+    /// What a chunk of the schema's documents is checked against: a hash of its types' names.
+    pub fingerprint: u64,
 }
 
 /// A document schema: the node and mark types documents in it can hold.
@@ -142,6 +154,22 @@ impl fmt::Debug for Schema {
     }
 }
 
+/// FNV-1a over the types' names, which is the same in every process.
+fn fingerprint(nodes: &[NodeTypeData], marks: &[MarkTypeData]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let names = nodes
+        .iter()
+        .map(|node| (b'n', &node.name))
+        .chain(marks.iter().map(|mark| (b'm', &mark.name)));
+    for (kind, name) in names {
+        for byte in [kind].iter().chain(name.as_bytes()).chain(&[0]) {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+    hash
+}
+
 impl Schema {
     /// Build a schema from its spec, as `new Schema(spec)` does, raising the same errors.
     pub fn new(spec: SchemaSpec) -> Result<Schema> {
@@ -165,6 +193,11 @@ impl Schema {
                 spec,
             })
             .collect();
+        if nodes.len() > usize::from(u16::MAX) {
+            return Err(Error::Range(
+                "A schema holds at most 65535 node types".into(),
+            ));
+        }
         let top_name = spec.top_node.filter(|name| !name.is_empty());
         let top_name = top_name.as_deref().unwrap_or("doc");
         let top_node = position(&nodes, top_name).ok_or_else(|| {
@@ -242,6 +275,7 @@ impl Schema {
         }
 
         Ok(Schema(Arc::new(SchemaData {
+            fingerprint: fingerprint(&nodes, &marks),
             nodes,
             marks,
             top_node,
@@ -255,75 +289,107 @@ impl Schema {
         Arc::as_ptr(&self.0) as usize
     }
 
-    pub fn node_types(&self) -> impl ExactSizeIterator<Item = NodeType> + '_ {
+    /// A hash of the schema's type names, which a document's chunks carry: a chunk loads only
+    /// with a schema that has the same types in the same order.
+    pub fn fingerprint(&self) -> u64 {
+        self.0.fingerprint
+    }
+
+    pub(crate) fn node_data(&self, index: usize) -> &NodeTypeData {
+        &self.0.nodes[index]
+    }
+
+    pub(crate) fn mark_data(&self, rank: usize) -> &MarkTypeData {
+        &self.0.marks[rank]
+    }
+
+    /// The node type at `index`.
+    pub fn node_type_at(&self, index: usize) -> NodeType<'_> {
+        assert!(index < self.0.nodes.len(), "a node type of the schema");
+        NodeType {
+            schema: self,
+            index,
+        }
+    }
+
+    /// The mark type of rank `rank`.
+    pub fn mark_type_at(&self, rank: usize) -> MarkType<'_> {
+        assert!(rank < self.0.marks.len(), "a mark type of the schema");
+        MarkType {
+            schema: self,
+            index: rank,
+        }
+    }
+
+    pub fn node_types(&self) -> impl ExactSizeIterator<Item = NodeType<'_>> + '_ {
         (0..self.0.nodes.len()).map(|index| NodeType {
-            schema: self.clone(),
+            schema: self,
             index,
         })
     }
 
-    pub fn mark_types(&self) -> impl ExactSizeIterator<Item = MarkType> + '_ {
+    pub fn mark_types(&self) -> impl ExactSizeIterator<Item = MarkType<'_>> + '_ {
         (0..self.0.marks.len()).map(|index| MarkType {
-            schema: self.clone(),
+            schema: self,
             index,
         })
     }
 
     /// The node type of this name, if the schema has one.
-    pub fn node_type(&self, name: &str) -> Option<NodeType> {
+    pub fn node_type(&self, name: &str) -> Option<NodeType<'_>> {
         position(&self.0.nodes, name).map(|index| NodeType {
-            schema: self.clone(),
+            schema: self,
             index,
         })
     }
 
     /// The node type of this name, raising `Unknown node type` when there is none.
-    pub fn expect_node_type(&self, name: &str) -> Result<NodeType> {
+    pub fn expect_node_type(&self, name: &str) -> Result<NodeType<'_>> {
         self.node_type(name)
             .ok_or_else(|| Error::Range(format!("Unknown node type: {name}")))
     }
 
-    pub fn mark_type(&self, name: &str) -> Option<MarkType> {
+    pub fn mark_type(&self, name: &str) -> Option<MarkType<'_>> {
         self.0
             .marks
             .iter()
             .position(|mark| &*mark.name == name)
             .map(|index| MarkType {
-                schema: self.clone(),
+                schema: self,
                 index,
             })
     }
 
-    pub fn top_node_type(&self) -> NodeType {
+    pub fn top_node_type(&self) -> NodeType<'_> {
         NodeType {
-            schema: self.clone(),
+            schema: self,
             index: self.0.top_node,
         }
     }
 
-    pub fn linebreak_replacement(&self) -> Option<NodeType> {
+    pub fn linebreak_replacement(&self) -> Option<NodeType<'_>> {
         self.0.linebreak_replacement.map(|index| NodeType {
-            schema: self.clone(),
+            schema: self,
             index,
         })
     }
 
-    pub(crate) fn text_type(&self) -> NodeType {
+    pub fn text_type(&self) -> NodeType<'_> {
         NodeType {
-            schema: self.clone(),
+            schema: self,
             index: self.0.text,
         }
     }
 
     /// Create a node, checking its content, as `schema.node(type, attrs, content, marks)`.
-    pub fn node(
+    pub fn node<'a>(
         &self,
         node_type: &NodeType,
         attrs: Option<&Map>,
-        content: Fragment,
-        marks: &[Mark],
-    ) -> Result<Node> {
-        if node_type.schema != *self {
+        content: Fragment<'a>,
+        marks: &[Mark<'a>],
+    ) -> Result<Node<'a>> {
+        if node_type.schema != self {
             return Err(Error::Range(format!(
                 "Node type from different schema used ({})",
                 node_type.name()
@@ -333,17 +399,12 @@ impl Schema {
     }
 
     /// Create a text node. Empty text isn't allowed.
-    pub fn text(&self, text: impl Into<Text>, marks: &[Mark]) -> Result<Node> {
-        let text_type = self.text_type();
-        let attrs = text_type
-            .default_attrs()
-            .cloned()
-            .expect("text has no attributes");
-        Node::new_text(text_type, attrs, text.into(), Mark::set_from(marks))
+    pub fn text<'a>(&self, text: impl Into<Text>, marks: &[Mark<'a>]) -> Result<Node<'a>> {
+        Node::new_text(self, &text.into(), &Mark::set_from(marks))
     }
 
     /// Create a mark, as `schema.mark(type, attrs)`.
-    pub fn mark(&self, mark_type: &MarkType, attrs: Option<&Map>) -> Result<Mark> {
+    pub fn mark(&self, mark_type: &MarkType, attrs: Option<&Map>) -> Result<Mark<'static>> {
         mark_type.create(attrs)
     }
 }
@@ -382,37 +443,37 @@ fn gather_marks<'a>(
 }
 
 /// A node type in a schema.
-#[derive(Clone)]
-pub struct NodeType {
-    pub(crate) schema: Schema,
+#[derive(Clone, Copy)]
+pub struct NodeType<'s> {
+    pub(crate) schema: &'s Schema,
     pub(crate) index: usize,
 }
 
-impl PartialEq for NodeType {
+impl PartialEq for NodeType<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.index == other.index && self.schema == other.schema
     }
 }
 
-impl Eq for NodeType {}
+impl Eq for NodeType<'_> {}
 
-impl fmt::Debug for NodeType {
+impl fmt::Debug for NodeType<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "NodeType({})", self.name())
     }
 }
 
-impl NodeType {
-    pub(crate) fn data(&self) -> &NodeTypeData {
+impl<'s> NodeType<'s> {
+    pub(crate) fn data(&self) -> &'s NodeTypeData {
         &self.schema.0.nodes[self.index]
     }
 
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &'s str {
         &self.data().name
     }
 
-    pub fn schema(&self) -> &Schema {
-        &self.schema
+    pub fn schema(&self) -> &'s Schema {
+        self.schema
     }
 
     /// The type's position in its schema's list of node types.
@@ -420,11 +481,11 @@ impl NodeType {
         self.index
     }
 
-    pub fn spec(&self) -> &NodeSpec {
+    pub fn spec(&self) -> &'s NodeSpec {
         &self.data().spec
     }
 
-    pub fn groups(&self) -> &[String] {
+    pub fn groups(&self) -> &'s [String] {
         &self.data().groups
     }
 
@@ -449,7 +510,7 @@ impl NodeType {
     }
 
     pub fn is_leaf(&self) -> bool {
-        self.data().content.is_empty_match()
+        self.data().is_leaf()
     }
 
     pub fn is_atom(&self) -> bool {
@@ -460,17 +521,17 @@ impl NodeType {
         self.groups().iter().any(|g| g == group)
     }
 
-    pub fn content_match(&self) -> ContentMatch {
-        ContentMatch::start(self.schema.clone(), self.data().content.clone())
+    pub fn content_match(&self) -> ContentMatch<'s> {
+        ContentMatch::start(self.schema, &self.data().content)
     }
 
     /// The marks allowed in nodes of this type, `None` when all are.
-    pub fn mark_set(&self) -> Option<Vec<MarkType>> {
+    pub fn mark_set(&self) -> Option<Vec<MarkType<'s>>> {
         self.data().mark_set.as_ref().map(|indexes| {
             indexes
                 .iter()
                 .map(|&index| MarkType {
-                    schema: self.schema.clone(),
+                    schema: self.schema,
                     index,
                 })
                 .collect()
@@ -491,7 +552,7 @@ impl NodeType {
     }
 
     /// The attributes every node of the type gets when none are given, if all have defaults.
-    pub fn default_attrs(&self) -> Option<&Attrs> {
+    pub fn default_attrs(&self) -> Option<&'s Map> {
         self.data().attrs.defaults()
     }
 
@@ -499,54 +560,51 @@ impl NodeType {
         self == other || self.content_match().compatible(&other.content_match())
     }
 
-    pub fn compute_attrs(&self, attrs: Option<&Map>) -> Result<Attrs> {
+    pub fn compute_attrs(&self, attrs: Option<&Map>) -> Result<Map> {
         self.attrs_given(&attrs.into())
     }
 
     /// The attributes JavaScript makes of what it's given for a node of this type.
-    pub fn attrs_given(&self, given: &Given) -> Result<Attrs> {
+    pub fn attrs_given(&self, given: &Given) -> Result<Map> {
         self.data().attrs.compute(given)
     }
 
     /// Create a node of this type, as `NodeType.create`.
-    pub fn create(&self, attrs: Option<&Map>, content: Fragment, marks: &[Mark]) -> Result<Node> {
+    pub fn create<'a>(
+        &self,
+        attrs: Option<&Map>,
+        content: Fragment<'a>,
+        marks: &[Mark<'a>],
+    ) -> Result<Node<'a>> {
         if self.is_text() {
             return Err(Error::Other(
                 "NodeType.create can't construct text nodes".into(),
             ));
         }
-        Ok(Node::new(
-            self.clone(),
-            self.compute_attrs(attrs)?,
-            content,
-            Mark::set_from(marks),
-        ))
+        let attrs = self.compute_attrs(attrs)?;
+        Ok(Node::new(self, &attrs, &content, &Mark::set_from(marks)))
     }
 
     /// [`create`](Self::create), checking the content fits the type.
-    pub fn create_checked(
+    pub fn create_checked<'a>(
         &self,
         attrs: Option<&Map>,
-        content: Fragment,
-        marks: &[Mark],
-    ) -> Result<Node> {
+        content: Fragment<'a>,
+        marks: &[Mark<'a>],
+    ) -> Result<Node<'a>> {
         self.check_content(&content)?;
-        Ok(Node::new(
-            self.clone(),
-            self.compute_attrs(attrs)?,
-            content,
-            Mark::set_from(marks),
-        ))
+        let attrs = self.compute_attrs(attrs)?;
+        Ok(Node::new(self, &attrs, &content, &Mark::set_from(marks)))
     }
 
     /// [`create`](Self::create), adding nodes at the start or end of the content where it needs
     /// them to fit. `None` when no such nodes make it fit.
-    pub fn create_and_fill(
+    pub fn create_and_fill<'a>(
         &self,
         attrs: Option<&Map>,
-        content: Fragment,
-        marks: &[Mark],
-    ) -> Result<Option<Node>> {
+        content: Fragment<'a>,
+        marks: &[Mark<'a>],
+    ) -> Result<Option<Node<'a>>> {
         let attrs = self.compute_attrs(attrs)?;
         let mut content = content;
         if content.size() > 0 {
@@ -564,21 +622,21 @@ impl NodeType {
             return Ok(None);
         };
         Ok(Some(Node::new(
-            self.clone(),
-            attrs,
-            content.append(&after),
-            Mark::set_from(marks),
+            self,
+            &attrs,
+            &content.append(&after),
+            &Mark::set_from(marks),
         )))
     }
 
     pub fn valid_content(&self, content: &Fragment) -> bool {
-        self.data()
-            .content
-            .accepts(&self.schema, content.children())
+        let types = content.children().map(|child| {
+            (child.node_type().schema == self.schema).then(|| child.type_index())
+        });
+        self.data().content.accepts(types)
             && content
                 .children()
-                .iter()
-                .all(|child| self.allows_marks(child.marks()))
+                .all(|child| self.allows_marks(&child.marks()))
     }
 
     pub fn check_content(&self, content: &Fragment) -> Result<()> {
@@ -594,7 +652,7 @@ impl NodeType {
     }
 
     pub fn check_attrs(&self, attrs: &Map) -> Result<()> {
-        self.data().attrs.check(attrs, "node", self.name())
+        self.data().attrs.check_map(attrs, "node", self.name())
     }
 
     pub fn allows_mark_type(&self, mark_type: &MarkType) -> bool {
@@ -604,63 +662,65 @@ impl NodeType {
         }
     }
 
-    pub fn allows_marks(&self, marks: &[Mark]) -> bool {
+    pub fn allows_marks(&self, marks: &Marks) -> bool {
         self.data().mark_set.is_none()
             || marks
                 .iter()
-                .all(|mark| self.allows_mark_type(mark.mark_type()))
+                .all(|mark| self.allows_mark_type(&mark.mark_type()))
+    }
+
+    pub fn allows_mark_list(&self, marks: &[Mark]) -> bool {
+        self.data().mark_set.is_none()
+            || marks
+                .iter()
+                .all(|mark| self.allows_mark_type(&mark.mark_type()))
     }
 
     /// The given marks without those this type doesn't allow.
-    pub fn allowed_marks(&self, marks: &Marks) -> Marks {
+    pub fn allowed_marks<'a>(&self, marks: &Marks<'a>) -> Marks<'a> {
         if self.allows_marks(marks) {
             return marks.clone();
         }
-        let kept: Vec<Mark> = marks
+        let kept: Vec<Mark<'a>> = marks
             .iter()
-            .filter(|mark| self.allows_mark_type(mark.mark_type()))
-            .cloned()
+            .filter(|mark| self.allows_mark_type(&mark.mark_type()))
             .collect();
-        if kept.is_empty() {
-            Mark::none()
-        } else {
-            kept.into()
-        }
+        Mark::set_from(&kept)
     }
 }
 
 /// A mark type in a schema.
-#[derive(Clone)]
-pub struct MarkType {
-    pub(crate) schema: Schema,
+#[derive(Clone, Copy)]
+pub struct MarkType<'s> {
+    pub(crate) schema: &'s Schema,
     pub(crate) index: usize,
 }
 
-impl PartialEq for MarkType {
+impl PartialEq for MarkType<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.index == other.index && self.schema == other.schema
     }
 }
 
-impl Eq for MarkType {}
+impl Eq for MarkType<'_> {}
 
-impl fmt::Debug for MarkType {
+impl fmt::Debug for MarkType<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "MarkType({})", self.name())
     }
 }
 
-impl MarkType {
-    pub(crate) fn data(&self) -> &MarkTypeData {
+impl<'s> MarkType<'s> {
+    pub(crate) fn data(&self) -> &'s MarkTypeData {
         &self.schema.0.marks[self.index]
     }
 
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &'s str {
         &self.data().name
     }
 
-    pub fn schema(&self) -> &Schema {
-        &self.schema
+    pub fn schema(&self) -> &'s Schema {
+        self.schema
     }
 
     /// Where marks of this type sort in a set.
@@ -668,57 +728,55 @@ impl MarkType {
         self.index
     }
 
-    pub fn spec(&self) -> &MarkSpec {
+    pub fn spec(&self) -> &'s MarkSpec {
         &self.data().spec
     }
 
-    pub fn default_attrs(&self) -> Option<&Attrs> {
+    pub fn default_attrs(&self) -> Option<&'s Map> {
         self.data().attrs.defaults()
     }
 
     /// Create a mark of this type, filling in attributes' defaults.
-    pub fn create(&self, attrs: Option<&Map>) -> Result<Mark> {
+    pub fn create(&self, attrs: Option<&Map>) -> Result<Mark<'static>> {
         self.create_given(&attrs.into())
     }
 
     /// Create a mark of this type from what JavaScript gives it as attributes.
-    pub fn create_given(&self, given: &Given) -> Result<Mark> {
-        Ok(Mark::new(self.clone(), self.data().attrs.compute(given)?))
+    pub fn create_given(&self, given: &Given) -> Result<Mark<'static>> {
+        let attrs = self.data().attrs.compute(given)?;
+        Ok(Mark::new(self, &attrs))
     }
 
     /// The set without marks of this type.
-    pub fn remove_from_set(&self, set: &Marks) -> Marks {
-        if !set.iter().any(|mark| mark.mark_type() == self) {
+    pub fn remove_from_set<'a>(&self, set: &Marks<'a>) -> Marks<'a> {
+        if !set.iter().any(|mark| mark.mark_type() == *self) {
             return set.clone();
         }
-        let kept: Vec<Mark> = set
-            .iter()
-            .filter(|mark| mark.mark_type() != self)
-            .cloned()
-            .collect();
-        if kept.is_empty() {
-            Mark::none()
-        } else {
-            kept.into()
-        }
+        let kept: Vec<Mark<'a>> = set.iter().filter(|mark| mark.mark_type() != *self).collect();
+        Mark::set_from(&kept)
     }
 
     /// The mark of this type in the set, if there is one.
-    pub fn is_in_set<'a>(&self, set: &'a [Mark]) -> Option<&'a Mark> {
-        set.iter().find(|mark| mark.mark_type() == self)
+    pub fn is_in_set<'a>(&self, set: &Marks<'a>) -> Option<Mark<'a>> {
+        set.iter().find(|mark| mark.mark_type() == *self)
+    }
+
+    /// The mark of this type in a list of marks, if there is one.
+    pub fn is_in_list<'m, 'a>(&self, marks: &'m [Mark<'a>]) -> Option<&'m Mark<'a>> {
+        marks.iter().find(|mark| mark.mark_type() == *self)
     }
 
     pub fn check_attrs(&self, attrs: &Map) -> Result<()> {
-        self.data().attrs.check(attrs, "mark", self.name())
+        self.data().attrs.check_map(attrs, "mark", self.name())
     }
 
     /// The mark types this one excludes.
-    pub fn excluded(&self) -> Vec<MarkType> {
+    pub fn excluded(&self) -> Vec<MarkType<'s>> {
         self.data()
             .excluded
             .iter()
             .map(|&index| MarkType {
-                schema: self.schema.clone(),
+                schema: self.schema,
                 index,
             })
             .collect()

@@ -1,35 +1,19 @@
 //! Where two fragments start and stop differing.
 
 use super::fragment::Fragment;
+use super::view::{NodeRef, TextRef};
 use crate::stack;
-use crate::text::Text;
 
-impl Fragment {
+impl Fragment<'_> {
     /// The first position at which this fragment and `other` differ, counting from `pos`, or
     /// `None` when they are the same.
-    pub fn find_diff_start(&self, other: &Fragment, mut pos: usize) -> Option<usize> {
-        for (a, b) in self.children().iter().zip(other.children()) {
-            if a.ptr_eq(b) {
-                pos += a.node_size();
-                continue;
-            }
-            if !a.same_markup(b) {
-                return Some(pos);
-            }
-            if let (Some(text_a), Some(text_b)) = (a.text(), b.text())
-                && text_a != text_b
-            {
-                return Some(pos + common_prefix(text_a, text_b));
-            }
-            if (a.content().size() > 0 || b.content().size() > 0)
-                && let Some(inner) =
-                    stack::grow(|| a.content().find_diff_start(b.content(), pos + 1))
-            {
-                return Some(inner);
-            }
-            pos += a.node_size();
-        }
-        (self.child_count() != other.child_count()).then_some(pos)
+    pub fn find_diff_start(&self, other: &Fragment, pos: usize) -> Option<usize> {
+        diff_start(
+            self.refs(),
+            other.refs(),
+            self.child_count() != other.child_count(),
+            pos,
+        )
     }
 
     /// The first position, searching from the ends, at which this fragment and `other` differ,
@@ -37,45 +21,99 @@ impl Fragment {
     pub fn find_diff_end(
         &self,
         other: &Fragment,
-        mut pos_a: usize,
-        mut pos_b: usize,
+        pos_a: usize,
+        pos_b: usize,
     ) -> Option<(usize, usize)> {
-        let pairs = self
-            .children()
-            .iter()
-            .rev()
-            .zip(other.children().iter().rev());
-        for (a, b) in pairs {
-            let size = a.node_size();
-            if a.ptr_eq(b) {
-                pos_a -= size;
-                pos_b -= size;
-                continue;
-            }
-            if !a.same_markup(b) {
-                return Some((pos_a, pos_b));
-            }
-            if let (Some(text_a), Some(text_b)) = (a.text(), b.text())
-                && text_a != text_b
-            {
-                let same = common_suffix(text_a, text_b);
-                return Some((pos_a - same, pos_b - same));
-            }
-            if (a.content().size() > 0 || b.content().size() > 0)
-                && let Some(inner) =
-                    stack::grow(|| a.content().find_diff_end(b.content(), pos_a - 1, pos_b - 1))
-            {
-                return Some(inner);
-            }
-            pos_a -= size;
-            pos_b -= size;
-        }
-        (self.child_count() != other.child_count()).then_some((pos_a, pos_b))
+        diff_end(
+            self.refs().rev(),
+            other.refs().rev(),
+            self.child_count() != other.child_count(),
+            pos_a,
+            pos_b,
+        )
     }
 }
 
+fn diff_start<'x, 'y>(
+    a: impl Iterator<Item = NodeRef<'x>>,
+    b: impl Iterator<Item = NodeRef<'y>>,
+    lengths_differ: bool,
+    mut pos: usize,
+) -> Option<usize> {
+    for (a, b) in a.zip(b) {
+        if a.ptr_eq(b) {
+            pos += a.node_size();
+            continue;
+        }
+        if !a.same_markup(b) {
+            return Some(pos);
+        }
+        if let (Some(text_a), Some(text_b)) = (a.text(), b.text())
+            && !text_a.same(text_b)
+        {
+            return Some(pos + common_prefix(text_a, text_b));
+        }
+        if (a.content_size() > 0 || b.content_size() > 0)
+            && let Some(inner) = stack::grow(|| {
+                diff_start(
+                    a.children(),
+                    b.children(),
+                    a.child_count() != b.child_count(),
+                    pos + 1,
+                )
+            })
+        {
+            return Some(inner);
+        }
+        pos += a.node_size();
+    }
+    lengths_differ.then_some(pos)
+}
+
+fn diff_end<'x, 'y>(
+    a: impl Iterator<Item = NodeRef<'x>>,
+    b: impl Iterator<Item = NodeRef<'y>>,
+    lengths_differ: bool,
+    mut pos_a: usize,
+    mut pos_b: usize,
+) -> Option<(usize, usize)> {
+    for (a, b) in a.zip(b) {
+        let size = a.node_size();
+        if a.ptr_eq(b) {
+            pos_a -= size;
+            pos_b -= size;
+            continue;
+        }
+        if !a.same_markup(b) {
+            return Some((pos_a, pos_b));
+        }
+        if let (Some(text_a), Some(text_b)) = (a.text(), b.text())
+            && !text_a.same(text_b)
+        {
+            let same = common_suffix(text_a, text_b);
+            return Some((pos_a - same, pos_b - same));
+        }
+        if (a.content_size() > 0 || b.content_size() > 0)
+            && let Some(inner) = stack::grow(|| {
+                diff_end(
+                    a.children().rev(),
+                    b.children().rev(),
+                    a.child_count() != b.child_count(),
+                    pos_a - 1,
+                    pos_b - 1,
+                )
+            })
+        {
+            return Some(inner);
+        }
+        pos_a -= size;
+        pos_b -= size;
+    }
+    lengths_differ.then_some((pos_a, pos_b))
+}
+
 /// The UTF-16 units the texts start with alike, short of a surrogate pair they split.
-fn common_prefix(a: &Text, b: &Text) -> usize {
+fn common_prefix(a: TextRef, b: TextRef) -> usize {
     if let (Some(a), Some(b)) = (a.as_str(), b.as_str()) {
         // Texts without lone surrogates first differ at a whole character.
         return a
@@ -96,7 +134,7 @@ fn common_prefix(a: &Text, b: &Text) -> usize {
 }
 
 /// The UTF-16 units the texts end with alike, short of a surrogate pair they split.
-fn common_suffix(a: &Text, b: &Text) -> usize {
+fn common_suffix(a: TextRef, b: TextRef) -> usize {
     if let (Some(a), Some(b)) = (a.as_str(), b.as_str()) {
         return a
             .chars()

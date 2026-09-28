@@ -7,48 +7,49 @@ use super::node::Node;
 use crate::error::{Error, Result};
 
 /// What [`ResolvedPos::block_range`] asks whether a range may be in a node.
-pub type NodePredicate<'a> = dyn FnMut(&Node) -> Result<bool> + 'a;
+pub type NodePredicate<'f, 'a> = dyn FnMut(&Node<'a>) -> Result<bool> + 'f;
 
 /// A position in a document, with its ancestors, its index in each, and where each starts.
 #[derive(Clone)]
-pub struct ResolvedPos {
+pub struct ResolvedPos<'a> {
     pos: usize,
     /// For each depth: the ancestor, the index into it, and the position where that child starts.
-    path: Vec<Step>,
+    path: Vec<Step<'a>>,
     parent_offset: usize,
 }
 
 #[derive(Clone)]
-struct Step {
-    node: Node,
+struct Step<'a> {
+    node: Node<'a>,
     index: usize,
     offset: usize,
 }
 
-impl ResolvedPos {
-    pub(crate) fn resolve(doc: &Node, pos: usize) -> Result<ResolvedPos> {
+impl<'a> ResolvedPos<'a> {
+    pub(crate) fn resolve(doc: &Node<'a>, pos: usize) -> Result<ResolvedPos<'a>> {
         if pos > doc.content().size() {
             return Err(Error::Range(format!("Position {pos} out of range")));
         }
         let mut path = Vec::new();
         let mut start = 0;
         let mut parent_offset = pos;
-        let mut node = doc;
+        let mut node = doc.clone();
         loop {
             let (index, offset) = node.content().find_index(parent_offset)?;
             let rem = parent_offset - offset;
+            let child = if rem == 0 { None } else { Some(node.child(index)?) };
             path.push(Step {
-                node: node.clone(),
+                node,
                 index,
                 offset: start + offset,
             });
-            if rem == 0 {
+            let Some(child) = child else {
+                break;
+            };
+            if child.is_text() {
                 break;
             }
-            node = node.child(index)?;
-            if node.is_text() {
-                break;
-            }
+            node = child;
             parent_offset = rem - 1;
             start += offset + 1;
         }
@@ -74,16 +75,16 @@ impl ResolvedPos {
     }
 
     /// The node the position points into. A text node is never a parent.
-    pub fn parent(&self) -> &Node {
+    pub fn parent(&self) -> &Node<'a> {
         self.node(self.depth())
     }
 
-    pub fn doc(&self) -> &Node {
+    pub fn doc(&self) -> &Node<'a> {
         self.node(0)
     }
 
     /// The ancestor at `depth`.
-    pub fn node(&self, depth: usize) -> &Node {
+    pub fn node(&self, depth: usize) -> &Node<'a> {
         &self.path[depth].node
     }
 
@@ -155,21 +156,21 @@ impl ResolvedPos {
     }
 
     /// The node after the position; when the position is in a text node, the text after it.
-    pub fn node_after(&self) -> Option<Node> {
+    pub fn node_after(&self) -> Option<Node<'a>> {
         let parent = self.parent();
         let child = parent.maybe_child(self.index(self.depth()))?;
         match self.text_offset() {
-            0 => Some(child.clone()),
+            0 => Some(child),
             offset => child.cut_text(offset, child.node_size()),
         }
     }
 
     /// The node before the position; when the position is in a text node, the text before it.
-    pub fn node_before(&self) -> Option<Node> {
+    pub fn node_before(&self) -> Option<Node<'a>> {
         let index = self.index(self.depth());
         match self.text_offset() {
             0 if index == 0 => None,
-            0 => self.parent().maybe_child(index - 1).cloned(),
+            0 => self.parent().maybe_child(index - 1),
             offset => self.parent().maybe_child(index)?.cut_text(0, offset),
         }
     }
@@ -177,24 +178,24 @@ impl ResolvedPos {
     /// The position at child `index` of the ancestor at `depth`.
     pub fn pos_at_index(&self, index: usize, depth: usize) -> usize {
         let node = self.node(depth);
-        node.children()
-            .iter()
+        node.content()
+            .refs()
             .take(index)
-            .map(Node::node_size)
+            .map(|child| child.node_size())
             .sum::<usize>()
             + self.start(depth)
     }
 
     /// The marks at the position: those of the node before it, or at the start of its parent the
     /// node after, but for non-inclusive marks the other node doesn't have.
-    pub fn marks(&self) -> Marks {
+    pub fn marks(&self) -> Marks<'a> {
         let parent = self.parent();
         let index = self.index(self.depth());
         if parent.content().size() == 0 {
             return Mark::none();
         }
         if self.text_offset() > 0 {
-            return parent.children()[index].marks().clone();
+            return parent.maybe_child(index).expect("the text").marks();
         }
         let before = index
             .checked_sub(1)
@@ -204,19 +205,19 @@ impl ResolvedPos {
             Some(before) => (before, after),
             None => (after.expect("a child in a non-empty parent"), None),
         };
-        without_exclusive(main.marks(), other)
+        without_exclusive(main.marks(), other.as_ref())
     }
 
     /// The marks of the node after the position that go on over a deletion to `end`: all but
     /// the non-inclusive ones the node after `end` doesn't have. `None` when no inline node is
     /// after the position.
-    pub fn marks_across(&self, end: &ResolvedPos) -> Option<Marks> {
+    pub fn marks_across(&self, end: &ResolvedPos<'a>) -> Option<Marks<'a>> {
         let after = self.parent().maybe_child(self.index(self.depth()))?;
         if !after.is_inline() {
             return None;
         }
         let next = end.parent().maybe_child(end.index(end.depth()));
-        Some(without_exclusive(after.marks(), next))
+        Some(without_exclusive(after.marks(), next.as_ref()))
     }
 
     /// The depth up to which this position and `pos` have the same ancestors.
@@ -231,9 +232,9 @@ impl ResolvedPos {
     /// deepest ancestor `pred` accepts.
     pub fn block_range(
         &self,
-        other: &ResolvedPos,
-        pred: Option<&mut NodePredicate>,
-    ) -> Result<Option<NodeRange>> {
+        other: &ResolvedPos<'a>,
+        pred: Option<&mut NodePredicate<'_, 'a>>,
+    ) -> Result<Option<NodeRange<'a>>> {
         if other.pos < self.pos {
             // ProseMirror drops `pred` here too: `other.blockRange(this)`.
             return other.block_range(self, None);
@@ -261,25 +262,24 @@ impl ResolvedPos {
         self.pos - self.parent_offset == other.pos - other.parent_offset
     }
 
-    pub fn max<'a>(&'a self, other: &'a ResolvedPos) -> &'a ResolvedPos {
+    pub fn max<'r>(&'r self, other: &'r ResolvedPos<'a>) -> &'r ResolvedPos<'a> {
         if other.pos > self.pos { other } else { self }
     }
 
-    pub fn min<'a>(&'a self, other: &'a ResolvedPos) -> &'a ResolvedPos {
+    pub fn min<'r>(&'r self, other: &'r ResolvedPos<'a>) -> &'r ResolvedPos<'a> {
         if other.pos < self.pos { other } else { self }
     }
 }
 
 /// `marks` without the non-inclusive ones `other` doesn't have.
-fn without_exclusive(marks: &Marks, other: Option<&Node>) -> Marks {
-    let mut marks = marks.clone();
+fn without_exclusive<'a>(marks: Marks<'a>, other: Option<&Node<'a>>) -> Marks<'a> {
+    let mut marks = marks;
     let mut index = 0;
-    while index < marks.len() {
-        let mark = &marks[index];
+    while let Some(mark) = marks.get(index) {
         if mark.mark_type().spec().inclusive == Some(false)
-            && !other.is_some_and(|other| mark.is_in_set(other.marks()))
+            && !other.is_some_and(|other| mark.is_in_set(&other.marks()))
         {
-            marks = mark.clone().remove_from_set(&marks);
+            marks = mark.remove_from_set(&marks);
         } else {
             index += 1;
         }
@@ -287,7 +287,7 @@ fn without_exclusive(marks: &Marks, other: Option<&Node>) -> Marks {
     marks
 }
 
-impl fmt::Display for ResolvedPos {
+impl fmt::Display for ResolvedPos<'_> {
     /// `toString`: each ancestor's type and index, then the offset into the parent.
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         for depth in 1..=self.depth() {
@@ -305,7 +305,7 @@ impl fmt::Display for ResolvedPos {
     }
 }
 
-impl fmt::Debug for ResolvedPos {
+impl fmt::Debug for ResolvedPos<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "ResolvedPos({} {self})", self.pos)
     }
@@ -313,25 +313,25 @@ impl fmt::Debug for ResolvedPos {
 
 /// A flat range of content: adjacent children of one node.
 #[derive(Clone, Debug)]
-pub struct NodeRange {
-    from: ResolvedPos,
-    to: ResolvedPos,
+pub struct NodeRange<'a> {
+    from: ResolvedPos<'a>,
+    to: ResolvedPos<'a>,
     depth: usize,
 }
 
-impl NodeRange {
+impl<'a> NodeRange<'a> {
     /// A range of the children of the ancestor at `depth`, which `from` and `to` share.
-    pub fn new(from: ResolvedPos, to: ResolvedPos, depth: usize) -> NodeRange {
+    pub fn new(from: ResolvedPos<'a>, to: ResolvedPos<'a>, depth: usize) -> NodeRange<'a> {
         NodeRange { from, to, depth }
     }
 
     /// The position the range was made from at its start, which may be deeper than the range.
-    pub fn resolved_from(&self) -> &ResolvedPos {
+    pub fn resolved_from(&self) -> &ResolvedPos<'a> {
         &self.from
     }
 
     /// The position the range was made from at its end, which may be deeper than the range.
-    pub fn resolved_to(&self) -> &ResolvedPos {
+    pub fn resolved_to(&self) -> &ResolvedPos<'a> {
         &self.to
     }
 
@@ -348,7 +348,7 @@ impl NodeRange {
         self.to.after_nonzero(self.depth + 1)
     }
 
-    pub fn parent(&self) -> &Node {
+    pub fn parent(&self) -> &Node<'a> {
         self.from.node(self.depth)
     }
 

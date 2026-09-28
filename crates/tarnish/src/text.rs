@@ -155,7 +155,7 @@ impl Text {
 
 /// The byte offset of UTF-16 offset `units` in `text`, or `None` when it falls between the two
 /// units of a surrogate pair.
-fn byte_offset(text: &str, units: usize) -> Option<usize> {
+pub(crate) fn byte_offset(text: &str, units: usize) -> Option<usize> {
     // Through ASCII, a unit is a byte.
     let prefix = &text.as_bytes()[..units.min(text.len())];
     if prefix.is_ascii() && units <= text.len() {

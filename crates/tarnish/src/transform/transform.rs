@@ -11,15 +11,15 @@ use crate::model::{Fragment, Mark, Node, Slice};
 
 /// A document and the steps that made it, from a starting document.
 #[derive(Clone, Debug)]
-pub struct Transform {
-    doc: Node,
-    steps: Vec<Step>,
-    docs: Vec<Node>,
+pub struct Transform<'a> {
+    doc: Node<'a>,
+    steps: Vec<Step<'a>>,
+    docs: Vec<Node<'a>>,
     mapping: Mapping,
 }
 
-impl Transform {
-    pub fn new(doc: Node) -> Transform {
+impl<'a> Transform<'a> {
+    pub fn new(doc: Node<'a>) -> Transform<'a> {
         Transform {
             doc,
             steps: Vec::new(),
@@ -29,16 +29,16 @@ impl Transform {
     }
 
     /// The current document, with all the steps applied.
-    pub fn doc(&self) -> &Node {
+    pub fn doc(&self) -> &Node<'a> {
         &self.doc
     }
 
-    pub fn steps(&self) -> &[Step] {
+    pub fn steps(&self) -> &[Step<'a>] {
         &self.steps
     }
 
     /// The documents before each step.
-    pub fn docs(&self) -> &[Node] {
+    pub fn docs(&self) -> &[Node<'a>] {
         &self.docs
     }
 
@@ -57,7 +57,7 @@ impl Transform {
     }
 
     /// The starting document.
-    pub fn before(&self) -> &Node {
+    pub fn before(&self) -> &Node<'a> {
         self.docs.first().unwrap_or(&self.doc)
     }
 
@@ -66,7 +66,7 @@ impl Transform {
     }
 
     /// Apply a step, raising a `TransformError` when it fails.
-    pub fn step(&mut self, step: Step) -> Result<&mut Self> {
+    pub fn step(&mut self, step: Step<'a>) -> Result<&mut Self> {
         if let StepResult::Failed(message) = self.maybe_step(step)? {
             return Err(Error::Transform(message));
         }
@@ -74,7 +74,7 @@ impl Transform {
     }
 
     /// Apply a step if it can apply, and give its result.
-    pub fn maybe_step(&mut self, step: Step) -> Result<StepResult> {
+    pub fn maybe_step(&mut self, step: Step<'a>) -> Result<StepResult<'a>> {
         let result = step.apply(self.doc.clone())?;
         if let StepResult::Ok(doc) = &result {
             self.add_step(step, doc.clone());
@@ -82,7 +82,7 @@ impl Transform {
         Ok(result)
     }
 
-    fn add_step(&mut self, step: Step, doc: Node) {
+    fn add_step(&mut self, step: Step<'a>, doc: Node<'a>) {
         self.docs.push(std::mem::replace(&mut self.doc, doc));
         self.mapping.append_map(step.get_map(), None);
         self.steps.push(step);
@@ -107,14 +107,19 @@ impl Transform {
     }
 
     /// Replace `from` to `to` with a slice, fitting it in as it can.
-    pub fn replace(&mut self, from: usize, to: usize, slice: &Slice) -> Result<&mut Self> {
+    pub fn replace(&mut self, from: usize, to: usize, slice: &Slice<'a>) -> Result<&mut Self> {
         if let Some(step) = replace_step(&self.doc, from, to, slice)? {
             self.step(step)?;
         }
         Ok(self)
     }
 
-    pub fn replace_with(&mut self, from: usize, to: usize, content: Fragment) -> Result<&mut Self> {
+    pub fn replace_with(
+        &mut self,
+        from: usize,
+        to: usize,
+        content: Fragment<'a>,
+    ) -> Result<&mut Self> {
         self.replace(from, to, &Slice::new(content, 0, 0))
     }
 
@@ -122,7 +127,7 @@ impl Transform {
         self.replace(from, to, &Slice::empty())
     }
 
-    pub fn insert(&mut self, pos: usize, content: Fragment) -> Result<&mut Self> {
+    pub fn insert(&mut self, pos: usize, content: Fragment<'a>) -> Result<&mut Self> {
         self.replace_with(pos, pos, content)
     }
 
@@ -147,7 +152,7 @@ impl Transform {
         })
     }
 
-    pub fn add_node_mark(&mut self, pos: usize, mark: Mark) -> Result<&mut Self> {
+    pub fn add_node_mark(&mut self, pos: usize, mark: Mark<'a>) -> Result<&mut Self> {
         self.step(Step::NodeMark {
             op: MarkOp::Add,
             pos,
@@ -156,15 +161,14 @@ impl Transform {
     }
 
     /// Remove the mark, or all marks of the type, from the node at `pos`.
-    pub fn remove_node_mark(&mut self, pos: usize, mark: MarkMatch) -> Result<&mut Self> {
+    pub fn remove_node_mark(&mut self, pos: usize, mark: MarkMatch<'_, 'a>) -> Result<&mut Self> {
         let node = self
             .doc
             .node_at(pos)?
-            .cloned()
             .ok_or_else(|| Error::Range(format!("No node at position {pos}")))?;
         match mark {
             MarkMatch::Mark(mark) => {
-                if mark.is_in_set(node.marks()) {
+                if mark.is_in_set(&node.marks()) {
                     self.step(Step::NodeMark {
                         op: MarkOp::Remove,
                         pos,
@@ -173,15 +177,16 @@ impl Transform {
                 }
             }
             MarkMatch::Type(mark_type) => {
-                let found = node
+                let found: Vec<Mark<'a>> = node
                     .marks()
                     .iter()
-                    .filter(|mark| mark.mark_type() == mark_type);
-                for mark in found.rev() {
+                    .filter(|mark| mark.mark_type() == mark_type)
+                    .collect();
+                for mark in found.into_iter().rev() {
                     self.step(Step::NodeMark {
                         op: MarkOp::Remove,
                         pos,
-                        mark: mark.clone(),
+                        mark,
                     })?;
                 }
             }

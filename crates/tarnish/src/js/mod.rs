@@ -186,11 +186,12 @@ pub trait Json<'a>: Copy {
     /// The value as attributes a type is given, as [`attrs`] reads them.
     fn attrs(self) -> Given<'a>;
 
-    /// Told the node read from the value, after the nodes and marks read from its parts.
-    fn read_node(self, _node: &Node) {}
+    /// Told the index of the node read from the value, in the chunk being read, after the
+    /// nodes and marks read from its parts.
+    fn read_node(self, _node: u32) {}
 
-    /// Told the mark read from the value.
-    fn read_mark(self, _mark: &Mark) {}
+    /// Told the index of the mark read from the value, in the chunk being read.
+    fn read_mark(self, _mark: u32) {}
 }
 
 impl<'a> Json<'a> for &'a Value {

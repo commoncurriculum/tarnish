@@ -6,6 +6,8 @@ use std::sync::Arc;
 use super::node::Node;
 use super::read::Reader;
 use super::schema::Schema;
+use super::view::NodeRef;
+use crate::chunk::{Builder, Chunk};
 use crate::error::{Error, Result};
 use crate::js::Json;
 use crate::json::Value;
@@ -14,58 +16,82 @@ use crate::text::Text;
 
 /// What [`Fragment::nodes_between`] calls for each node: the node, its position, its parent,
 /// and its index in the parent. Returning `false` skips the node's children.
-pub type NodeVisitor<'a> = dyn FnMut(&Node, usize, Option<&Node>, usize) -> Result<bool> + 'a;
+pub type NodeVisitor<'f, 'a> =
+    dyn FnMut(&Node<'a>, usize, Option<&Node<'a>>, usize) -> Result<bool> + 'f;
 
 /// What [`Fragment::text_between`] calls for a leaf node that isn't text.
-pub type LeafTextHook<'a> = dyn FnMut(&Node) -> Result<Text> + 'a;
+pub type LeafTextHook<'f, 'a> = dyn FnMut(&Node<'a>) -> Result<Text> + 'f;
 
-/// A node's children. Like nodes, fragments are persistent: changing one makes a new one.
+/// A node's children: a range of a chunk's kids. Like nodes, fragments are persistent: changing
+/// one makes a new one.
 #[derive(Clone)]
-pub struct Fragment {
-    /// `None` for no children, as a leaf has, so that making or dropping a leaf touches no count
-    /// shared between threads.
-    children: Option<Arc<[Node]>>,
-    size: usize,
+pub struct Fragment<'a> {
+    /// `None` for a fragment made empty, which touches no count shared between threads.
+    chunk: Option<Arc<Chunk<'a>>>,
+    /// The first kid, in the chunk's kids.
+    start: u32,
+    count: u32,
+    size: u32,
+    /// Kids in this chunk are nodes before this one: a node's content holds only nodes written
+    /// before it.
+    bound: u32,
 }
 
-impl Fragment {
-    pub fn empty() -> Fragment {
+impl<'a> Fragment<'a> {
+    pub fn empty() -> Fragment<'a> {
         Fragment {
-            children: None,
+            chunk: None,
+            start: 0,
+            count: 0,
             size: 0,
+            bound: 0,
         }
     }
 
-    fn with_size(children: Vec<Node>, size: usize) -> Fragment {
-        if children.is_empty() {
-            return Fragment::empty();
-        }
+    #[inline]
+    pub(crate) fn of(chunk: Arc<Chunk<'a>>, start: u32, count: u32, size: u32, bound: u32) -> Self {
         Fragment {
-            children: Some(children.into()),
+            chunk: Some(chunk),
+            start,
+            count,
             size,
+            bound,
         }
     }
 
-    pub(crate) fn new(children: Vec<Node>) -> Fragment {
-        let size = children.iter().map(Node::node_size).sum();
-        Fragment::with_size(children, size)
+    #[inline]
+    pub(crate) fn chunk(&self) -> Option<&Arc<Chunk<'a>>> {
+        self.chunk.as_ref()
     }
 
-    /// [`new`](Self::new), moving the children straight into the fragment's one allocation.
-    pub(crate) fn from_drain(children: std::vec::Drain<'_, Node>) -> Fragment {
-        if children.len() == 0 {
+    #[inline]
+    pub(crate) fn bound(&self) -> u32 {
+        self.bound
+    }
+
+    /// A fragment of these nodes, as they are.
+    pub(crate) fn new(nodes: &[Node<'a>]) -> Fragment<'a> {
+        let Some(first) = nodes.first() else {
             return Fragment::empty();
-        }
-        let children: Arc<[Node]> = children.collect();
-        Fragment {
-            size: children.iter().map(Node::node_size).sum(),
-            children: Some(children),
-        }
+        };
+        let size: usize = nodes.iter().map(Node::node_size).sum();
+        let mut builder = Builder::new(first.schema());
+        let kids: Vec<u32> = nodes
+            .iter()
+            .map(|node| builder.external(node.chunk(), node.index()))
+            .collect();
+        let start = builder.kids(&kids);
+        Fragment::of(
+            builder.seal(),
+            start,
+            kids.len() as u32,
+            u32::try_from(size).expect("a fragment smaller than 4G positions"),
+            u32::MAX,
+        )
     }
 
     /// A fragment of these nodes, joining adjacent text nodes with the same marks.
-    pub fn from_array(mut nodes: Vec<Node>) -> Fragment {
-        let size = nodes.iter().map(Node::node_size).sum();
+    pub fn from_array(mut nodes: Vec<Node<'a>>) -> Fragment<'a> {
         nodes.dedup_by(|next, last| match last.join_text(next) {
             Some(joined) => {
                 *last = joined;
@@ -73,43 +99,77 @@ impl Fragment {
             }
             None => false,
         });
-        Fragment::with_size(nodes, size)
+        Fragment::new(&nodes)
     }
 
-    pub fn from_node(node: Node) -> Fragment {
-        let size = node.node_size();
-        Fragment::with_size(vec![node], size)
+    pub fn from_node(node: Node<'a>) -> Fragment<'a> {
+        Fragment::new(&[node])
+    }
+
+    /// The schema of the chunk the fragment's list is in; `None` for no children.
+    pub fn schema(&self) -> Option<&Schema> {
+        self.chunk.as_ref().map(|chunk| chunk.schema())
     }
 
     /// An identity for the fragment, the same for clones of it.
-    pub fn id(&self) -> usize {
-        self.children().as_ptr() as usize
-    }
-
-    /// Whether this is the very same fragment as `other`, not just an equal one.
-    pub fn ptr_eq(&self, other: &Fragment) -> bool {
-        match (&self.children, &other.children) {
-            (Some(children), Some(others)) => Arc::ptr_eq(children, others),
-            (None, None) => true,
-            _ => false,
+    pub fn id(&self) -> (usize, u32, u32) {
+        match &self.chunk {
+            Some(chunk) if self.count > 0 => (
+                Arc::as_ptr(chunk) as *const u8 as usize,
+                self.start,
+                self.count,
+            ),
+            _ => (0, 0, 0),
         }
     }
 
-    pub fn size(&self) -> usize {
-        self.size
+    /// Whether this is the very same fragment as `other`, not just an equal one. Every empty
+    /// fragment is `Fragment.empty`.
+    pub fn ptr_eq(&self, other: &Fragment) -> bool {
+        self.id() == other.id()
     }
 
-    pub fn children(&self) -> &[Node] {
-        self.children.as_deref().unwrap_or(&[])
+    pub fn size(&self) -> usize {
+        self.size as usize
     }
 
     pub fn child_count(&self) -> usize {
-        self.children().len()
+        self.count as usize
+    }
+
+    /// The owner and index of child `index`, which must be one.
+    #[inline]
+    fn kid(&self, index: u32) -> (&Arc<Chunk<'a>>, u32) {
+        let chunk = self.chunk.as_ref().expect("a fragment with children is in a chunk");
+        Chunk::child_shared(chunk, self.start, index, self.bound)
+    }
+
+    /// Child `index`, borrowed.
+    #[inline]
+    pub(crate) fn child_ref(&self, index: usize) -> NodeRef<'_> {
+        let chunk = self.chunk.as_ref().expect("a fragment with children is in a chunk");
+        let (chunk, id) = chunk.child(self.start, index as u32, self.bound);
+        NodeRef::at(chunk, id)
+    }
+
+    /// The children, borrowed.
+    pub(crate) fn refs(&self) -> impl DoubleEndedIterator<Item = NodeRef<'_>> + ExactSizeIterator {
+        (0..self.child_count()).map(|index| self.child_ref(index))
+    }
+
+    #[inline]
+    fn node(&self, index: u32) -> Node<'a> {
+        let (chunk, id) = self.kid(index);
+        Node::at(chunk.clone(), id)
+    }
+
+    pub fn children(&self) -> impl DoubleEndedIterator<Item = Node<'a>> + ExactSizeIterator + '_ {
+        (0..self.count).map(|index| self.node(index))
     }
 
     /// The child at `index`, raising an error when there is none.
-    pub fn child(&self, index: usize) -> Result<&Node> {
-        match self.children().get(index) {
+    pub fn child(&self, index: usize) -> Result<Node<'a>> {
+        match self.maybe_child(index) {
             Some(child) => Ok(child),
             None => Err(Error::Range(format!(
                 "Index {index} out of range for {}",
@@ -118,25 +178,38 @@ impl Fragment {
         }
     }
 
-    pub fn maybe_child(&self, index: usize) -> Option<&Node> {
-        self.children().get(index)
+    pub fn maybe_child(&self, index: usize) -> Option<Node<'a>> {
+        (index < self.child_count()).then(|| self.node(index as u32))
     }
 
-    pub fn first_child(&self) -> Option<&Node> {
-        self.children().first()
+    pub fn first_child(&self) -> Option<Node<'a>> {
+        self.maybe_child(0)
     }
 
-    pub fn last_child(&self) -> Option<&Node> {
-        self.children().last()
+    pub fn last_child(&self) -> Option<Node<'a>> {
+        self.child_count()
+            .checked_sub(1)
+            .and_then(|last| self.maybe_child(last))
     }
 
     /// The children, each with its offset in the fragment.
-    pub fn children_with_offsets(&self) -> impl Iterator<Item = (usize, &Node)> {
-        self.children().iter().scan(0, |offset, child| {
+    pub fn children_with_offsets(&self) -> impl Iterator<Item = (usize, Node<'a>)> + '_ {
+        self.children().scan(0, |offset, child| {
             let at = *offset;
             *offset += child.node_size();
             Some((at, child))
         })
+    }
+
+    /// Refs to the children, for a chunk being written.
+    pub(crate) fn write_kids(&self, builder: &mut Builder<'a>) -> Vec<u32> {
+        (0..self.count)
+            .map(|index| {
+                let (chunk, id) = self.kid(index);
+                let chunk = chunk.clone();
+                builder.external(&chunk, id)
+            })
+            .collect()
     }
 
     /// Call `f` for each node, at any depth, between `from` and `to`, counting positions from
@@ -145,18 +218,18 @@ impl Fragment {
         &self,
         from: usize,
         to: usize,
-        f: &mut NodeVisitor,
+        f: &mut NodeVisitor<'_, 'a>,
         node_start: usize,
-        parent: Option<&Node>,
+        parent: Option<&Node<'a>>,
     ) -> Result<()> {
         let mut pos = 0;
-        for (index, child) in self.children().iter().enumerate() {
+        for (index, child) in self.children().enumerate() {
             if pos >= to {
                 break;
             }
             let end = pos + child.node_size();
             if end > from
-                && f(child, node_start + pos, parent, index)?
+                && f(&child, node_start + pos, parent, index)?
                 && child.content().size() > 0
             {
                 let start = pos + 1;
@@ -174,8 +247,8 @@ impl Fragment {
         Ok(())
     }
 
-    pub fn descendants(&self, f: &mut NodeVisitor) -> Result<()> {
-        self.nodes_between(0, self.size, f, 0, None)
+    pub fn descendants(&self, f: &mut NodeVisitor<'_, 'a>) -> Result<()> {
+        self.nodes_between(0, self.size(), f, 0, None)
     }
 
     /// The text between `from` and `to`. See [`Node::text_between`].
@@ -184,7 +257,7 @@ impl Fragment {
         from: usize,
         to: usize,
         block_separator: Option<&Text>,
-        mut leaf_text: Option<&mut LeafTextHook>,
+        mut leaf_text: Option<&mut LeafTextHook<'_, 'a>>,
     ) -> Result<Text> {
         let separator = block_separator.filter(|separator| !separator.is_empty());
         let mut parts: Vec<Text> = Vec::new();
@@ -225,36 +298,35 @@ impl Fragment {
 
     /// This fragment followed by `other`, joining the text at the seam when it has the same
     /// marks on both sides.
-    pub fn append(&self, other: &Fragment) -> Fragment {
+    pub fn append(&self, other: &Fragment<'a>) -> Fragment<'a> {
         if other.size == 0 {
             return self.clone();
         }
         if self.size == 0 {
             return other.clone();
         }
-        let mut content = Vec::with_capacity(self.children().len() + other.children().len());
-        content.extend_from_slice(self.children());
-        let mut rest = other.children();
+        let mut content: Vec<Node<'a>> = self.children().collect();
+        let mut rest = other.children().peekable();
         if let Some(last) = content.last_mut()
-            && let Some(joined) = last.join_text(&rest[0])
+            && let Some(first) = rest.peek()
+            && let Some(joined) = last.join_text(first)
         {
             *last = joined;
-            rest = &rest[1..];
+            rest.next();
         }
-        content.extend_from_slice(rest);
-        Fragment::with_size(content, self.size + other.size)
+        content.extend(rest);
+        Fragment::new(&content)
     }
 
     /// The part of the fragment between `from` and `to`.
-    pub fn cut(&self, from: usize, to: usize) -> Fragment {
-        if from == 0 && to == self.size {
+    pub fn cut(&self, from: usize, to: usize) -> Fragment<'a> {
+        if from == 0 && to == self.size() {
             return self.clone();
         }
         let mut result = Vec::new();
-        let mut size = 0;
         if to > from {
             let mut pos = 0;
-            for child in self.children().iter() {
+            for child in self.children() {
                 if pos >= to {
                     break;
                 }
@@ -272,67 +344,58 @@ impl Fragment {
                                 })
                             })
                     } else {
-                        child.clone()
+                        child
                     };
-                    size += child.node_size();
                     result.push(child);
                 }
                 pos = end;
             }
         }
-        Fragment::with_size(result, size)
+        Fragment::new(&result)
     }
 
-    /// The children from index `from` to `to`.
-    pub fn cut_by_index(&self, from: usize, to: usize) -> Fragment {
-        let to = to.min(self.children().len());
+    /// The children from index `from` to `to`: a part of the same list.
+    pub fn cut_by_index(&self, from: usize, to: usize) -> Fragment<'a> {
+        let to = to.min(self.child_count());
         let from = from.min(to);
         if from == to {
             return Fragment::empty();
         }
-        if from == 0 && to == self.children().len() {
+        if from == 0 && to == self.child_count() {
             return self.clone();
         }
-        Fragment::new(self.children()[from..to].to_vec())
+        let size: usize = (from..to).map(|index| self.child_ref(index).node_size()).sum();
+        Fragment {
+            chunk: self.chunk.clone(),
+            start: self.start + from as u32,
+            count: (to - from) as u32,
+            size: size as u32,
+            bound: self.bound,
+        }
     }
 
     /// The fragment with the child at `index` replaced by `node`.
-    pub fn replace_child(&self, index: usize, node: Node) -> Fragment {
-        let current = &self.children()[index];
+    pub fn replace_child(&self, index: usize, node: Node<'a>) -> Fragment<'a> {
+        let current = self.node(index as u32);
         if current.ptr_eq(&node) {
             return self.clone();
         }
-        let size = self.size + node.node_size() - current.node_size();
-        let mut copy = self.children().to_vec();
+        let mut copy: Vec<Node<'a>> = self.children().collect();
         copy[index] = node;
-        Fragment::with_size(copy, size)
+        Fragment::new(&copy)
     }
 
-    /// [`replace_child`](Self::replace_child), in place when no other fragment holds these
-    /// children.
-    pub(crate) fn set_child(&mut self, index: usize, node: Node) {
-        match self.children.as_mut().and_then(Arc::get_mut) {
-            Some(children) => {
-                self.size = self.size + node.node_size() - children[index].node_size();
-                children[index] = node;
-            }
-            None => *self = self.replace_child(index, node),
-        }
-    }
-
-    pub fn add_to_start(&self, node: Node) -> Fragment {
-        let size = self.size + node.node_size();
-        let mut children = Vec::with_capacity(self.children().len() + 1);
+    pub fn add_to_start(&self, node: Node<'a>) -> Fragment<'a> {
+        let mut children = Vec::with_capacity(self.child_count() + 1);
         children.push(node);
-        children.extend_from_slice(self.children());
-        Fragment::with_size(children, size)
+        children.extend(self.children());
+        Fragment::new(&children)
     }
 
-    pub fn add_to_end(&self, node: Node) -> Fragment {
-        let size = self.size + node.node_size();
-        let mut children = self.children().to_vec();
+    pub fn add_to_end(&self, node: Node<'a>) -> Fragment<'a> {
+        let mut children: Vec<Node<'a>> = self.children().collect();
         children.push(node);
-        Fragment::with_size(children, size)
+        Fragment::new(&children)
     }
 
     /// The index of the child at `pos`, and that child's offset. At the end of a child, the
@@ -341,17 +404,17 @@ impl Fragment {
         if pos == 0 {
             return Ok((0, pos));
         }
-        if pos == self.size {
-            return Ok((self.children().len(), pos));
+        if pos == self.size() {
+            return Ok((self.child_count(), pos));
         }
-        if pos > self.size {
+        if pos > self.size() {
             return Err(Error::Range(format!(
                 "Position {pos} outside of fragment ({})",
                 self.to_debug_string()?
             )));
         }
         let mut offset = 0;
-        for (index, child) in self.children().iter().enumerate() {
+        for (index, child) in self.refs().enumerate() {
             let end = offset + child.node_size();
             if end >= pos {
                 if end == pos {
@@ -361,7 +424,10 @@ impl Fragment {
             }
             offset = end;
         }
-        unreachable!("a position inside the fragment is inside a child")
+        Err(Error::Range(format!(
+            "Position {pos} outside of fragment ({})",
+            self.to_debug_string()?
+        )))
     }
 
     /// `toString`: the children, described, in angle brackets.
@@ -380,7 +446,7 @@ impl Fragment {
     }
 
     pub(crate) fn write_debug(&self, out: &mut String) -> Result<()> {
-        for (index, child) in self.children().iter().enumerate() {
+        for (index, child) in self.children().enumerate() {
             if index > 0 {
                 out.push_str(", ");
             }
@@ -391,34 +457,30 @@ impl Fragment {
 
     /// The children as JSON, or `null` when there are none.
     pub fn to_json(&self) -> Value {
-        if self.children().is_empty() {
+        if self.count == 0 {
             return Value::Null;
         }
-        Value::Array(
-            self.children()
-                .iter()
-                .map(|child| stack::grow(|| child.to_json()))
-                .collect(),
-        )
+        Value::Array(self.refs().map(super::fields::node_value).collect())
     }
 
-    pub fn from_json<'a>(schema: &Schema, json: impl Json<'a>) -> Result<Fragment> {
-        Reader::new(schema).fragment(json)
+    pub fn from_json<'j>(schema: &Schema, json: impl Json<'j>) -> Result<Fragment<'static>> {
+        let mut reader = Reader::new(schema);
+        let (start, count, size) = reader.fragment_list(json)?;
+        if count == 0 {
+            return Ok(Fragment::empty());
+        }
+        Ok(Fragment::of(reader.finish(), start, count, size, u32::MAX))
     }
 }
 
-impl PartialEq for Fragment {
+impl PartialEq for Fragment<'_> {
     fn eq(&self, other: &Fragment) -> bool {
         self.child_count() == other.child_count()
-            && self
-                .children()
-                .iter()
-                .zip(other.children())
-                .all(|(a, b)| stack::grow(|| a == b))
+            && self.refs().zip(other.refs()).all(|(a, b)| a.equals(b))
     }
 }
 
-impl fmt::Debug for Fragment {
+impl fmt::Debug for Fragment<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.to_debug_string() {
             Ok(described) => f.write_str(&described),

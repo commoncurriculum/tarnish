@@ -6,7 +6,7 @@ use crate::dom::Dom;
 use crate::error::Result;
 use crate::text::Text;
 
-impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
+impl<'p, D: Dom> ParseContext<'p, D> {
     /// Set each position to find that `hit` picks, of those not found yet when `unfound_only`,
     /// to the current position moved by what `hit` gives.
     fn find_where(

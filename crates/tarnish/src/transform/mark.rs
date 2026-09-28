@@ -8,16 +8,17 @@ use crate::model::{ContentMatch, Fragment, Mark, MarkType, NodeType, Slice, Whit
 
 /// A mark, or all marks of a type.
 #[derive(Clone, Copy)]
-pub enum MarkMatch<'a> {
-    Mark(&'a Mark),
-    Type(&'a MarkType),
+pub enum MarkMatch<'m, 'a> {
+    Mark(&'m Mark<'a>),
+    Type(MarkType<'m>),
 }
 
-impl Transform {
-    pub fn add_mark(&mut self, from: usize, to: usize, mark: &Mark) -> Result<&mut Self> {
+impl<'a> Transform<'a> {
+    pub fn add_mark(&mut self, from: usize, to: usize, mark: &Mark<'a>) -> Result<&mut Self> {
         // Ranges the steps cover, extended while the next node continues them.
-        let mut removed: Vec<(usize, usize, Mark)> = Vec::new();
+        let mut removed: Vec<(usize, usize, Mark<'a>)> = Vec::new();
         let mut added: Vec<(usize, usize)> = Vec::new();
+        let mark_type = mark.mark_type();
         self.doc().nodes_between(
             from,
             to,
@@ -27,16 +28,16 @@ impl Transform {
                 }
                 let marks = node.marks();
                 let parent = js::non_null(parent, "type")?;
-                if !mark.is_in_set(marks) && parent.node_type().allows_mark_type(mark.mark_type()) {
+                if !mark.is_in_set(&marks) && parent.node_type().allows_mark_type(&mark_type) {
                     let start = pos.max(from);
                     let end = (pos + node.node_size()).min(to);
-                    let new_set = mark.add_to_set(marks);
+                    let new_set = mark.add_to_set(&marks);
                     for old in marks.iter().filter(|old| !old.is_in_set(&new_set)) {
                         match removed.last_mut() {
-                            Some(removing) if removing.1 == start && removing.2 == *old => {
+                            Some(removing) if removing.1 == start && removing.2 == old => {
                                 removing.1 = end;
                             }
-                            _ => removed.push((start, end, old.clone())),
+                            _ => removed.push((start, end, old)),
                         }
                     }
                     match added.last_mut() {
@@ -73,15 +74,15 @@ impl Transform {
         &mut self,
         from: usize,
         to: usize,
-        mark: Option<MarkMatch>,
+        mark: Option<MarkMatch<'_, 'a>>,
     ) -> Result<&mut Self> {
-        struct Matched {
-            style: Mark,
+        struct Matched<'a> {
+            style: Mark<'a>,
             from: usize,
             to: usize,
             step: usize,
         }
-        let mut matched: Vec<Matched> = Vec::new();
+        let mut matched: Vec<Matched<'a>> = Vec::new();
         let mut step = 0;
         self.doc().nodes_between(
             from,
@@ -92,12 +93,12 @@ impl Transform {
                 }
                 step += 1;
                 let marks = node.marks();
-                let to_remove: Vec<&Mark> = match mark {
+                let to_remove: Vec<Mark<'a>> = match mark {
                     Some(MarkMatch::Type(mark_type)) => marks
                         .iter()
                         .filter(|mark| mark.mark_type() == mark_type)
                         .collect(),
-                    Some(MarkMatch::Mark(mark)) if mark.is_in_set(marks) => vec![mark],
+                    Some(MarkMatch::Mark(mark)) if mark.is_in_set(&marks) => vec![mark.clone()],
                     Some(MarkMatch::Mark(_)) => Vec::new(),
                     None => marks.iter().collect(),
                 };
@@ -106,14 +107,14 @@ impl Transform {
                     let found = matched
                         .iter_mut()
                         .rev()
-                        .find(|m| m.step == step - 1 && m.style == *style);
+                        .find(|m| m.step == step - 1 && m.style == style);
                     match found {
                         Some(found) => {
                             found.to = end;
                             found.step = step;
                         }
                         None => matched.push(Matched {
-                            style: style.clone(),
+                            style,
                             from: pos.max(from),
                             to: end,
                             step,
@@ -169,20 +170,20 @@ pub(crate) fn line_breaks(units: &[u16]) -> Vec<(usize, usize)> {
 
 /// [`Transform::clear_incompatible`], which with `clear_newlines` false keeps the newlines in
 /// text rather than making them spaces.
-pub(super) fn clear_incompatible(
-    tr: &mut Transform,
+pub(super) fn clear_incompatible<'a>(
+    tr: &mut Transform<'a>,
     pos: usize,
     parent_type: &NodeType,
     start: Option<ContentMatch>,
     clear_newlines: bool,
 ) -> Result<()> {
-    let node = js::non_null(tr.doc().node_at(pos)?, "childCount")?.clone();
+    let node = js::non_null(tr.doc().node_at(pos)?, "childCount")?;
     let mut matched = start.unwrap_or_else(|| parent_type.content_match());
     let mut replace_steps = Vec::new();
     let mut cur = pos + 1;
     for child in node.children() {
         let end = cur + child.node_size();
-        match matched.match_type(child.node_type()) {
+        match matched.match_type(&child.node_type()) {
             None => replace_steps.push(Step::Replace {
                 from: cur,
                 to: end,
@@ -192,12 +193,12 @@ pub(super) fn clear_incompatible(
             Some(allowed) => {
                 matched = allowed;
                 for mark in child.marks().iter() {
-                    if !parent_type.allows_mark_type(mark.mark_type()) {
+                    if !parent_type.allows_mark_type(&mark.mark_type()) {
                         tr.step(Step::Mark {
                             op: MarkOp::Remove,
                             from: cur,
                             to: end,
-                            mark: mark.clone(),
+                            mark,
                         })?;
                     }
                 }
@@ -207,8 +208,8 @@ pub(super) fn clear_incompatible(
                 {
                     let breaks = line_breaks(&text.units());
                     if !breaks.is_empty() {
-                        let marks = parent_type.allowed_marks(child.marks());
-                        let space = parent_type.schema().text(" ", &marks)?;
+                        let marks = parent_type.allowed_marks(&child.marks());
+                        let space = parent_type.schema().text(" ", &marks.to_vec())?;
                         let slice = Slice::new(Fragment::from_node(space), 0, 0);
                         for (index, length) in breaks {
                             replace_steps.push(Step::Replace {

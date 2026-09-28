@@ -1,38 +1,54 @@
-//! Reading nodes, fragments and marks from JSON, as their `fromJSON`s do.
+//! Reading nodes, fragments and marks from JSON, as their `fromJSON`s do, into one chunk.
 
-use super::fragment::Fragment;
-use super::mark::{Mark, Marks};
-use super::node::Node;
+use std::sync::Arc;
+
 use super::schema::Schema;
+use crate::chunk::{Builder, Chunk, Record, TEXT_NODE};
 use crate::error::{Error, Result};
 use crate::js::{Given, Json};
 use crate::json::Value;
 use crate::stack;
 use crate::text::Text;
 
-/// Reads a document, sharing what JavaScript shares, or could without it showing: each mark
-/// type's mark with its defaults, as the type's `instance`, and the set of just that mark.
-pub(crate) struct Reader<'s> {
+/// Reads a document into one chunk, sharing what JavaScript shares, or could without it
+/// showing: each mark type's mark with its defaults, as the type's `instance`, the set of just
+/// that mark, and each node type's default attributes.
+pub(crate) struct Reader<'s, 'a> {
     schema: &'s Schema,
-    /// Each mark type's mark with its defaults, and the set of just that mark, once read.
-    instances: Vec<Option<(Mark, Marks)>>,
+    builder: Builder<'a>,
+    text_type: u16,
     /// The children of the fragments being read, the innermost's last.
-    children: Vec<Node>,
-    /// The marks of the node being read.
-    marks: Vec<Mark>,
+    children: Vec<u32>,
+    /// The marks of the node being read: each one's rank and index.
+    marks: Vec<(u32, u32)>,
 }
 
-impl<'s> Reader<'s> {
-    pub fn new(schema: &'s Schema) -> Reader<'s> {
+impl<'s, 'a> Reader<'s, 'a> {
+    pub fn new(schema: &'s Schema) -> Reader<'s, 'a> {
         Reader {
             schema,
-            instances: Vec::new(),
+            builder: Builder::new(schema),
+            text_type: schema.text_type().index() as u16,
             children: Vec::new(),
             marks: Vec::new(),
         }
     }
 
-    pub fn node<'a>(&mut self, json: impl Json<'a>) -> Result<Node> {
+    pub fn finish(self) -> Arc<Chunk<'a>> {
+        self.builder.seal()
+    }
+
+    /// The chunk being written, for a binding to pack itself.
+    pub fn builder(&self) -> &Builder<'a> {
+        &self.builder
+    }
+
+    pub fn into_builder(self) -> Builder<'a> {
+        self.builder
+    }
+
+    /// Reads a node: its index in the chunk.
+    pub fn node<'j>(&mut self, json: impl Json<'j>) -> Result<u32> {
         // The likeliest first, for a reader that looks each up and stops once it has found as
         // many as the object has.
         let fields = json.fields(["type", "text", "content", "marks", "attrs"]);
@@ -42,7 +58,7 @@ impl<'s> Reader<'s> {
         }
         let [name, text, content, marks, attrs] = fields;
         let marks = match marks.filter(|marks| marks.truthy()) {
-            None => Mark::none(),
+            None => 0,
             Some(marks) => self.marks(marks)?,
         };
         let name = name.map_or("undefined".into(), Json::string);
@@ -50,62 +66,143 @@ impl<'s> Reader<'s> {
             let text = text
                 .and_then(Json::text)
                 .ok_or_else(|| Error::Range("Invalid text node in JSON".into()))?;
-            let text_type = self.schema.text_type();
-            let attrs = text_type
-                .default_attrs()
-                .cloned()
-                .expect("text has no attributes");
-            let node = Node::new_text(text_type, attrs, Text::from(&*text), marks)?;
-            json.read_node(&node);
-            return Ok(node);
+            if text.is_empty() {
+                return Err(Error::Range("Empty text nodes are not allowed".into()));
+            }
+            let id = self.builder.text(self.text_type, marks, &text);
+            json.read_node(id);
+            return Ok(id);
         }
-        let content = match content {
+        let (kids_start, kids, size) = match content {
             Some(content) => self.fragment(content)?,
-            None => Fragment::empty(),
+            None => (self.children.len(), 0, 0),
         };
-        let node_type = self.schema.expect_node_type(&name)?;
-        let attrs = attrs.map_or(Given::Falsy(Value::Null), Json::attrs);
-        let attrs = node_type.attrs_given(&attrs)?;
-        node_type.check_attrs(&attrs)?;
-        let node = Node::new(node_type, attrs, content, marks);
-        json.read_node(&node);
-        Ok(node)
+        let node_type = match self.schema.expect_node_type(&name) {
+            Ok(node_type) => node_type,
+            Err(error) => {
+                self.children.truncate(kids_start);
+                return Err(error);
+            }
+        };
+        let given = attrs.map_or(Given::Falsy(Value::Null), Json::attrs);
+        let attr_set = &node_type.data().attrs;
+        let computed = attr_set.resolve(&given).and_then(|computed| {
+            attr_set.check_computed(&computed)?;
+            Ok(computed)
+        });
+        let computed = match computed {
+            Ok(computed) => computed,
+            Err(error) => {
+                self.children.truncate(kids_start);
+                return Err(error);
+            }
+        };
+        let attrs = attr_set.write(&mut self.builder, node_type.index(), &computed);
+        let id = self.builder.element(
+            node_type.index() as u16,
+            marks,
+            attrs,
+            &self.children[kids_start..kids_start + kids],
+            size,
+        );
+        self.children.truncate(kids_start);
+        json.read_node(id);
+        Ok(id)
     }
 
-    pub fn fragment<'a>(&mut self, json: impl Json<'a>) -> Result<Fragment> {
+    /// Reads a fragment's children onto `children`: where they start there, how many there
+    /// are, and their size.
+    fn fragment<'j>(&mut self, json: impl Json<'j>) -> Result<(usize, usize, u32)> {
+        let start = self.children.len();
         if !json.truthy() {
-            return Ok(Fragment::empty());
+            return Ok((start, 0, 0));
         }
         let items = json
             .items()
             .ok_or_else(|| Error::Range("Invalid input for Fragment.fromJSON".into()))?;
-        let start = self.children.len();
+        let mut size: u64 = 0;
         for item in items {
             match stack::grow(|| self.node(item)) {
-                Ok(node) => self.push_child(start, node),
+                Ok(node) => size += self.push_child(start, node),
                 Err(failed) => {
                     self.children.truncate(start);
                     return Err(failed);
                 }
             }
         }
-        Ok(Fragment::from_drain(self.children.drain(start..)))
+        let size = u32::try_from(size)
+            .map_err(|_| Error::Range("A fragment holds fewer than 4G positions".into()))?;
+        Ok((start, self.children.len() - start, size))
+    }
+
+    /// Reads a fragment, as a list of kids of its own: where it starts, its length and size.
+    pub fn fragment_list<'j>(&mut self, json: impl Json<'j>) -> Result<(u32, u32, u32)> {
+        let (start, count, size) = self.fragment(json)?;
+        let kids = self.builder.kids(&self.children[start..]);
+        self.children.truncate(start);
+        Ok((kids, count as u32, size))
     }
 
     /// Adds a child to the fragment whose children start at `start`, joined to the text before
-    /// it when they have the same marks, as `Fragment.fromArray` joins them.
-    fn push_child(&mut self, start: usize, node: Node) {
-        if self.children.len() > start {
-            let last = self.children.last_mut().expect("a child");
-            if let Some(joined) = last.join_text(&node) {
-                *last = joined;
-                return;
+    /// it when they have the same marks, as `Fragment.fromArray` joins them. Its size.
+    fn push_child(&mut self, start: usize, node: u32) -> u64 {
+        let record = self.builder.record(node);
+        let size = if record.flags & TEXT_NODE != 0 {
+            u64::from(record.size)
+        } else if self.schema.node_data(usize::from(record.ty)).is_leaf() {
+            1
+        } else {
+            2 + u64::from(record.size)
+        };
+        if self.children.len() > start
+            && record.flags & TEXT_NODE != 0
+            && let Some(&last) = self.children.last()
+        {
+            let previous = self.builder.record(last);
+            if previous.flags & TEXT_NODE != 0 && self.builder.sets_equal(previous.marks, record.marks)
+            {
+                self.join_text(last, previous, node, record);
+                return size;
             }
         }
         self.children.push(node);
+        size
     }
 
-    pub fn mark<'a>(&mut self, json: impl Json<'a>) -> Result<Mark> {
+    /// Joins text node `next`, the last node written, to `last`, before it.
+    fn join_text(&mut self, last: u32, previous: Record, next: u32, record: Record) {
+        let held = previous.flags | record.flags;
+        if held & crate::chunk::HELD_AS_UNITS == 0
+            && previous.a + previous.b == record.a
+            && record.a + record.b == self.builder.text_end()
+        {
+            // The texts are side by side already.
+            let mut joined = previous;
+            joined.b += record.b;
+            joined.size += record.size;
+            joined.flags &= record.flags | !crate::chunk::ASCII;
+            self.builder.pop_node();
+            self.builder.set_record(last, joined);
+            return;
+        }
+        let text: Text = [self.builder.text_of_record(previous), self.builder.text_of_record(record)]
+            .iter()
+            .collect();
+        self.builder.pop_node();
+        let joined = self.builder.text_of(previous.ty, previous.marks, &text);
+        let joined = self.builder.record(joined);
+        self.builder.pop_node();
+        self.builder.set_record(last, joined);
+        let _ = next;
+    }
+
+    /// Reads a mark: its index in the chunk.
+    pub fn mark<'j>(&mut self, json: impl Json<'j>) -> Result<u32> {
+        self.read_mark(json).map(|(_, mark)| mark)
+    }
+
+    /// A mark's rank and index.
+    fn read_mark<'j>(&mut self, json: impl Json<'j>) -> Result<(u32, u32)> {
         if !json.truthy() {
             return Err(Error::Range("Invalid input for Mark.fromJSON".into()));
         }
@@ -115,46 +212,51 @@ impl<'s> Reader<'s> {
             .schema
             .mark_type(&name)
             .ok_or_else(|| Error::Range(format!("There is no mark type {name} in this schema")))?;
-        let attrs = attrs.map_or(Given::Falsy(Value::Null), Json::attrs);
-        let mark = match (&attrs, mark_type.default_attrs()) {
-            (Given::Falsy(_), Some(_)) => self.instance(mark_type.rank()).0.clone(),
-            _ => mark_type.create_given(&attrs)?,
+        let rank = mark_type.rank();
+        let given = attrs.map_or(Given::Falsy(Value::Null), Json::attrs);
+        let attr_set = &mark_type.data().attrs;
+        let mark = match (&given, mark_type.default_attrs()) {
+            (Given::Falsy(_), Some(defaults)) => {
+                attr_set.check_computed(&super::attrs::Computed::Defaults)?;
+                self.builder.instance(rank, defaults).0
+            }
+            _ => {
+                let computed = attr_set.resolve(&given)?;
+                attr_set.check_computed(&computed)?;
+                let attrs = attr_set.write(&mut self.builder, usize::MAX, &computed);
+                self.builder.mark(rank as u32, attrs)
+            }
         };
-        mark_type.check_attrs(mark.attrs())?;
-        json.read_mark(&mark);
-        Ok(mark)
+        json.read_mark(mark);
+        Ok((rank as u32, mark))
     }
 
-    /// A node's marks, as a set.
-    fn marks<'a>(&mut self, json: impl Json<'a>) -> Result<Marks> {
+    /// A node's marks, as a set: its index.
+    fn marks<'j>(&mut self, json: impl Json<'j>) -> Result<u32> {
         let items = json
             .items()
             .ok_or_else(|| Error::Range("Invalid mark data for Node.fromJSON".into()))?;
-        self.marks.clear();
+        let base = self.marks.len();
         for item in items {
-            let mark = self.mark(item)?;
-            self.marks.push(mark);
+            match self.read_mark(item) {
+                Ok(mark) => self.marks.push(mark),
+                Err(error) => {
+                    self.marks.truncate(base);
+                    return Err(error);
+                }
+            }
         }
-        if let [mark] = self.marks.as_slice()
-            && let Some(Some((instance, alone))) = self.instances.get(mark.mark_type().rank())
-            && instance.ptr_eq(mark)
+        let read = &mut self.marks[base..];
+        if let [(rank, mark)] = *read
+            && let Some((instance, alone)) = self.builder.instance_of(rank as usize)
+            && instance == mark
         {
-            return Ok(alone.clone());
+            self.marks.truncate(base);
+            return Ok(alone);
         }
-        Ok(Mark::set_from_vec(&mut self.marks))
-    }
-
-    /// The mark type's mark with its defaults, which the type must have, and the set of just
-    /// that mark.
-    fn instance(&mut self, rank: usize) -> &(Mark, Marks) {
-        if self.instances.is_empty() {
-            self.instances.resize(self.schema.mark_types().len(), None);
-        }
-        self.instances[rank].get_or_insert_with(|| {
-            let mark_type = self.schema.mark_types().nth(rank).expect("a mark type");
-            let defaults = mark_type.default_attrs().cloned().expect("defaults");
-            let mark = Mark::new(mark_type, defaults);
-            (mark.clone(), Marks::from([mark]))
-        })
+        read.sort_by_key(|&(rank, _)| rank);
+        let members: Vec<u32> = read.iter().map(|&(_, mark)| mark).collect();
+        self.marks.truncate(base);
+        Ok(self.builder.set(&members))
     }
 }

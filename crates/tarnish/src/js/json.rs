@@ -73,7 +73,7 @@ impl fmt::Debug for Value {
 
 // JavaScript holds every number as a double, so a parsed integer beyond 2^53 has already lost
 // its low digits by the time it is written back out.
-fn write_number(out: &mut String, number: &Number) {
+pub(crate) fn write_number(out: &mut String, number: &Number) {
     let double = number.as_f64().unwrap_or(f64::NAN);
     if double.is_finite() {
         out.push_str(ryu_js::Buffer::new().format_finite(double));

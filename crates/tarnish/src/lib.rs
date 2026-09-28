@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 pub mod api;
+pub mod chunk;
 pub mod dom;
 pub mod error;
 pub mod js;

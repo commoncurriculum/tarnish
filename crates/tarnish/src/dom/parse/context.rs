@@ -5,26 +5,27 @@ use super::node_context::{NodeContext, WsOptions};
 use super::{ParseOptions, PreserveWhitespace};
 use crate::dom::Dom;
 use crate::error::Result;
-use crate::model::{Attrs, ContentMatch, Fragment, Mark, MarkType, Node, NodeType, Schema};
+use crate::json::Map;
+use crate::model::{ContentMatch, Fragment, Mark, MarkType, Node, NodeType, Schema};
 
-pub(super) struct ParseContext<'p, 'o, D: Dom> {
+pub(super) struct ParseContext<'p, D: Dom> {
     pub(super) parser: &'p DomParser<D::Node>,
     pub(super) dom: &'p D,
-    pub(super) options: ParseOptions<'o, D::Node>,
+    pub(super) options: ParseOptions<'p, D::Node>,
     pub(super) is_open: bool,
     /// The index of the context content goes into. Those above it wait to be closed.
     pub(super) open: usize,
     pub(super) needs_block: bool,
-    pub(super) nodes: Vec<NodeContext>,
+    pub(super) nodes: Vec<NodeContext<'p>>,
     pub(super) local_preserve_ws: bool,
     next_id: usize,
 }
 
-impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
+impl<'p, D: Dom> ParseContext<'p, D> {
     pub(super) fn new(
         parser: &'p DomParser<D::Node>,
         dom: &'p D,
-        options: ParseOptions<'o, D::Node>,
+        options: ParseOptions<'p, D::Node>,
         is_open: bool,
     ) -> Self {
         let ws = WsOptions {
@@ -35,15 +36,15 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
         };
         let top = match &options.top_node {
             Some(top_node) => {
-                let node_type = top_node.node_type();
-                let matched = match &options.top_match {
-                    Some(top_match) => top_match.clone(),
+                let node_type = parser.schema.node_type_at(top_node.node_type().index());
+                let matched = match options.top_match {
+                    Some(top_match) => top_match,
                     None => node_type.content_match(),
                 };
-                let attrs = Some(top_node.attrs().clone());
+                let attrs = Some(top_node.attrs().to_map());
                 NodeContext::new(
                     0,
-                    Some(node_type.clone()),
+                    Some(node_type),
                     attrs,
                     Vec::new(),
                     true,
@@ -69,11 +70,11 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
         }
     }
 
-    pub(super) fn top(&self) -> &NodeContext {
+    pub(super) fn top(&self) -> &NodeContext<'p> {
         &self.nodes[self.open]
     }
 
-    pub(super) fn top_mut(&mut self) -> &mut NodeContext {
+    pub(super) fn top_mut(&mut self) -> &mut NodeContext<'p> {
         &mut self.nodes[self.open]
     }
 
@@ -87,10 +88,10 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
     pub(super) fn find_place(
         &mut self,
         node: &Node,
-        marks: Vec<Mark>,
+        marks: Vec<Mark<'static>>,
         cautious: bool,
-    ) -> Result<Option<Vec<Mark>>> {
-        let mut route: Option<(Vec<NodeType>, usize)> = None;
+    ) -> Result<Option<Vec<Mark<'static>>>> {
+        let mut route: Option<(Vec<NodeType<'p>>, usize)> = None;
         let mut penalty = 0;
         for depth in (0..=self.open).rev() {
             let context = &mut self.nodes[depth];
@@ -127,8 +128,8 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
     /// Insert a node, adjusting the context where it needs to. Whether it fit.
     pub(super) fn insert_node(
         &mut self,
-        node: Node,
-        marks: &[Mark],
+        node: Node<'static>,
+        marks: &[Mark<'static>],
         cautious: bool,
     ) -> Result<bool> {
         let mut marks = marks.to_vec();
@@ -145,14 +146,15 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
         self.close_extra(false)?;
         let schema = self.schema();
         let top = self.top_mut();
+        let node_type = node.node_type();
         if let Some(matched) = &top.matched {
-            top.matched = matched.match_type(node.node_type());
+            top.matched = matched.match_type(&node_type);
         }
         let mut node_marks = Mark::none();
-        for mark in inner_marks.iter().chain(node.marks().iter()) {
+        for mark in inner_marks.into_iter().chain(node.marks().iter()) {
             let applies = match &top.node_type {
-                Some(node_type) => node_type.allows_mark_type(mark.mark_type()),
-                None => mark_may_apply(schema, mark.mark_type(), node.node_type()),
+                Some(parent) => parent.allows_mark_type(&mark.mark_type()),
+                None => mark_may_apply(schema, &mark.mark_type(), &node_type),
             };
             if applies {
                 node_marks = mark.add_to_set(&node_marks);
@@ -166,12 +168,12 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
     /// its content, or `None` when it fits nowhere.
     pub(super) fn enter(
         &mut self,
-        node_type: &NodeType,
-        attrs: Option<Attrs>,
-        marks: Vec<Mark>,
+        node_type: &NodeType<'p>,
+        attrs: Option<Map>,
+        marks: Vec<Mark<'static>>,
         preserve: Option<PreserveWhitespace>,
-    ) -> Result<Option<Vec<Mark>>> {
-        let created = node_type.create(attrs.as_deref(), Fragment::empty(), &[])?;
+    ) -> Result<Option<Vec<Mark<'static>>>> {
+        let created = node_type.create(attrs.as_ref(), Fragment::empty(), &[])?;
         if self.find_place(&created, marks.clone(), false)?.is_none() {
             return Ok(None);
         }
@@ -182,12 +184,12 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
     /// Open a node of this type, giving it the marks it allows and leaving the rest.
     fn enter_inner(
         &mut self,
-        node_type: &NodeType,
-        attrs: Option<Attrs>,
-        marks: Vec<Mark>,
+        node_type: &NodeType<'p>,
+        attrs: Option<Map>,
+        marks: Vec<Mark<'static>>,
         solid: bool,
         preserve: Option<PreserveWhitespace>,
-    ) -> Result<Vec<Mark>> {
+    ) -> Result<Vec<Mark<'static>>> {
         self.close_extra(false)?;
         let schema = self.schema();
         let top = self.top_mut();
@@ -200,8 +202,8 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
         let mut rest = Vec::new();
         for mark in marks {
             let applies = match &top.node_type {
-                Some(parent) => parent.allows_mark_type(mark.mark_type()),
-                None => mark_may_apply(schema, mark.mark_type(), node_type),
+                Some(parent) => parent.allows_mark_type(&mark.mark_type()),
+                None => mark_may_apply(schema, &mark.mark_type(), node_type),
             };
             if applies {
                 apply = mark.add_to_set(&apply);
@@ -211,8 +213,7 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
         }
         let id = self.next_id;
         self.next_id += 1;
-        let node_type = Some(node_type.clone());
-        let context = NodeContext::new(id, node_type, attrs, apply.to_vec(), solid, None, ws);
+        let context = NodeContext::new(id, Some(*node_type), attrs, apply.to_vec(), solid, None, ws);
         self.nodes.push(context);
         self.open += 1;
         Ok(rest)
@@ -229,7 +230,7 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
     }
 
     /// Close every node but the top one, and give it back.
-    pub(super) fn finish(mut self) -> Result<NodeContext> {
+    pub(super) fn finish(mut self) -> Result<NodeContext<'p>> {
         self.open = 0;
         self.close_extra(self.is_open)?;
         Ok(self.nodes.swap_remove(0))
@@ -265,18 +266,18 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
         Ok(pos)
     }
 
-    fn textblock_from_context(&self) -> Result<Option<NodeType>> {
+    fn textblock_from_context(&self) -> Result<Option<NodeType<'p>>> {
         if let Some(context) = &self.options.context {
             for depth in (0..=context.depth()).rev() {
-                let found = context
-                    .node(depth)
+                let node = context.node(depth);
+                let found = node
                     .content_match_at(context.index_after(depth))?
                     .default_type();
                 if let Some(found) = found
                     && found.is_textblock()
                     && found.default_attrs().is_some()
                 {
-                    return Ok(Some(found));
+                    return Ok(Some(self.schema().node_type_at(found.index())));
                 }
             }
         }
@@ -289,8 +290,12 @@ impl<'p, 'o, D: Dom> ParseContext<'p, 'o, D> {
 
 /// Whether a mark of this type could apply to a node of this type anywhere in the schema.
 fn mark_may_apply(schema: &Schema, mark_type: &MarkType, node_type: &NodeType) -> bool {
-    fn scan(matched: &ContentMatch, node_type: &NodeType, seen: &mut Vec<ContentMatch>) -> bool {
-        seen.push(matched.clone());
+    fn scan<'s>(
+        matched: &ContentMatch<'s>,
+        node_type: &NodeType,
+        seen: &mut Vec<ContentMatch<'s>>,
+    ) -> bool {
+        seen.push(*matched);
         for index in 0..matched.edge_count() {
             let (edge_type, next) = matched.edge(index).expect("an edge in range");
             if edge_type == *node_type {

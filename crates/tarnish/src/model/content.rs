@@ -18,7 +18,7 @@ use crate::stack;
 use crate::text::is_js_space;
 
 /// The compiled form of one content expression.
-pub(crate) struct Automaton {
+pub struct Automaton {
     states: Vec<State>,
     wrappings: Mutex<Wrappings>,
 }
@@ -44,16 +44,16 @@ static EMPTY: LazyLock<Arc<Automaton>> = LazyLock::new(|| {
 
 impl Automaton {
     /// The automaton of the empty expression, whose nodes are leaves.
-    pub fn empty() -> Arc<Automaton> {
+    pub(crate) fn empty() -> Arc<Automaton> {
         EMPTY.clone()
     }
 
-    pub fn is_empty_match(self: &Arc<Self>) -> bool {
-        Arc::ptr_eq(self, &EMPTY)
+    pub(crate) fn is_empty_match(&self) -> bool {
+        std::ptr::eq(self, &**EMPTY)
     }
 
     /// `ContentMatch.parse`: compile an expression over the node types of a schema.
-    pub fn parse(expr: &str, nodes: &[NodeTypeData]) -> Result<Arc<Automaton>> {
+    pub(crate) fn parse(expr: &str, nodes: &[NodeTypeData]) -> Result<Arc<Automaton>> {
         let mut stream = TokenStream::new(expr, nodes);
         if stream.next().is_none() {
             return Ok(Automaton::empty());
@@ -69,31 +69,29 @@ impl Automaton {
     }
 
     /// Whether the start state's first edge is an inline node.
-    pub fn inline_content(&self, nodes: &[NodeTypeData]) -> bool {
+    pub(crate) fn inline_content(&self, nodes: &[NodeTypeData]) -> bool {
         self.states[0]
             .next
             .first()
             .is_some_and(|&(node, _)| nodes[node].is_inline())
     }
 
-    /// The state that a node of `node_type` leads to from `state`, in an automaton over
-    /// `schema`'s node types.
-    fn step(&self, schema: &Schema, state: usize, node_type: &NodeType) -> Option<usize> {
-        if node_type.schema != *schema {
-            return None;
-        }
+    /// The state a node of the type at `node` leads to from `state`.
+    #[inline]
+    fn step(&self, state: usize, node: usize) -> Option<usize> {
         self.states[state]
             .next
             .iter()
-            .find(|&&(node, _)| node == node_type.index)
+            .find(|&&(edge, _)| edge == node)
             .map(|&(_, next)| next)
     }
 
-    /// Whether the nodes, in order, are content the expression matches in full.
-    pub fn accepts(&self, schema: &Schema, nodes: &[Node]) -> bool {
+    /// Whether nodes of these types, in order, are content the expression matches in full.
+    /// `None` is a node of another schema's.
+    pub(crate) fn accepts(&self, types: impl Iterator<Item = Option<usize>>) -> bool {
         let mut state = 0;
-        for node in nodes {
-            match self.step(schema, state, node.node_type()) {
+        for node in types {
+            match node.and_then(|node| self.step(state, node)) {
                 Some(next) => state = next,
                 None => return false,
             }
@@ -102,31 +100,47 @@ impl Automaton {
     }
 }
 
+/// A content expression compiled on its own, for [`ContentExpr::start`] to match against.
+#[derive(Clone)]
+pub struct ContentExpr(Arc<Automaton>);
+
+impl ContentExpr {
+    /// `ContentMatch.parse(expr, schema.nodes)`: an expression that no node type of the schema
+    /// needs to have.
+    pub fn parse(schema: &Schema, expr: &str) -> Result<ContentExpr> {
+        Ok(ContentExpr(Automaton::parse(expr, &schema.0.nodes)?))
+    }
+
+    pub fn start<'s>(&'s self, schema: &'s Schema) -> ContentMatch<'s> {
+        ContentMatch::start(schema, &self.0)
+    }
+}
+
 /// A state of a node type's content expression: what may come next, and whether content may end
 /// here.
-#[derive(Clone)]
-pub struct ContentMatch {
-    schema: Schema,
-    automaton: Arc<Automaton>,
+#[derive(Clone, Copy)]
+pub struct ContentMatch<'s> {
+    schema: &'s Schema,
+    automaton: &'s Automaton,
     state: usize,
 }
 
-impl PartialEq for ContentMatch {
+impl PartialEq for ContentMatch<'_> {
     fn eq(&self, other: &Self) -> bool {
-        self.state == other.state && Arc::ptr_eq(&self.automaton, &other.automaton)
+        self.state == other.state && std::ptr::eq(self.automaton, other.automaton)
     }
 }
 
-impl Eq for ContentMatch {}
+impl Eq for ContentMatch<'_> {}
 
-impl std::hash::Hash for ContentMatch {
+impl std::hash::Hash for ContentMatch<'_> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        (Arc::as_ptr(&self.automaton) as usize, self.state).hash(state);
+        self.id().hash(state);
     }
 }
 
-impl ContentMatch {
-    pub(crate) fn start(schema: Schema, automaton: Arc<Automaton>) -> ContentMatch {
+impl<'s> ContentMatch<'s> {
+    pub(crate) fn start(schema: &'s Schema, automaton: &'s Automaton) -> ContentMatch<'s> {
         ContentMatch {
             schema,
             automaton,
@@ -134,30 +148,37 @@ impl ContentMatch {
         }
     }
 
-    /// `ContentMatch.parse(expr, schema.nodes)`: the start of an expression that no node type
-    /// of the schema needs to have.
-    pub fn parse(schema: &Schema, expr: &str) -> Result<ContentMatch> {
-        let automaton = Automaton::parse(expr, &schema.0.nodes)?;
-        Ok(ContentMatch::start(schema.clone(), automaton))
+    /// The match at state `state` of the same automaton.
+    pub fn at_state(&self, state: usize) -> Option<ContentMatch<'s>> {
+        (state < self.automaton.states.len()).then(|| self.at(state))
     }
 
-    fn state(&self) -> &State {
+    /// The match's state in its automaton.
+    pub fn state_index(&self) -> usize {
+        self.state
+    }
+
+    fn state(&self) -> &'s State {
         &self.automaton.states[self.state]
     }
 
-    fn at(&self, state: usize) -> ContentMatch {
+    fn at(&self, state: usize) -> ContentMatch<'s> {
         ContentMatch {
-            schema: self.schema.clone(),
-            automaton: self.automaton.clone(),
+            schema: self.schema,
+            automaton: self.automaton,
             state,
         }
     }
 
-    fn node_type(&self, index: usize) -> NodeType {
+    fn node_type(&self, index: usize) -> NodeType<'s> {
         NodeType {
-            schema: self.schema.clone(),
+            schema: self.schema,
             index,
         }
+    }
+
+    pub fn schema(&self) -> &'s Schema {
+        self.schema
     }
 
     /// Whether this is the start of the empty expression.
@@ -167,26 +188,32 @@ impl ContentMatch {
 
     /// An identity for the match, the same for the same state of the same automaton.
     pub fn id(&self) -> (usize, usize) {
-        (Arc::as_ptr(&self.automaton) as usize, self.state)
+        (
+            self.automaton as *const Automaton as *const u8 as usize,
+            self.state,
+        )
     }
 
     pub fn valid_end(&self) -> bool {
         self.state().valid_end
     }
 
-    pub fn match_type(&self, node_type: &NodeType) -> Option<ContentMatch> {
+    pub fn match_type(&self, node_type: &NodeType) -> Option<ContentMatch<'s>> {
         self.step(self.state, node_type).map(|next| self.at(next))
     }
 
     fn step(&self, state: usize, node_type: &NodeType) -> Option<usize> {
-        self.automaton.step(&self.schema, state, node_type)
+        if node_type.schema != self.schema {
+            return None;
+        }
+        self.automaton.step(state, node_type.index)
     }
 
     /// The match after all of `fragment`'s children, `None` where they don't fit.
-    pub fn match_fragment(&self, fragment: &Fragment) -> Option<ContentMatch> {
+    pub fn match_fragment(&self, fragment: &Fragment) -> Option<ContentMatch<'s>> {
         let mut state = self.state;
         for child in fragment.children() {
-            state = self.step(state, child.node_type())?;
+            state = self.step(state, &child.node_type())?;
         }
         Some(self.at(state))
     }
@@ -198,10 +225,10 @@ impl ContentMatch {
         fragment: &Fragment,
         start: usize,
         end: usize,
-    ) -> Result<Option<ContentMatch>> {
+    ) -> Result<Option<ContentMatch<'s>>> {
         let mut state = self.state;
         for index in start..end {
-            match self.step(state, fragment.child(index)?.node_type()) {
+            match self.step(state, &fragment.child(index)?.node_type()) {
                 Some(next) => state = next,
                 None => return Ok(None),
             }
@@ -217,7 +244,7 @@ impl ContentMatch {
     }
 
     /// The first type that can come next and be generated.
-    pub fn default_type(&self) -> Option<NodeType> {
+    pub fn default_type(&self) -> Option<NodeType<'s>> {
         self.state()
             .next
             .iter()
@@ -243,14 +270,14 @@ impl ContentMatch {
         after: &Fragment,
         to_end: bool,
         start_index: usize,
-    ) -> Result<Option<Fragment>> {
+    ) -> Result<Option<Fragment<'static>>> {
         let mut seen = vec![false; self.automaton.states.len()];
         seen[self.state] = true;
         self.search_fill(self, after, to_end, start_index, &mut Vec::new(), &mut seen)
     }
 
     /// A node of the type, filled, as `fillBefore` makes each node it inserts.
-    fn generate(&self, node: usize) -> Result<Node> {
+    fn generate(&self, node: usize) -> Result<Node<'static>> {
         thread_local! {
             /// The types being generated on this thread, each inside the one before.
             static GENERATING: RefCell<Vec<(usize, usize)>> = const { RefCell::new(Vec::new()) };
@@ -278,13 +305,13 @@ impl ContentMatch {
 
     fn search_fill(
         &self,
-        current: &ContentMatch,
+        current: &ContentMatch<'s>,
         after: &Fragment,
         to_end: bool,
         start_index: usize,
         types: &mut Vec<usize>,
         seen: &mut [bool],
-    ) -> Result<Option<Fragment>> {
+    ) -> Result<Option<Fragment<'static>>> {
         let finished = current.match_fragment_range(after, start_index, after.child_count())?;
         if finished.is_some_and(|finished| !to_end || finished.valid_end()) {
             let nodes = types
@@ -312,7 +339,7 @@ impl ContentMatch {
 
     /// The node types to wrap a node of type `target` in for it to fit here: empty when it fits
     /// as it is, `None` when no wrapping makes it fit.
-    pub fn find_wrapping(&self, target: &NodeType) -> Option<Vec<NodeType>> {
+    pub fn find_wrapping(&self, target: &NodeType) -> Option<Vec<NodeType<'s>>> {
         if target.schema != self.schema {
             return None;
         }
@@ -340,20 +367,20 @@ impl ContentMatch {
     }
 
     fn compute_wrapping(&self, target: usize) -> Option<Vec<usize>> {
-        struct Active {
-            at: ContentMatch,
+        struct Active<'s> {
+            at: ContentMatch<'s>,
             node: Option<usize>,
             via: Option<usize>,
         }
         let mut seen = vec![false; self.schema.0.nodes.len()];
         let mut visited: Vec<Active> = vec![Active {
-            at: self.clone(),
+            at: *self,
             node: None,
             via: None,
         }];
         let mut queue = VecDeque::from([0]);
         while let Some(current) = queue.pop_front() {
-            let at = visited[current].at.clone();
+            let at = visited[current].at;
             if at.state().next.iter().any(|&(node, _)| node == target) {
                 let mut result = Vec::new();
                 let mut walk = Some(current);
@@ -376,7 +403,7 @@ impl ContentMatch {
                     && valid
                 {
                     visited.push(Active {
-                        at: ContentMatch::start(self.schema.clone(), data.content.clone()),
+                        at: ContentMatch::start(self.schema, &data.content),
                         node: Some(node),
                         via: Some(current),
                     });
@@ -393,7 +420,7 @@ impl ContentMatch {
     }
 
     /// The `n`th edge out of this state: a node type and the match after it.
-    pub fn edge(&self, n: usize) -> Result<(NodeType, ContentMatch)> {
+    pub fn edge(&self, n: usize) -> Result<(NodeType<'s>, ContentMatch<'s>)> {
         match self.state().next.get(n) {
             Some(&(node, next)) => Ok((self.node_type(node), self.at(next))),
             None => Err(Error::Range(format!(
@@ -403,9 +430,9 @@ impl ContentMatch {
     }
 }
 
-impl fmt::Display for ContentMatch {
+impl fmt::Display for ContentMatch<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let order = depth_first(&self.automaton, self.state);
+        let order = depth_first(self.automaton, self.state);
         let lines: Vec<String> = order
             .iter()
             .enumerate()
@@ -440,11 +467,12 @@ fn depth_first(automaton: &Automaton, start: usize) -> Vec<usize> {
     seen
 }
 
-impl fmt::Debug for ContentMatch {
+impl fmt::Debug for ContentMatch<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "ContentMatch({self})")
     }
 }
+
 
 struct TokenStream<'a> {
     string: String,

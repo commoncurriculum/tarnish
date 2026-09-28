@@ -9,22 +9,22 @@ use crate::stack;
 
 /// A step's outcome: the changed document, or why the step can't apply to the document.
 #[derive(Clone, Debug)]
-pub enum StepResult {
-    Ok(Node),
+pub enum StepResult<'a> {
+    Ok(Node<'a>),
     Failed(String),
 }
 
-impl StepResult {
+impl<'a> StepResult<'a> {
     /// `doc.replace(from, to, slice)`, a slice that doesn't fit being a failure.
-    pub fn from_replace(doc: Node, from: usize, to: usize, slice: &Slice) -> Result<StepResult> {
-        match doc.into_replaced(from, to, slice) {
+    pub fn from_replace(doc: Node<'a>, from: usize, to: usize, slice: &Slice<'a>) -> Result<StepResult<'a>> {
+        match doc.replace(from, to, slice) {
             Ok(doc) => Ok(StepResult::Ok(doc)),
             Err(Error::Replace(message)) => Ok(StepResult::Failed(message)),
             Err(error) => Err(error),
         }
     }
 
-    pub fn doc(&self) -> Option<&Node> {
+    pub fn doc(&self) -> Option<&Node<'a>> {
         match self {
             StepResult::Ok(doc) => Some(doc),
             StepResult::Failed(_) => None,
@@ -51,13 +51,13 @@ impl MarkOp {
 
 /// A change to a document, which applies to the document it was made for.
 #[derive(Clone, Debug)]
-pub enum Step {
+pub enum Step<'a> {
     /// Replace `from` to `to` with a slice. A `structure` step only replaces the closing and
     /// opening tokens between them, and fails where there is content.
     Replace {
         from: usize,
         to: usize,
-        slice: Slice,
+        slice: Slice<'a>,
         structure: bool,
     },
     /// Replace `from` to `to` with a slice, keeping the content from `gap_from` to `gap_to` and
@@ -67,7 +67,7 @@ pub enum Step {
         to: usize,
         gap_from: usize,
         gap_to: usize,
-        slice: Slice,
+        slice: Slice<'a>,
         insert: usize,
         structure: bool,
     },
@@ -76,10 +76,14 @@ pub enum Step {
         op: MarkOp,
         from: usize,
         to: usize,
-        mark: Mark,
+        mark: Mark<'a>,
     },
     /// Add a mark to, or remove it from, the node at `pos`.
-    NodeMark { op: MarkOp, pos: usize, mark: Mark },
+    NodeMark {
+        op: MarkOp,
+        pos: usize,
+        mark: Mark<'a>,
+    },
     /// Set an attribute of the node at `pos`. A `value` of `None` is `undefined`, which gives
     /// the attribute its default.
     Attr {
@@ -135,11 +139,10 @@ fn content_between(doc: &Node, from: usize, to: usize) -> Result<bool> {
     if dist > 0 {
         let mut next = resolved
             .node(depth)
-            .maybe_child(resolved.index_after(depth))
-            .cloned();
+            .maybe_child(resolved.index_after(depth));
         while dist > 0 {
             match next {
-                Some(node) if !node.is_leaf() => next = node.first_child().cloned(),
+                Some(node) if !node.is_leaf() => next = node.first_child(),
                 _ => return Ok(true),
             }
             dist -= 1;
@@ -149,14 +152,17 @@ fn content_between(doc: &Node, from: usize, to: usize) -> Result<bool> {
 }
 
 /// The fragment with `f` applied to its inline nodes, at any depth, each with its parent.
-fn map_fragment(fragment: &Fragment, f: &dyn Fn(&Node, &Node) -> Node, parent: &Node) -> Fragment {
+fn map_fragment<'a>(
+    fragment: &Fragment<'a>,
+    f: &dyn Fn(&Node<'a>, &Node<'a>) -> Node<'a>,
+    parent: &Node<'a>,
+) -> Fragment<'a> {
     let mapped = fragment
         .children()
-        .iter()
         .map(|child| {
             let mut mapped = child.clone();
             if child.content().size() > 0 {
-                mapped = mapped.copy(stack::grow(|| map_fragment(child.content(), f, child)));
+                mapped = mapped.copy(stack::grow(|| map_fragment(child.content(), f, &child)));
             }
             if mapped.is_inline() {
                 mapped = f(&mapped, parent);
@@ -173,8 +179,8 @@ fn node_slice(node: Node, leaf: bool) -> Slice {
     Slice::new(Fragment::from_node(node), 0, if leaf { 0 } else { 1 })
 }
 
-fn attrs_with(attrs: &Map, attr: &str, value: &Option<Value>) -> Map {
-    let mut copy = attrs.clone();
+fn attrs_with(attrs: Map, attr: &str, value: &Option<Value>) -> Map {
+    let mut copy = attrs;
     match value {
         Some(value) => {
             copy.insert(attr.into(), value.clone());
@@ -186,10 +192,10 @@ fn attrs_with(attrs: &Map, attr: &str, value: &Option<Value>) -> Map {
     copy
 }
 
-impl Step {
+impl<'a> Step<'a> {
     /// Apply the step to a document. A caller that keeps the document passes a clone of it; one
     /// that gives it up lets a replace change it in place.
-    pub fn apply(&self, doc: Node) -> Result<StepResult> {
+    pub fn apply(&self, doc: Node<'a>) -> Result<StepResult<'a>> {
         match self {
             Step::Replace {
                 from,
@@ -239,11 +245,12 @@ impl Step {
                 let old = doc.slice(*from, *to, false)?;
                 let resolved = doc.resolve(*from)?;
                 let parent = resolved.node(resolved.shared_depth(*to));
-                let add = |node: &Node, parent: &Node| {
-                    if !node.is_atom() || !parent.node_type().allows_mark_type(mark.mark_type()) {
+                let mark_type = mark.mark_type();
+                let add = |node: &Node<'a>, parent: &Node<'a>| {
+                    if !node.is_atom() || !parent.node_type().allows_mark_type(&mark_type) {
                         return node.clone();
                     }
-                    node.mark(mark.add_to_set(node.marks()))
+                    node.mark(mark.add_to_set(&node.marks()))
                 };
                 let content = map_fragment(old.content(), &add, parent);
                 let slice = Slice::new(content, old.open_start(), old.open_end());
@@ -256,7 +263,9 @@ impl Step {
                 mark,
             } => {
                 let old = doc.slice(*from, *to, false)?;
-                let remove = |node: &Node, _: &Node| node.mark(mark.remove_from_set(node.marks()));
+                let remove = |node: &Node<'a>, _: &Node<'a>| {
+                    node.mark(mark.remove_from_set(&node.marks()))
+                };
                 let content = map_fragment(old.content(), &remove, &doc);
                 let slice = Slice::new(content, old.open_start(), old.open_end());
                 StepResult::from_replace(doc, *from, *to, &slice)
@@ -266,12 +275,14 @@ impl Step {
                     return Ok(StepResult::Failed("No node at mark step's position".into()));
                 };
                 let marks = match op {
-                    MarkOp::Add => mark.add_to_set(node.marks()),
-                    MarkOp::Remove => mark.remove_from_set(node.marks()),
+                    MarkOp::Add => mark.add_to_set(&node.marks()),
+                    MarkOp::Remove => mark.remove_from_set(&node.marks()),
                 };
-                let updated =
-                    node.node_type()
-                        .create(Some(node.attrs()), Fragment::empty(), &marks)?;
+                let updated = node.node_type().create(
+                    Some(&node.attrs().to_map()),
+                    Fragment::empty(),
+                    &marks.to_vec(),
+                )?;
                 let slice = node_slice(updated, node.is_leaf());
                 StepResult::from_replace(doc, *pos, *pos + 1, &slice)
             }
@@ -281,18 +292,22 @@ impl Step {
                         "No node at attribute step's position".into(),
                     ));
                 };
-                let attrs = attrs_with(node.attrs(), attr, value);
-                let updated =
-                    node.node_type()
-                        .create(Some(&attrs), Fragment::empty(), node.marks())?;
+                let attrs = attrs_with(node.attrs().to_map(), attr, value);
+                let updated = node.node_type().create(
+                    Some(&attrs),
+                    Fragment::empty(),
+                    &node.marks().to_vec(),
+                )?;
                 let slice = node_slice(updated, node.is_leaf());
                 StepResult::from_replace(doc, *pos, *pos + 1, &slice)
             }
             Step::DocAttr { attr, value } => {
-                let attrs = attrs_with(doc.attrs(), attr, value);
-                let updated =
-                    doc.node_type()
-                        .create(Some(&attrs), doc.content().clone(), doc.marks())?;
+                let attrs = attrs_with(doc.attrs().to_map(), attr, value);
+                let updated = doc.node_type().create(
+                    Some(&attrs),
+                    doc.content().clone(),
+                    &doc.marks().to_vec(),
+                )?;
                 Ok(StepResult::Ok(updated))
             }
         }
@@ -331,7 +346,7 @@ impl Step {
     }
 
     /// The step that undoes this one, given the document before it.
-    pub fn invert(&self, doc: &Node) -> Result<Step> {
+    pub fn invert(&self, doc: &Node<'a>) -> Result<Step<'a>> {
         Ok(match self {
             Step::Replace {
                 from, to, slice, ..
@@ -375,13 +390,14 @@ impl Step {
                 mark,
             } => {
                 if let Some(node) = doc.node_at(*pos)? {
-                    let new_set = mark.add_to_set(node.marks());
-                    if new_set.len() == node.marks().len() {
-                        let replaced = node.marks().iter().find(|mark| !mark.is_in_set(&new_set));
+                    let marks = node.marks();
+                    let new_set = mark.add_to_set(&marks);
+                    if new_set.len() == marks.len() {
+                        let replaced = marks.iter().find(|mark| !mark.is_in_set(&new_set));
                         return Ok(Step::NodeMark {
                             op: MarkOp::Add,
                             pos: *pos,
-                            mark: replaced.unwrap_or(mark).clone(),
+                            mark: replaced.unwrap_or_else(|| mark.clone()),
                         });
                     }
                 }
@@ -396,7 +412,7 @@ impl Step {
                 pos,
                 mark,
             } => match doc.node_at(*pos)? {
-                Some(node) if mark.is_in_set(node.marks()) => Step::NodeMark {
+                Some(node) if mark.is_in_set(&node.marks()) => Step::NodeMark {
                     op: MarkOp::Add,
                     pos: *pos,
                     mark: mark.clone(),
@@ -408,18 +424,18 @@ impl Step {
                 Step::Attr {
                     pos: *pos,
                     attr: attr.clone(),
-                    value: node.attrs().get(attr).cloned(),
+                    value: node.attrs_view().get(attr).map(|value| value.to_value()),
                 }
             }
             Step::DocAttr { attr, .. } => Step::DocAttr {
                 attr: attr.clone(),
-                value: doc.attrs().get(attr).cloned(),
+                value: doc.attrs_view().get(attr).map(|value| value.to_value()),
             },
         })
     }
 
     /// The step with its positions mapped, or `None` when the mapping deleted what it changes.
-    pub fn map(&self, mapping: &dyn Mappable) -> Option<Step> {
+    pub fn map(&self, mapping: &dyn Mappable) -> Option<Step<'a>> {
         match self {
             Step::Replace {
                 from,
@@ -512,7 +528,7 @@ impl Step {
     }
 
     /// The step and `other`, applied after it, as one step, if they can be.
-    pub fn merge(&self, other: &Step) -> Option<Step> {
+    pub fn merge(&self, other: &Step<'a>) -> Option<Step<'a>> {
         match (self, other) {
             (
                 Step::Replace {
@@ -528,7 +544,7 @@ impl Step {
                     structure: false,
                 },
             ) => {
-                let joined = |first: &Slice, second: &Slice| {
+                let joined = |first: &Slice<'a>, second: &Slice<'a>| {
                     if first.size() + second.size() == 0 {
                         Slice::empty()
                     } else {
@@ -668,7 +684,7 @@ impl Step {
         Value::Object(json)
     }
 
-    pub fn from_json(schema: &Schema, json: &Value) -> Result<Step> {
+    pub fn from_json(schema: &Schema, json: &Value) -> Result<Step<'static>> {
         if !js::truthy(Some(json)) || !js::truthy(json.get("stepType")) {
             return Err(Error::Range("Invalid input for Step.fromJSON".into()));
         }

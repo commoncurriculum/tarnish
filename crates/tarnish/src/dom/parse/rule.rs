@@ -3,7 +3,8 @@
 use std::sync::Arc;
 
 use crate::error::Result;
-use crate::model::{Attrs, Fragment, Mark, Schema};
+use crate::json::Map;
+use crate::model::{Fragment, Mark, Schema};
 
 /// A tag rule's `getAttrs`, given the element.
 pub type AttrsHook<N> = Arc<dyn Fn(&N) -> Result<GetAttrsResult> + Send + Sync>;
@@ -12,10 +13,10 @@ pub type AttrsHook<N> = Arc<dyn Fn(&N) -> Result<GetAttrsResult> + Send + Sync>;
 pub type StyleAttrsHook = Arc<dyn Fn(&str) -> Result<GetAttrsResult> + Send + Sync>;
 
 /// A `getContent`: the content a hook makes of the element.
-pub type GetContentHook<N> = Arc<dyn Fn(&N, &Schema) -> Result<Fragment> + Send + Sync>;
+pub type GetContentHook<N> = Arc<dyn Fn(&N, &Schema) -> Result<Fragment<'static>> + Send + Sync>;
 
 /// A style rule's `clearMark`: whether to take the mark off the content.
-pub type ClearMarkHook = Arc<dyn Fn(&Mark) -> Result<bool> + Send + Sync>;
+pub type ClearMarkHook = Arc<dyn for<'a> Fn(&Mark<'a>) -> Result<bool> + Send + Sync>;
 
 /// A `contentElement` function: the element in a matched one that holds its content.
 pub type ContentElementHook<N> = Arc<dyn Fn(&N) -> Result<N> + Send + Sync>;
@@ -40,7 +41,7 @@ pub enum GetAttrsResult {
     Reject,
     /// `null` or `undefined`: the type's default attributes.
     Defaults,
-    Attrs(Attrs),
+    Attrs(Map),
 }
 
 /// The namespace a tag rule's elements must be in.
@@ -98,7 +99,7 @@ pub struct Rule<K> {
     /// Whether to leave out what the rule matches.
     pub ignore: bool,
     /// The attributes of the node or mark made, when the rule has no `get_attrs`.
-    pub attrs: Option<Attrs>,
+    pub attrs: Option<Map>,
 }
 
 impl<K> Rule<K> {
