@@ -25,11 +25,25 @@ pub enum DomSpec<N> {
         items: Vec<DomSpec<N>>,
         origin: Option<(usize, u32)>,
     },
-    /// A value: a string, the content hole `0`, an attributes object, or an array spec of
-    /// values. Its arrays aren't checked against the attributes, as a copy of one can't be told
-    /// from an array the hook built: a hook that gives back an attribute's array has to check
-    /// it, or give it as a [`DomSpec::Array`] with its origin.
+    /// A string, the content hole `0` or an attributes object. An array is read as a
+    /// [`DomSpec::Array`] with no origin.
     Value(Value),
+}
+
+impl<N> From<Value> for DomSpec<N> {
+    fn from(value: Value) -> Self {
+        if !matches!(value, Value::Array(_)) {
+            return DomSpec::Value(value);
+        }
+        let items = value.into_array().expect("an array");
+        DomSpec::Array {
+            items: items
+                .into_iter()
+                .map(|item| stack::grow(|| item.into()))
+                .collect(),
+            origin: None,
+        }
+    }
 }
 
 /// A rendered spec: its element, and the element to put the content in, if it has a hole.
@@ -115,7 +129,7 @@ impl<N: Clone> DomSerializer<N> {
             .get(name)
             .ok_or_else(|| Error::Other(format!("No toDOM for node type {name}")))?;
         let spec = to_dom(node)?;
-        let rendered = render(dom, Item::Spec(&spec), None, Some(node.attrs_view()))?;
+        let rendered = render(dom, &spec, None, Some(node.attrs_view()))?;
         if let Some(content_dom) = rendered.content_dom {
             if node.is_leaf() {
                 return Err(Error::Range(
@@ -150,7 +164,7 @@ impl<N: Clone> DomSerializer<N> {
             return Ok(None);
         };
         let spec = to_dom(mark, inline)?;
-        render(dom, Item::Spec(&spec), None, Some(mark.attrs_view())).map(Some)
+        render(dom, &spec, None, Some(mark.attrs_view())).map(Some)
     }
 }
 
@@ -167,64 +181,7 @@ pub fn render_spec<D: Dom>(
             content_dom: None,
         });
     }
-    render(dom, Item::Spec(structure), xml_ns, None)
-}
-
-/// A spec, or an item of an array spec, where a [`DomSpec::Value`] array's items are values.
-enum Item<'a, N> {
-    Spec(&'a DomSpec<N>),
-    Value(&'a Value),
-}
-
-impl<N> Clone for Item<'_, N> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<N> Copy for Item<'_, N> {}
-
-impl<'a, N> Item<'a, N> {
-    fn value(self) -> Option<&'a Value> {
-        match self {
-            Item::Spec(DomSpec::Value(value)) | Item::Value(value) => Some(value),
-            Item::Spec(_) => None,
-        }
-    }
-}
-
-/// The items of an array spec.
-enum Items<'a, N> {
-    Specs(&'a [DomSpec<N>]),
-    Values(&'a [Value]),
-}
-
-impl<N> Clone for Items<'_, N> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<N> Copy for Items<'_, N> {}
-
-impl<'a, N> Items<'a, N> {
-    fn len(self) -> usize {
-        match self {
-            Items::Specs(specs) => specs.len(),
-            Items::Values(values) => values.len(),
-        }
-    }
-
-    fn get(self, index: usize) -> Option<Item<'a, N>> {
-        match self {
-            Items::Specs(specs) => specs.get(index).map(Item::Spec),
-            Items::Values(values) => values.get(index).map(Item::Value),
-        }
-    }
-
-    fn iter(self) -> impl Iterator<Item = Item<'a, N>> {
-        (0..self.len()).map_while(move |index| self.get(index))
-    }
+    render(dom, structure, xml_ns, None)
 }
 
 fn invalid() -> Error {
@@ -233,29 +190,27 @@ fn invalid() -> Error {
 
 fn render<D: Dom>(
     dom: &D,
-    structure: Item<'_, D::Node>,
+    structure: &DomSpec<D::Node>,
     xml_ns: Option<&str>,
     block_arrays_in: Option<ValueRef>,
 ) -> Result<Rendered<D::Node>> {
     let (items, origin) = match structure {
-        Item::Spec(DomSpec::Node(node)) if dom.kind(node)? == NodeKind::Element => {
+        DomSpec::Node(node) if dom.kind(node)? == NodeKind::Element => {
             return Ok(Rendered {
                 dom: node.clone(),
                 content_dom: None,
             });
         }
-        Item::Spec(DomSpec::Rendered(rendered))
-            if dom.kind(&rendered.dom)? == NodeKind::Element =>
-        {
+        DomSpec::Rendered(rendered) if dom.kind(&rendered.dom)? == NodeKind::Element => {
             return Ok(rendered.clone());
         }
-        Item::Spec(DomSpec::Array { items, origin }) => (Items::Specs(items), *origin),
-        Item::Spec(DomSpec::Value(Value::Array(items))) | Item::Value(Value::Array(items)) => {
-            (Items::Values(items), None)
+        DomSpec::Array { items, origin } => (items, *origin),
+        DomSpec::Value(array @ Value::Array(_)) => {
+            return render(dom, &array.clone().into(), xml_ns, block_arrays_in);
         }
         _ => return Err(invalid()),
     };
-    let Some(Value::String(tag)) = items.get(0).and_then(Item::value) else {
+    let Some(DomSpec::Value(Value::String(tag))) = items.first() else {
         return Err(invalid());
     };
     if let (Some(attrs), Some(origin)) = (block_arrays_in, origin)
@@ -273,7 +228,7 @@ fn render<D: Dom>(
     // Any object that is neither an array nor a DOM node holds the attributes, a
     // `{dom, contentDOM}` one included.
     let start = match items.get(1) {
-        Some(Item::Spec(DomSpec::Rendered(rendered))) => {
+        Some(DomSpec::Rendered(rendered)) => {
             let nodes = [
                 ("dom", Some(&rendered.dom)),
                 ("contentDOM", rendered.content_dom.as_ref()),
@@ -285,19 +240,16 @@ fn render<D: Dom>(
             }
             2
         }
-        Some(item) => match item.value() {
-            Some(Value::Object(attrs)) => {
-                set_attributes(dom, &element, attrs)?;
-                2
-            }
-            _ => 1,
-        },
-        None => 1,
+        Some(DomSpec::Value(Value::Object(attrs))) => {
+            set_attributes(dom, &element, attrs)?;
+            2
+        }
+        _ => 1,
     };
     let mut content_dom = None;
     for (index, child) in items.iter().enumerate().skip(start) {
-        match child.value() {
-            Some(Value::Number(number)) if number.as_f64() == Some(0.0) => {
+        match child {
+            DomSpec::Value(Value::Number(number)) if number.as_f64() == Some(0.0) => {
                 if index < items.len() - 1 || index > start {
                     return Err(Error::Range(
                         "Content hole must be the only child of its parent node".into(),
@@ -308,7 +260,7 @@ fn render<D: Dom>(
                     content_dom: Some(element),
                 });
             }
-            Some(Value::String(text)) => {
+            DomSpec::Value(Value::String(text)) => {
                 let text = dom.create_text(&text.as_str().into())?;
                 dom.append_child(&element, &text)?;
             }

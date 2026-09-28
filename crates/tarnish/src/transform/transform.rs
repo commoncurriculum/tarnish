@@ -2,12 +2,11 @@
 //! for a transform are in the modules they share code with: `replace`, `structure` and `mark`.
 
 use super::map::{Mappable, Mapping, MappingSlice};
-use super::mark::MarkMatch;
 use super::replace::replace_step;
-use super::step::{MarkOp, Step, StepResult};
+use super::step::{Step, StepResult};
 use crate::error::{Error, Result};
 use crate::json::Value;
-use crate::model::{Fragment, Mark, Node, Slice};
+use crate::model::{Fragment, Node, Slice};
 
 /// A document and the steps that made it, from a starting document.
 #[derive(Clone, Debug)]
@@ -150,47 +149,5 @@ impl<'a> Transform<'a> {
             attr: attr.to_owned(),
             value,
         })
-    }
-
-    pub fn add_node_mark(&mut self, pos: usize, mark: Mark<'a>) -> Result<&mut Self> {
-        self.step(Step::NodeMark {
-            op: MarkOp::Add,
-            pos,
-            mark,
-        })
-    }
-
-    /// Remove the mark, or all marks of the type, from the node at `pos`.
-    pub fn remove_node_mark(&mut self, pos: usize, mark: MarkMatch<'_, 'a>) -> Result<&mut Self> {
-        let node = self
-            .doc
-            .node_at(pos)?
-            .ok_or_else(|| Error::Range(format!("No node at position {pos}")))?;
-        match mark {
-            MarkMatch::Mark(mark) => {
-                if mark.is_in_set(&node.marks()) {
-                    self.step(Step::NodeMark {
-                        op: MarkOp::Remove,
-                        pos,
-                        mark: mark.clone(),
-                    })?;
-                }
-            }
-            MarkMatch::Type(mark_type) => {
-                let found: Vec<Mark<'a>> = node
-                    .marks()
-                    .iter()
-                    .filter(|mark| mark.mark_type() == mark_type)
-                    .collect();
-                for mark in found.into_iter().rev() {
-                    self.step(Step::NodeMark {
-                        op: MarkOp::Remove,
-                        pos,
-                        mark,
-                    })?;
-                }
-            }
-        }
-        Ok(self)
     }
 }

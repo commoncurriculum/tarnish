@@ -1,7 +1,7 @@
 //! Changing a document's structure: lifting, wrapping, splitting, joining, and changing types.
 
 use super::map::Mappable;
-use super::mark::{clear_incompatible, line_breaks};
+use super::mark::clear_incompatible;
 use super::step::Step;
 use super::transform::Transform;
 use crate::error::{Error, Result};
@@ -159,7 +159,7 @@ fn replace_newlines<'a>(
 ) -> Result<()> {
     for (offset, child) in node.content().children_with_offsets() {
         let Some(text) = child.text() else { continue };
-        for (index, _) in line_breaks(&text.units()) {
+        for (index, _) in text.line_breaks() {
             let start = tr.mapping_from(map_from).map(pos + 1 + offset + index, 1);
             let replacement = linebreak.create(None, Fragment::empty(), &[])?;
             tr.replace_with(start, start + 1, Fragment::from_node(replacement))?;

@@ -8,7 +8,7 @@ use crate::chunk::{
     ASCII, BINDING, Chunk, HELD_AS_UNITS, NODES, Record, TEXT_NODE, ValueRef, value_equals,
 };
 use crate::js;
-use crate::text::{Text, byte_offset};
+use crate::text::{self, Raw, Text, byte_offset};
 
 #[derive(Clone, Copy)]
 pub struct NodeRef<'c> {
@@ -345,6 +345,14 @@ impl<'c> TextRef<'c> {
                 .len()
                 .checked_sub(2)
                 .map(|_| TextRef::unit_at(bytes, bytes.len() / 2 - 1)),
+        }
+    }
+
+    /// The line breaks, `\r\n`, `\r` and `\n`, each as its offset in UTF-16 units and its length.
+    pub(crate) fn line_breaks(self) -> Vec<(usize, usize)> {
+        match self {
+            TextRef::Utf8 { text, .. } => text::raw_line_breaks(Raw::Utf8(text.as_bytes())),
+            TextRef::Units(_) => text::raw_line_breaks(Raw::Utf16(&self.units())),
         }
     }
 

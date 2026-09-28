@@ -2,9 +2,9 @@
 
 use super::step::{MarkOp, Step};
 use super::transform::Transform;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::js;
-use crate::model::{ContentMatch, Fragment, Mark, MarkType, NodeType, Slice, Whitespace};
+use crate::model::{ContentMatch, Fragment, Mark, MarkType, Marks, NodeType, Slice, Whitespace};
 
 /// A mark, or all marks of a type.
 #[derive(Clone, Copy)]
@@ -93,13 +93,8 @@ impl<'a> Transform<'a> {
                 }
                 step += 1;
                 let marks = node.marks();
-                let to_remove: Vec<Mark<'a>> = match mark {
-                    Some(MarkMatch::Type(mark_type)) => marks
-                        .iter()
-                        .filter(|mark| mark.mark_type() == mark_type)
-                        .collect(),
-                    Some(MarkMatch::Mark(mark)) if mark.is_in_set(&marks) => vec![mark.clone()],
-                    Some(MarkMatch::Mark(_)) => Vec::new(),
+                let to_remove = match mark {
+                    Some(mark) => mark.found_in(&marks),
                     None => marks.iter().collect(),
                 };
                 let end = (pos + node.node_size()).min(to);
@@ -147,25 +142,44 @@ impl<'a> Transform<'a> {
         clear_incompatible(self, pos, parent_type, start, true)?;
         Ok(self)
     }
+
+    pub fn add_node_mark(&mut self, pos: usize, mark: Mark<'a>) -> Result<&mut Self> {
+        self.step(Step::NodeMark {
+            op: MarkOp::Add,
+            pos,
+            mark,
+        })
+    }
+
+    /// Remove the mark, or all marks of the type, from the node at `pos`.
+    pub fn remove_node_mark(&mut self, pos: usize, mark: MarkMatch<'_, 'a>) -> Result<&mut Self> {
+        let node = self
+            .doc()
+            .node_at(pos)?
+            .ok_or_else(|| Error::Range(format!("No node at position {pos}")))?;
+        for mark in mark.found_in(&node.marks()).into_iter().rev() {
+            self.step(Step::NodeMark {
+                op: MarkOp::Remove,
+                pos,
+                mark,
+            })?;
+        }
+        Ok(self)
+    }
 }
 
-/// The line breaks in a text, `\r\n`, `\r` or `\n`: each one's start and length.
-pub(crate) fn line_breaks(units: &[u16]) -> Vec<(usize, usize)> {
-    let mut found = Vec::new();
-    let mut index = 0;
-    while index < units.len() {
-        match units[index] {
-            0x0d if units.get(index + 1) == Some(&0x0a) => {
-                found.push((index, 2));
-                index += 2;
-                continue;
-            }
-            0x0d | 0x0a => found.push((index, 1)),
-            _ => {}
+impl<'a> MarkMatch<'_, 'a> {
+    /// The marks of the set this matches.
+    fn found_in(self, marks: &Marks<'a>) -> Vec<Mark<'a>> {
+        match self {
+            MarkMatch::Mark(mark) if mark.is_in_set(marks) => vec![mark.clone()],
+            MarkMatch::Mark(_) => Vec::new(),
+            MarkMatch::Type(mark_type) => marks
+                .iter()
+                .filter(|mark| mark.mark_type() == mark_type)
+                .collect(),
         }
-        index += 1;
     }
-    found
 }
 
 /// [`Transform::clear_incompatible`], which with `clear_newlines` false keeps the newlines in
@@ -206,7 +220,7 @@ pub(super) fn clear_incompatible<'a>(
                     && let Some(text) = child.text()
                     && parent_type.whitespace() != Whitespace::Pre
                 {
-                    let breaks = line_breaks(&text.units());
+                    let breaks = text.line_breaks();
                     if !breaks.is_empty() {
                         let marks = parent_type.allowed_marks(&child.marks());
                         let space = parent_type.schema().text(" ", &marks.to_vec())?;

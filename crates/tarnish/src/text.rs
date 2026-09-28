@@ -205,6 +205,13 @@ pub(crate) fn line_breaks(text: &Text) -> impl Iterator<Item = (usize, usize)> +
     LineBreaks::new(text).map(|found| (found.unit, found.len))
 }
 
+/// [`line_breaks`] of UTF-8 text or of UTF-16 units.
+pub(crate) fn raw_line_breaks(raw: Raw<'_>) -> Vec<(usize, usize)> {
+    LineBreaks::of(raw)
+        .map(|found| (found.unit, found.len))
+        .collect()
+}
+
 /// `text.split(/\r?\n|\r/)`.
 pub(crate) fn split_lines(text: &Text) -> impl Iterator<Item = Text> + '_ {
     let mut breaks = LineBreaks::new(text);
@@ -263,7 +270,7 @@ struct LineBreak {
 
 /// The units a text is held in: UTF-8 bytes, or UTF-16 units for a text with a lone surrogate.
 #[derive(Clone, Copy)]
-enum Raw<'a> {
+pub(crate) enum Raw<'a> {
     Utf8(&'a [u8]),
     Utf16(&'a [u16]),
 }
@@ -303,10 +310,13 @@ struct LineBreaks<'a> {
 
 impl<'a> LineBreaks<'a> {
     fn new(text: &'a Text) -> Self {
-        let raw = match &text.0 {
+        LineBreaks::of(match &text.0 {
             Repr::Utf8 { text, .. } => Raw::Utf8(text.as_bytes()),
             Repr::Utf16(units) => Raw::Utf16(units),
-        };
+        })
+    }
+
+    fn of(raw: Raw<'a>) -> Self {
         let none = match raw {
             Raw::Utf8(bytes) => !bytes.iter().any(|&byte| byte == b'\r' || byte == b'\n'),
             Raw::Utf16(_) => false,
