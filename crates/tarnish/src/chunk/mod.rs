@@ -16,7 +16,7 @@
 //! | imports  | an imported chunk's id                             | 8     |
 //! | externs  | an import's slot, and an index in it               | 8     |
 //! | nodes    | [`Record`]                                         | 24    |
-//! | kids     | a node ref                                         | 4     |
+//! | kids     | a node: an import's slot, or all ones for this chunk, and its index | 8 |
 //! | sets     | a set's first member, and its size                 | 8     |
 //! | members  | a mark ref                                         | 4     |
 //! | marks    | a mark type's rank, and an attrs value ref         | 8     |
@@ -34,8 +34,8 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 pub(crate) use build::Builder;
-pub use value::ValueRef;
-pub(crate) use value::{Tag, value_equals};
+pub(crate) use value::value_equals;
+pub use value::{Kind, ValueRef};
 
 use crate::error::{Error, Result};
 use crate::model::Schema;
@@ -58,7 +58,7 @@ pub(crate) const STRINGS: usize = 12;
 pub(crate) const SECTIONS: usize = 13;
 
 /// Each section's element size in bytes.
-pub(crate) const WIDTHS: [usize; SECTIONS] = [8, 8, 24, 4, 8, 4, 8, 12, 4, 12, 1, 2, 1];
+pub(crate) const WIDTHS: [usize; SECTIONS] = [8, 8, 24, 8, 8, 4, 8, 12, 4, 12, 1, 2, 1];
 
 /// The magic, a word kept at zero, the schema's fingerprint, the chunk's id, and each section's
 /// element count.
@@ -67,12 +67,20 @@ pub(crate) const HEADER: usize = 4 + 4 + 8 + 8 + 4 * SECTIONS;
 /// A reference to something another chunk holds: the rest is an index into `externs`.
 pub(crate) const EXTERN: u32 = 1 << 31;
 
+/// A kid's slot for a node in the kid's own chunk. A kid names its node's chunk itself, rather
+/// than through `externs`, so that a list copies from one chunk to another kid by kid, as
+/// changes copy their parents' lists.
+pub(crate) const LOCAL: u32 = u32::MAX;
+
 /// A record's flag for text held as UTF-16 units, because it has a lone surrogate.
 pub(crate) const HELD_AS_UNITS: u16 = 1;
 /// A record's flag for text that is all ASCII, whose offsets in units are offsets in bytes.
 pub(crate) const ASCII: u16 = 2;
 /// A record's flag for a text node.
 pub(crate) const TEXT_NODE: u16 = 4;
+/// A record's flag that tarnish sets only where a binding's reading asks it to, and neither
+/// reads nor copies: a node written anew doesn't have it.
+pub(crate) const BINDING: u16 = 1 << 15;
 
 /// A node: its type's index in the schema, its marks and attributes, and for text its text, or
 /// for another node its children. Every chunk's set 0 is the empty set, and its value 0 the
@@ -85,8 +93,9 @@ pub(crate) struct Record {
     pub marks: u32,
     /// A value ref.
     pub attrs: u32,
-    /// Text: a ref to where it starts in `text`, or in `units` when held as units. Otherwise the
-    /// index of the first of its kids, in its own chunk.
+    /// Text: a ref to where it starts in `text`, or in `units` when held as units. Otherwise a
+    /// ref to the first of its kids: in its own chunk, where they are nodes before it, or in an
+    /// import, where a change wrote them before it wrote the node.
     pub a: u32,
     /// Text: its length as held. Otherwise its number of kids.
     pub b: u32,
@@ -109,7 +118,9 @@ impl Record {
     }
 
     fn from_bytes(bytes: &[u8; 24]) -> Record {
-        let word = |at: usize| u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+        let word = |at: usize| {
+            u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
+        };
         Record {
             ty: u16::from_le_bytes([bytes[0], bytes[1]]),
             flags: u16::from_le_bytes([bytes[2], bytes[3]]),
@@ -126,7 +137,7 @@ impl Record {
 pub struct Chunk<'a> {
     bytes: Cow<'a, [u8]>,
     schema: Schema,
-    imports: Box<[Arc<Chunk<'a>>]>,
+    imports: Vec<Arc<Chunk<'a>>>,
     id: u64,
     /// Where each section starts in `bytes`.
     starts: [u32; SECTIONS],
@@ -217,7 +228,7 @@ impl<'a> Chunk<'a> {
             id: double_word(&bytes, 16),
             bytes,
             schema: schema.clone(),
-            imports: imports.into(),
+            imports,
             starts,
             counts,
         })
@@ -226,7 +237,7 @@ impl<'a> Chunk<'a> {
     pub(crate) fn from_parts(
         bytes: Vec<u8>,
         schema: Schema,
-        imports: Box<[Arc<Chunk<'a>>]>,
+        imports: Vec<Arc<Chunk<'a>>>,
     ) -> Chunk<'a> {
         let (starts, counts) = layout(&bytes).expect("a chunk the builder wrote");
         Chunk {
@@ -288,13 +299,19 @@ impl<'a> Chunk<'a> {
     #[inline]
     pub(crate) fn record(&self, id: u32) -> Record {
         let at = self.at(NODES, id);
-        Record::from_bytes(self.bytes[at..at + 24].try_into().unwrap_or_else(|_| corrupt()))
+        Record::from_bytes(
+            self.bytes[at..at + 24]
+                .try_into()
+                .unwrap_or_else(|_| corrupt()),
+        )
     }
 
-    /// Kid `index` of the kids section: a node ref.
+    /// Kid `index` of the kids section: its slot, which is [`LOCAL`] for a node here, and the
+    /// node's index.
     #[inline]
-    pub(crate) fn kid(&self, index: u32) -> u32 {
-        self.word_of(KIDS, index, 0)
+    fn kid(&self, index: u32) -> (u32, u32) {
+        let at = self.at(KIDS, index);
+        (word(&self.bytes, at), word(&self.bytes, at + 4))
     }
 
     /// The import slot and index an extern names.
@@ -330,15 +347,50 @@ impl<'a> Chunk<'a> {
         (this.imports.get(slot).unwrap_or_else(|| corrupt()), index)
     }
 
+    /// Where the kids of node `id` are, `first` being its kids ref: the chunk that holds their
+    /// list, where it starts there, and the bound its kids in that chunk must be below. A list
+    /// in an import can't lead back here, since imports are older, so it has no bound.
+    #[inline]
+    pub(crate) fn kids_of(&self, id: u32, first: u32) -> (&Chunk<'a>, u32, u32) {
+        match first & EXTERN {
+            0 => (self, first, id),
+            _ => {
+                let (chunk, start) = self.resolve(first);
+                (chunk, start, u32::MAX)
+            }
+        }
+    }
+
+    /// [`kids_of`](Self::kids_of), to the list chunk's owner.
+    #[inline]
+    pub(crate) fn kids_of_shared<'s>(
+        this: &'s Arc<Chunk<'a>>,
+        id: u32,
+        first: u32,
+    ) -> (&'s Arc<Chunk<'a>>, u32, u32) {
+        match first & EXTERN {
+            0 => (this, first, id),
+            _ => {
+                let (chunk, start) = Chunk::resolve_shared(this, first);
+                (chunk, start, u32::MAX)
+            }
+        }
+    }
+
     /// A node's kid at `position` among a list starting at `first`, which must be a node before
     /// `bound` when it is in this chunk.
     #[inline]
     pub(crate) fn child(&self, first: u32, position: u32, bound: u32) -> (&Chunk<'a>, u32) {
-        let reference = self.kid(first.checked_add(position).unwrap_or_else(|| corrupt()));
-        if reference & EXTERN == 0 && reference >= bound {
-            corrupt();
+        match self.kid(first.checked_add(position).unwrap_or_else(|| corrupt())) {
+            (LOCAL, index) if index < bound => (self, index),
+            (LOCAL, _) => corrupt(),
+            (slot, index) => (self.import(slot), index),
         }
-        self.resolve(reference)
+    }
+
+    #[inline]
+    fn import(&self, slot: u32) -> &Arc<Chunk<'a>> {
+        self.imports.get(slot as usize).unwrap_or_else(|| corrupt())
     }
 
     #[inline]
@@ -348,11 +400,11 @@ impl<'a> Chunk<'a> {
         position: u32,
         bound: u32,
     ) -> (&'s Arc<Chunk<'a>>, u32) {
-        let reference = this.kid(first.checked_add(position).unwrap_or_else(|| corrupt()));
-        if reference & EXTERN == 0 && reference >= bound {
-            corrupt();
+        match this.kid(first.checked_add(position).unwrap_or_else(|| corrupt())) {
+            (LOCAL, index) if index < bound => (this, index),
+            (LOCAL, _) => corrupt(),
+            (slot, index) => (this.import(slot), index),
         }
-        Chunk::resolve_shared(this, reference)
     }
 
     /// A set's first member and size.
@@ -396,6 +448,16 @@ impl<'a> Chunk<'a> {
     /// Entry `index` of an object value `parent`: its key and value.
     #[inline]
     pub(crate) fn entry(&self, parent: u32, index: u32) -> (&str, u32) {
+        let (key, value) = self.entry_bytes(parent, index);
+        (
+            std::str::from_utf8(key).unwrap_or_else(|_| corrupt()),
+            value,
+        )
+    }
+
+    /// [`entry`](Self::entry), its key as bytes, which comparing needn't check are UTF-8.
+    #[inline]
+    pub(crate) fn entry_bytes(&self, parent: u32, index: u32) -> (&[u8], u32) {
         let at = self.at(ENTRIES, index);
         let (start, len, value) = (
             word(&self.bytes, at),
@@ -405,7 +467,7 @@ impl<'a> Chunk<'a> {
         if value >= parent {
             corrupt();
         }
-        (self.string(start, len), value)
+        (self.span(STRINGS, start, len), value)
     }
 
     #[inline]
@@ -455,10 +517,10 @@ impl Drop for Chunk<'_> {
     /// Dropping a chunk drops the chunks only it held, and theirs, however long the chain, in a
     /// loop rather than a recursion.
     fn drop(&mut self) {
-        let mut held = std::mem::take(&mut self.imports).into_vec();
+        let mut held = std::mem::take(&mut self.imports);
         while let Some(import) = held.pop() {
             if let Some(mut chunk) = Arc::into_inner(import) {
-                held.extend(std::mem::take(&mut chunk.imports).into_vec());
+                held.append(&mut chunk.imports);
             }
         }
     }

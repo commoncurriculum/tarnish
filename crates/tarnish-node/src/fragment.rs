@@ -51,7 +51,6 @@ impl FragmentHandle {
     pub fn children<'env>(&self, env: &'env Env) -> Result<Vec<Unknown<'env>>> {
         self.fragment
             .children()
-
             .map(|child| node::wrap(env, &child))
             .collect()
     }

@@ -114,10 +114,7 @@ fn find_wrapping_inside<'s>(
 ) -> Result<Option<Vec<NodeType<'s>>>> {
     let (parent, start, end) = (range.parent(), range.start_index(), range.end_index());
     let inner = parent.child(start)?;
-    let Some(inside) = node_type
-        .content_match()
-        .find_wrapping(&inner.node_type())
-    else {
+    let Some(inside) = node_type.content_match().find_wrapping(&inner.node_type()) else {
         return Ok(None);
     };
     let last = inside.last().unwrap_or(node_type);

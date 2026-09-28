@@ -12,7 +12,7 @@ use super::replace::{self, Slice};
 use super::resolved_pos::ResolvedPos;
 use super::schema::{MarkType, NodeType, Schema};
 use super::view::{NodeRef, TextRef};
-use crate::chunk::{Builder, Chunk, EXTERN, Record, TEXT_NODE, ValueRef, value_equals};
+use crate::chunk::{Builder, Chunk, EXTERN, NODES, Record, TEXT_NODE, ValueRef};
 use crate::error::{Error, Result};
 use crate::js::Json;
 use crate::json::{self, Map};
@@ -23,10 +23,12 @@ use crate::text::Text;
 /// one, into a new chunk, sharing what it can with the old.
 #[derive(Clone)]
 pub struct Node<'a> {
-    /// The node's children, a range of its chunk's kids, which come before it: the fragment's
-    /// bound is the node's index.
+    /// The node's children: a list in its own chunk, of nodes before it, or in an import.
     content: Fragment<'a>,
     record: Record,
+    id: u32,
+    /// The node's chunk, when its content isn't in it.
+    own: Option<Arc<Chunk<'a>>>,
 }
 
 /// A child found by [`Node::child_after`] or [`Node::child_before`]: the child, if there is one,
@@ -42,33 +44,50 @@ impl<'a> Node<'a> {
     #[inline]
     pub(crate) fn at(chunk: Arc<Chunk<'a>>, id: u32) -> Node<'a> {
         let record = chunk.record(id);
-        let content = if record.flags & TEXT_NODE != 0 {
-            Fragment::of(chunk, 0, 0, 0, id)
+        let (content, own) = if record.flags & TEXT_NODE != 0 {
+            (Fragment::of(chunk, 0, 0, 0, id), None)
+        } else if record.a & EXTERN == 0 {
+            (
+                Fragment::of(chunk, record.a, record.b, record.size, id),
+                None,
+            )
         } else {
-            Fragment::of(chunk, record.a, record.b, record.size, id)
+            let (list, start, bound) = Chunk::kids_of_shared(&chunk, id, record.a);
+            let content = Fragment::of(list.clone(), start, record.b, record.size, bound);
+            (content, Some(chunk))
         };
-        Node { content, record }
+        Node {
+            content,
+            record,
+            id,
+            own,
+        }
     }
 
-    /// The node a ref in `chunk` names.
-    #[inline]
-    pub(crate) fn at_ref(chunk: &Arc<Chunk<'a>>, reference: u32) -> Node<'a> {
-        let (chunk, id) = Chunk::resolve_shared(chunk, reference);
-        Node::at(chunk.clone(), id)
+    /// The last node a chunk holds, which is the document in a chunk read from JSON, or written
+    /// by [`flatten`](Self::flatten) or [`compact`](Self::compact).
+    pub fn root(chunk: Arc<Chunk<'a>>) -> Option<Node<'a>> {
+        let last = chunk.count(NODES).checked_sub(1)?;
+        Some(Node::at(chunk, last))
     }
 
+    /// The chunk that holds the node.
     #[inline]
-    pub(crate) fn chunk(&self) -> &Arc<Chunk<'a>> {
-        self.content.chunk().expect("a node is in a chunk")
+    pub fn chunk(&self) -> &Arc<Chunk<'a>> {
+        match &self.own {
+            Some(own) => own,
+            None => self.content.chunk().expect("a node is in a chunk"),
+        }
     }
 
     #[inline]
     pub(crate) fn index(&self) -> u32 {
-        self.content.bound()
+        self.id
     }
 
+    /// The node as its chunk holds it, for a walk over it that counts no references.
     #[inline]
-    pub(crate) fn view(&self) -> NodeRef<'_> {
+    pub fn view(&self) -> NodeRef<'_> {
         NodeRef {
             chunk: self.chunk(),
             id: self.index(),
@@ -93,14 +112,8 @@ impl<'a> Node<'a> {
         Node::build(node_type.schema(), |builder| {
             let attrs = builder.map(attrs);
             let marks = marks.write(builder);
-            let kids = content.write_kids(builder);
-            builder.element(
-                node_type.index() as u16,
-                marks,
-                attrs,
-                &kids,
-                content.size() as u32,
-            )
+            let (first, count, size) = content.list(builder);
+            builder.element_of(node_type.index() as u16, marks, attrs, first, count, size)
         })
     }
 
@@ -118,10 +131,10 @@ impl<'a> Node<'a> {
     /// This node's markup with other content: a node of the same type, attributes and marks.
     fn with_content(&self, content: &Fragment<'a>) -> Node<'a> {
         Node::build(self.chunk().schema(), |builder| {
-            let marks = builder.reference(self.chunk(), self.record.marks);
-            let attrs = builder.reference(self.chunk(), self.record.attrs);
-            let kids = content.write_kids(builder);
-            builder.element(self.record.ty, marks, attrs, &kids, content.size() as u32)
+            let marks = builder.reference_markup(self.chunk(), self.record.marks);
+            let attrs = builder.reference_markup(self.chunk(), self.record.attrs);
+            let (first, count, size) = content.list(builder);
+            builder.element_of(self.record.ty, marks, attrs, first, count, size)
         })
     }
 
@@ -215,7 +228,8 @@ impl<'a> Node<'a> {
         f: &mut NodeVisitor<'_, 'a>,
         start_pos: usize,
     ) -> Result<()> {
-        self.content.nodes_between(from, to, f, start_pos, Some(self))
+        self.content
+            .nodes_between(from, to, f, start_pos, Some(self))
     }
 
     pub fn descendants(&self, f: &mut NodeVisitor<'_, 'a>) -> Result<()> {
@@ -271,7 +285,10 @@ impl<'a> Node<'a> {
         self.node_type() == *node_type
             && self.attrs_view().equals_map(attrs)
             && own.len() == marks.len()
-            && own.iter().zip(marks).all(|(own, mark)| own.equals(mark.view()))
+            && own
+                .iter()
+                .zip(marks)
+                .all(|(own, mark)| own.equals(mark.view()))
     }
 
     /// The node with this content, or itself when that is its content.
@@ -289,15 +306,18 @@ impl<'a> Node<'a> {
         }
         Node::build(self.chunk().schema(), |builder| {
             let marks = marks.write(builder);
-            let mut record = self.record;
-            record.marks = marks;
-            record.attrs = builder.reference(self.chunk(), self.record.attrs);
+            let attrs = builder.reference_markup(self.chunk(), self.record.attrs);
             if self.is_text() {
-                record.a = builder.reference(self.chunk(), self.record.a);
-                builder.text_record(record)
+                let a = builder.reference(self.chunk(), self.record.a);
+                builder.text_record(Record {
+                    marks,
+                    attrs,
+                    a,
+                    ..self.record
+                })
             } else {
-                let kids = self.content.write_kids(builder);
-                builder.element(record.ty, record.marks, record.attrs, &kids, record.size)
+                let (first, count, size) = self.content.list(builder);
+                builder.element_of(self.record.ty, marks, attrs, first, count, size)
             }
         })
     }
@@ -347,7 +367,11 @@ impl<'a> Node<'a> {
             record.a = builder.external(&chunk, offset + start as u32);
             record.b = (end - start) as u32;
             record.size = (to - from) as u32;
-            if record.flags & crate::chunk::ASCII == 0 && text.as_str().is_some_and(|text| text[start..end].is_ascii()) {
+            if record.flags & crate::chunk::ASCII == 0
+                && text
+                    .as_str()
+                    .is_some_and(|text| text[start..end].is_ascii())
+            {
                 record.flags |= crate::chunk::ASCII;
             }
             builder.text_record(record)
@@ -667,14 +691,17 @@ impl<'a> Node<'a> {
 
     /// Raise an error if this node or a descendant doesn't fit the schema.
     pub fn check(&self) -> Result<()> {
-        let mut path = Vec::new();
-        match check(self.view(), &mut path) {
+        let mut walk = Walk {
+            path: Vec::new(),
+            kids: Vec::new(),
+        };
+        match walk.check(self.view()) {
             Ok(()) => Ok(()),
             Err(Failed::Error(error)) => Err(error),
             // The error describes the content, for which the schema's hooks need nodes.
             Err(Failed::Content) => {
                 let mut node = self.clone();
-                for index in path {
+                for index in walk.path {
                     node = node.child(index as usize)?;
                 }
                 node.node_type().check_content(node.content())
@@ -701,46 +728,59 @@ impl From<Error> for Failed {
     }
 }
 
-/// `check`, over a node and its descendants, keeping the path of child indices to the node it's
-/// at.
-fn check(node: NodeRef, path: &mut Vec<u32>) -> Result<(), Failed> {
-    let node_type = node.node_type();
-    let data = node_type.data();
-    let schema = node_type.schema();
-    let kids = node
-        .children()
-        .map(|child| (child.chunk.schema() == schema).then(|| usize::from(child.record.ty)));
-    let allowed = data.mark_set.is_none()
-        || node
-            .children()
-            .all(|child| child.marks().iter().all(|mark| data.allows_mark(mark.rank())));
-    if !(data.content.accepts(kids) && allowed) {
-        return Err(Failed::Content);
+/// A walk over a document checking it: the path of child indices to the node it's at, and the
+/// children of the nodes on the path, each node's after its parent's.
+struct Walk<'c> {
+    path: Vec<u32>,
+    kids: Vec<NodeRef<'c>>,
+}
+
+impl<'c> Walk<'c> {
+    fn check(&mut self, node: NodeRef<'c>) -> Result<(), Failed> {
+        let node_type = node.node_type();
+        let data = node_type.data();
+        let schema = node_type.schema();
+        let base = self.kids.len();
+        self.kids.extend(node.children());
+        let kids = &self.kids[base..];
+        let types = kids
+            .iter()
+            .map(|kid| (kid.chunk.schema() == schema).then(|| usize::from(kid.record.ty)));
+        let allowed = data.mark_set.is_none()
+            || kids
+                .iter()
+                .all(|kid| kid.marks().iter().all(|mark| data.allows_mark(mark.rank())));
+        if !(data.content.accepts(types) && allowed) {
+            return Err(Failed::Content);
+        }
+        data.attrs
+            .check_ref(node.attrs(), "node", node_type.name())?;
+        let marks = node.marks();
+        for mark in marks.iter() {
+            let mark_type = mark.mark_type();
+            mark_type
+                .data()
+                .attrs
+                .check_ref(mark.attrs(), "mark", mark_type.name())?;
+        }
+        // Adding one mark to no marks gives that mark, so only a longer set can be invalid.
+        if marks.len() > 1 && !valid_set(marks) {
+            let names: Vec<&str> = marks.iter().map(|mark| mark.mark_type().name()).collect();
+            return Err(Failed::Error(Error::Range(format!(
+                "Invalid collection of marks for node {}: {}",
+                node_type.name(),
+                names.join(",")
+            ))));
+        }
+        for index in 0..self.kids.len() - base {
+            let child = self.kids[base + index];
+            self.path.push(index as u32);
+            stack::grow(|| self.check(child))?;
+            self.path.pop();
+        }
+        self.kids.truncate(base);
+        Ok(())
     }
-    data.attrs.check_ref(node.attrs(), "node", node_type.name())?;
-    let marks = node.marks();
-    for mark in marks.iter() {
-        let mark_type = mark.mark_type();
-        mark_type
-            .data()
-            .attrs
-            .check_ref(mark.attrs(), "mark", mark_type.name())?;
-    }
-    // Adding one mark to no marks gives that mark, so only a longer set can be invalid.
-    if marks.len() > 1 && !valid_set(marks) {
-        let names: Vec<&str> = marks.iter().map(|mark| mark.mark_type().name()).collect();
-        return Err(Failed::Error(Error::Range(format!(
-            "Invalid collection of marks for node {}: {}",
-            node_type.name(),
-            names.join(",")
-        ))));
-    }
-    for (index, child) in node.children().enumerate() {
-        path.push(index as u32);
-        stack::grow(|| check(child, path))?;
-        path.pop();
-    }
-    Ok(())
 }
 
 /// Whether adding each mark in turn to no marks gives the set back: sorted by rank, with no
@@ -766,7 +806,8 @@ fn valid_set(marks: super::view::SetRef) -> bool {
                 break;
             } else {
                 if !placed && other_type.rank() > mark_type.rank() {
-                    copy.get_or_insert_with(|| built[..index].to_vec()).push(mark);
+                    copy.get_or_insert_with(|| built[..index].to_vec())
+                        .push(mark);
                     placed = true;
                 }
                 if let Some(copy) = &mut copy {
@@ -801,4 +842,3 @@ impl fmt::Debug for Node<'_> {
         }
     }
 }
-

@@ -299,10 +299,6 @@ impl Schema {
         &self.0.nodes[index]
     }
 
-    pub(crate) fn mark_data(&self, rank: usize) -> &MarkTypeData {
-        &self.0.marks[rank]
-    }
-
     /// The node type at `index`.
     pub fn node_type_at(&self, index: usize) -> NodeType<'_> {
         assert!(index < self.0.nodes.len(), "a node type of the schema");
@@ -630,9 +626,9 @@ impl<'s> NodeType<'s> {
     }
 
     pub fn valid_content(&self, content: &Fragment) -> bool {
-        let types = content.children().map(|child| {
-            (child.node_type().schema == self.schema).then(|| child.type_index())
-        });
+        let types = content
+            .children()
+            .map(|child| (child.node_type().schema == self.schema).then(|| child.type_index()));
         self.data().content.accepts(types)
             && content
                 .children()
@@ -752,7 +748,10 @@ impl<'s> MarkType<'s> {
         if !set.iter().any(|mark| mark.mark_type() == *self) {
             return set.clone();
         }
-        let kept: Vec<Mark<'a>> = set.iter().filter(|mark| mark.mark_type() != *self).collect();
+        let kept: Vec<Mark<'a>> = set
+            .iter()
+            .filter(|mark| mark.mark_type() != *self)
+            .collect();
         Mark::set_from(&kept)
     }
 

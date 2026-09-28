@@ -44,14 +44,15 @@ pub struct ValueRef<'c> {
     pub(crate) index: u32,
 }
 
-/// What a value is, with its contents where they're simple.
-pub(crate) enum Kind<'c> {
+/// What a value is, with its contents where they're simple, and an array's or object's length.
+#[derive(Clone, Debug)]
+pub enum Kind<'c> {
     Null,
     Bool(bool),
     Number(Number),
     String(&'c str),
-    Array(u32, u32),
-    Object(u32, u32),
+    Array(u32),
+    Object(u32),
 }
 
 impl<'c> ValueRef<'c> {
@@ -61,7 +62,7 @@ impl<'c> ValueRef<'c> {
         ValueRef { chunk, index }
     }
 
-    pub(crate) fn kind(self) -> Kind<'c> {
+    pub fn kind(self) -> Kind<'c> {
         let (tag, a, b) = self.chunk.value(self.index);
         let bits = u64::from(a) | u64::from(b) << 32;
         match Tag::from_word(tag) {
@@ -70,12 +71,22 @@ impl<'c> ValueRef<'c> {
             Tag::True => Kind::Bool(true),
             Tag::Int => Kind::Number(Number::from(bits as i64)),
             Tag::UInt => Kind::Number(Number::from(bits)),
-            Tag::Float => Kind::Number(
-                Number::from_f64(f64::from_bits(bits)).unwrap_or_else(|| corrupt()),
-            ),
+            Tag::Float => {
+                Kind::Number(Number::from_f64(f64::from_bits(bits)).unwrap_or_else(|| corrupt()))
+            }
             Tag::String => Kind::String(self.chunk.string(a, b)),
-            Tag::Array => Kind::Array(a, b),
-            Tag::Object => Kind::Object(a, b),
+            Tag::Array => Kind::Array(b),
+            Tag::Object => Kind::Object(b),
+        }
+    }
+
+    /// Where an array's items, or an object's entries, start, and how many there are: none for
+    /// a value of another tag.
+    fn span(self, of: Tag) -> (u32, u32) {
+        let (tag, start, len) = self.chunk.value(self.index);
+        match Tag::from_word(tag) == of {
+            true => (start, len),
+            false => (0, 0),
         }
     }
 
@@ -125,7 +136,7 @@ impl<'c> ValueRef<'c> {
     /// An array's or object's number of items, and 0 for anything else.
     pub fn len(self) -> usize {
         match self.kind() {
-            Kind::Array(_, len) | Kind::Object(_, len) => len as usize,
+            Kind::Array(len) | Kind::Object(len) => len as usize,
             _ => 0,
         }
     }
@@ -136,10 +147,7 @@ impl<'c> ValueRef<'c> {
 
     /// An array's items; none for anything else.
     pub fn items(self) -> impl DoubleEndedIterator<Item = ValueRef<'c>> + ExactSizeIterator {
-        let (start, len) = match self.kind() {
-            Kind::Array(start, len) => (start, len),
-            _ => (0, 0),
-        };
+        let (start, len) = self.span(Tag::Array);
         (start..start + len).map(move |at| ValueRef {
             chunk: self.chunk,
             index: self.chunk.element(self.index, at),
@@ -150,10 +158,7 @@ impl<'c> ValueRef<'c> {
     pub fn entries(
         self,
     ) -> impl DoubleEndedIterator<Item = (&'c str, ValueRef<'c>)> + ExactSizeIterator {
-        let (start, len) = match self.kind() {
-            Kind::Object(start, len) => (start, len),
-            _ => (0, 0),
-        };
+        let (start, len) = self.span(Tag::Object);
         (start..start + len).map(move |at| {
             let (key, index) = self.chunk.entry(self.index, at);
             (
@@ -170,10 +175,25 @@ impl<'c> ValueRef<'c> {
         self.entries().map(|(key, _)| key)
     }
 
+    /// An object's keys, as bytes, and values.
+    pub(crate) fn entries_bytes(self) -> impl Iterator<Item = (&'c [u8], ValueRef<'c>)> {
+        let (start, len) = self.span(Tag::Object);
+        (start..start + len).map(move |at| {
+            let (key, index) = self.chunk.entry_bytes(self.index, at);
+            (
+                key,
+                ValueRef {
+                    chunk: self.chunk,
+                    index,
+                },
+            )
+        })
+    }
+
     /// An object's value for `key`.
     pub fn get(self, key: &str) -> Option<ValueRef<'c>> {
-        self.entries()
-            .find(|(name, _)| *name == key)
+        self.entries_bytes()
+            .find(|(name, _)| *name == key.as_bytes())
             .map(|(_, value)| value)
     }
 
@@ -282,13 +302,13 @@ pub(crate) fn value_equals(a: ValueRef, b: ValueRef) -> bool {
         (Kind::Bool(a), Kind::Bool(b)) => a == b,
         (Kind::Number(a), Kind::Number(b)) => js::same_number(&a, &b),
         (Kind::String(a), Kind::String(b)) => a == b,
-        (Kind::Array(_, a_len), Kind::Array(_, b_len)) => {
+        (Kind::Array(a_len), Kind::Array(b_len)) => {
             a_len == b_len
                 && a.items()
                     .zip(b.items())
                     .all(|(a, b)| stack::grow(|| value_equals(a, b)))
         }
-        (Kind::Object(_, a_len), Kind::Object(_, b_len)) => {
+        (Kind::Object(a_len), Kind::Object(b_len)) => {
             a_len == b_len
                 && a.entries().all(|(key, value)| {
                     b.get(key)

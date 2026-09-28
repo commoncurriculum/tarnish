@@ -37,7 +37,11 @@ impl<'a> ResolvedPos<'a> {
         loop {
             let (index, offset) = node.content().find_index(parent_offset)?;
             let rem = parent_offset - offset;
-            let child = if rem == 0 { None } else { Some(node.child(index)?) };
+            let child = if rem == 0 {
+                None
+            } else {
+                Some(node.child(index)?)
+            };
             path.push(Step {
                 node,
                 index,

@@ -2,10 +2,11 @@ defmodule Tarnish do
   @moduledoc """
   ProseMirror's document model and transforms, run in Rust.
 
-  A schema is built once from its spec, and a document is read once from its JSON. Both are
-  kept in Rust, so applying steps to a document doesn't convert it again. Specs, steps and
-  JSON are ProseMirror's JSON, as Jason decodes it: maps with string keys, or
-  `Jason.OrderedObject`s where order matters.
+  A schema is built once from its spec, and kept in Rust. A document is read once from its
+  JSON, into binaries that Rust reads in place, so applying steps to a document doesn't
+  convert it again, and a changed document is a binary more, holding only what the steps
+  changed. Specs, steps and JSON are ProseMirror's JSON, as Jason decodes it: maps with string
+  keys, or `Jason.OrderedObject`s where order matters.
 
   A document keeps the JSON it was read from. Its own JSON shares every part of that which is
   what ProseMirror writes for a node it still has, so after steps only the nodes they changed

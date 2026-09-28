@@ -23,7 +23,6 @@ pub use fields::{Field, Fields};
 pub use fragment::{Fragment, LeafTextHook, NodeVisitor};
 pub use mark::{Mark, Marks};
 pub use node::{ChildAt, Node};
-pub(crate) use read::Reader;
 pub use replace::Slice;
 pub use resolved_pos::{NodePredicate, NodeRange, ResolvedPos};
 pub use schema::{

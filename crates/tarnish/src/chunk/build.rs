@@ -1,15 +1,16 @@
 //! Writing a chunk: sections grow as nodes, values and marks are added, children before their
 //! parents, and sealing packs them behind a header.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::hash::BuildHasher;
 use std::sync::Arc;
 
 use super::value::{Kind, Tag, ValueRef};
 use super::{
-    ASCII, Chunk, ELEMENTS, ENTRIES, EXTERN, EXTERNS, HELD_AS_UNITS, IMPORTS, KIDS, MAGIC, MARKS,
-    MEMBERS, NODES, Record, SECTIONS, SETS, STRINGS, TEXT, TEXT_NODE, UNITS, VALUES,
+    ASCII, BINDING, Chunk, ELEMENTS, ENTRIES, EXTERN, EXTERNS, HELD_AS_UNITS, IMPORTS, KIDS, LOCAL,
+    MAGIC, MARKS, MEMBERS, NODES, Record, SECTIONS, SETS, STRINGS, TEXT, TEXT_NODE, UNITS, VALUES,
+    corrupt, word,
 };
 use crate::json::Value;
 use crate::model::Schema;
@@ -44,7 +45,7 @@ impl<'a> Builder<'a> {
             schema: schema.clone(),
             imports: Vec::new(),
             import_slots: HashMap::new(),
-            sections: Default::default(),
+            sections: sections(),
             counts: [0; SECTIONS],
             keys: Vec::new(),
             defaults: Vec::new(),
@@ -55,10 +56,6 @@ impl<'a> Builder<'a> {
         builder.push_words(SETS, &[0, 0]);
         builder.push_value(Tag::Object, 0, 0);
         builder
-    }
-
-    pub fn schema(&self) -> &Schema {
-        &self.schema
     }
 
     fn push(&mut self, section: usize, bytes: &[u8]) -> u32 {
@@ -84,15 +81,20 @@ impl<'a> Builder<'a> {
         self.push_words(VALUES, &[tag as u32, a, b])
     }
 
-    pub fn node_count(&self) -> u32 {
-        self.counts[NODES]
-    }
-
     /// The slot of an imported chunk, importing it if it isn't yet.
     pub fn import(&mut self, chunk: &Arc<Chunk<'a>>) -> u32 {
         let address = Arc::as_ptr(chunk) as *const u8 as usize;
+        if let Some(last) = self.imports.last()
+            && Arc::ptr_eq(last, chunk)
+        {
+            return self.imports.len() as u32 - 1;
+        }
         if self.imports.len() <= 8 {
-            if let Some(slot) = self.imports.iter().position(|seen| Arc::ptr_eq(seen, chunk)) {
+            if let Some(slot) = self
+                .imports
+                .iter()
+                .position(|seen| Arc::ptr_eq(seen, chunk))
+            {
                 return slot as u32;
             }
         } else if let Some(&slot) = self.import_slots.get(&address) {
@@ -121,8 +123,77 @@ impl<'a> Builder<'a> {
     /// A ref, in this chunk, to what `reference` names in `chunk`.
     pub fn reference(&mut self, chunk: &Arc<Chunk<'a>>, reference: u32) -> u32 {
         let (chunk, index) = Chunk::resolve_shared(chunk, reference);
-        let chunk = chunk.clone();
-        self.external(&chunk, index)
+        self.external(chunk, index)
+    }
+
+    /// [`reference`](Self::reference) to a set or value: set and value 0, empty in every chunk,
+    /// stay 0.
+    pub fn reference_markup(&mut self, chunk: &Arc<Chunk<'a>>, reference: u32) -> u32 {
+        match reference {
+            0 => 0,
+            reference => self.reference(chunk, reference),
+        }
+    }
+
+    /// Adds to the kids section kids `from..to` of the list at `start` in `chunk`, which must be
+    /// below `bound` where they are in `chunk`.
+    pub fn copy_kids(
+        &mut self,
+        chunk: &Arc<Chunk<'a>>,
+        start: u32,
+        bound: u32,
+        from: u32,
+        to: u32,
+    ) {
+        let count = to.saturating_sub(from);
+        let kids = chunk.span(
+            KIDS,
+            start.checked_add(from).unwrap_or_else(|| corrupt()),
+            count,
+        );
+        self.counts[KIDS] = self.counts[KIDS]
+            .checked_add(count)
+            .filter(|&total| total < EXTERN)
+            .expect("a chunk holds fewer than 2^31 of anything");
+        let mut list = std::mem::take(&mut self.sections[KIDS]);
+        list.reserve(kids.len());
+        // `chunk`'s own slot here, and its first import slots, once used.
+        let mut own = LOCAL;
+        let mut slots = [LOCAL; 8];
+        for kid in kids.as_chunks::<8>().0 {
+            let (theirs, index) = (word(kid, 0), word(kid, 4));
+            let slot = match theirs {
+                LOCAL if index >= bound => corrupt(),
+                LOCAL if own != LOCAL => own,
+                LOCAL => {
+                    own = self.import(chunk);
+                    own
+                }
+                theirs => {
+                    let import = chunk.import(theirs);
+                    match slots.get_mut(theirs as usize) {
+                        Some(slot) if *slot != LOCAL => *slot,
+                        Some(slot) => {
+                            *slot = self.import(import);
+                            *slot
+                        }
+                        None => self.import(import),
+                    }
+                }
+            };
+            list.extend_from_slice(&(u64::from(slot) | u64::from(index) << 32).to_le_bytes());
+        }
+        self.sections[KIDS] = list;
+    }
+
+    /// A kid for node `index` of `chunk`.
+    pub fn kid(&mut self, chunk: &Arc<Chunk<'a>>, index: u32) -> (u32, u32) {
+        (self.import(chunk), index)
+    }
+
+    /// Adds a kid to the kids section.
+    pub fn push_kid(&mut self, (slot, index): (u32, u32)) {
+        self.push_words(KIDS, &[slot, index]);
     }
 
     /// Where a string is in `strings`.
@@ -332,7 +403,12 @@ impl<'a> Builder<'a> {
             return false;
         }
         let tag = |value| Tag::from_word(self.written(VALUES, value, 0));
-        let words = |value| (self.written(VALUES, value, 1), self.written(VALUES, value, 2));
+        let words = |value| {
+            (
+                self.written(VALUES, value, 1),
+                self.written(VALUES, value, 2),
+            )
+        };
         let number = |value| {
             let (low, high) = words(value);
             let bits = u64::from(low) | u64::from(high) << 32;
@@ -390,10 +466,13 @@ impl<'a> Builder<'a> {
     /// The text of a text node written here.
     pub fn text_of_record(&self, record: Record) -> Text {
         if record.flags & HELD_AS_UNITS != 0 {
-            let bytes = &self.sections[UNITS][record.a as usize * 2..(record.a + record.b) as usize * 2];
+            let bytes =
+                &self.sections[UNITS][record.a as usize * 2..(record.a + record.b) as usize * 2];
             let units: Vec<u16> = bytes
-                .chunks_exact(2)
-                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|&pair| u16::from_le_bytes(pair))
                 .collect();
             return Text::from_units(&units);
         }
@@ -461,6 +540,13 @@ impl<'a> Builder<'a> {
         self.sections[NODES][at..at + 24].copy_from_slice(&record.to_bytes());
     }
 
+    /// Sets a flag of node `id`.
+    pub fn flag(&mut self, id: u32, flag: u16) {
+        let mut record = self.record(id);
+        record.flags |= flag;
+        self.set_record(id, record);
+    }
+
     /// Take back the last node written.
     pub fn pop_node(&mut self) {
         let len = self.sections[NODES].len() - 24;
@@ -513,47 +599,59 @@ impl<'a> Builder<'a> {
         }
     }
 
-    /// Adds `text` to the end of the text section, for text node `id`, which ends there.
-    pub fn extend_text(&mut self, id: u32, text: &str) {
-        let mut record = self.record(id);
-        self.push(TEXT, text.as_bytes());
-        record.b += text.len() as u32;
-        if text.is_ascii() {
-            record.size += text.len() as u32;
-        } else {
-            record.flags &= !ASCII;
-            record.size += text.chars().map(char::len_utf16).sum::<usize>() as u32;
-        }
-        self.set_record(id, record);
-    }
-
     /// A text node whose text is in another chunk, `record`'s text ref being a ref here.
     pub fn text_record(&mut self, record: Record) -> u32 {
-        self.push_record(record)
+        self.push_record(Record {
+            flags: record.flags & !BINDING,
+            ..record
+        })
     }
 
-    /// A node that isn't text, with these kids, each a node ref, and content this size.
-    pub fn element(&mut self, ty: u16, marks: u32, attrs: u32, kids: &[u32], size: u32) -> u32 {
-        let a = self.counts[KIDS];
-        for &kid in kids {
-            self.push_words(KIDS, &[kid]);
-        }
+    /// A node that isn't text, with these kids and content this size.
+    pub fn element(
+        &mut self,
+        ty: u16,
+        marks: u32,
+        attrs: u32,
+        kids: impl ExactSizeIterator<Item = (u32, u32)>,
+        size: u32,
+    ) -> u32 {
+        let count = kids.len() as u32;
+        let first = self.kids(kids);
+        self.element_of(ty, marks, attrs, first, count, size)
+    }
+
+    /// A node that isn't text, whose `count` kids are listed from `first`, a kids ref.
+    pub fn element_of(
+        &mut self,
+        ty: u16,
+        marks: u32,
+        attrs: u32,
+        first: u32,
+        count: u32,
+        size: u32,
+    ) -> u32 {
         self.push_record(Record {
             ty,
             flags: 0,
             marks,
             attrs,
-            a,
-            b: kids.len() as u32,
+            a: first,
+            b: count,
             size,
         })
     }
 
-    /// A list of kids that belongs to no node, a fragment's: where it starts.
-    pub fn kids(&mut self, kids: &[u32]) -> u32 {
+    /// Where the next kid added to the kids section goes.
+    pub fn kids_end(&self) -> u32 {
+        self.counts[KIDS]
+    }
+
+    /// A list of kids: where it starts.
+    pub fn kids(&mut self, kids: impl Iterator<Item = (u32, u32)>) -> u32 {
         let start = self.counts[KIDS];
-        for &kid in kids {
-            self.push_words(KIDS, &[kid]);
+        for kid in kids {
+            self.push_kid(kid);
         }
         start
     }
@@ -582,9 +680,44 @@ impl<'a> Builder<'a> {
         bytes
     }
 
-    pub fn seal(self) -> Arc<Chunk<'a>> {
+    pub fn seal(mut self) -> Arc<Chunk<'a>> {
         let bytes = self.pack(fresh_id());
-        Arc::new(Chunk::from_parts(bytes, self.schema, self.imports.into()))
+        let imports = std::mem::take(&mut self.imports);
+        Arc::new(Chunk::from_parts(bytes, self.schema.clone(), imports))
+    }
+}
+
+thread_local! {
+    /// The sections of builders done with, which the next builders write into rather than
+    /// allocating and growing sections of their own.
+    static SPARE: RefCell<Vec<[Vec<u8>; SECTIONS]>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Spare sections a thread keeps, and the most bytes a spare section keeps.
+const SPARES: usize = 8;
+const SPARE_BYTES: usize = 1 << 16;
+
+fn sections() -> [Vec<u8>; SECTIONS] {
+    let spare = SPARE.try_with(|spare| spare.try_borrow_mut().ok()?.pop());
+    spare.ok().flatten().unwrap_or_default()
+}
+
+impl Drop for Builder<'_> {
+    fn drop(&mut self) {
+        let mut sections = std::mem::take(&mut self.sections);
+        for section in &mut sections {
+            section.clear();
+            if section.capacity() > SPARE_BYTES {
+                *section = Vec::new();
+            }
+        }
+        let _ = SPARE.try_with(|spare| {
+            if let Ok(mut spare) = spare.try_borrow_mut()
+                && spare.len() < SPARES
+            {
+                spare.push(sections);
+            }
+        });
     }
 }
 

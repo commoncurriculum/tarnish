@@ -4,9 +4,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::{Dom, NodeKind};
+use crate::chunk::ValueRef;
 use crate::error::{Error, Result};
 use crate::json::{Map, Value};
-use crate::chunk::ValueRef;
 use crate::model::{Fragment, Mark, Node};
 use crate::stack;
 

@@ -40,7 +40,11 @@ impl<'p, D: Dom> ParseContext<'p, D> {
         }
     }
 
-    fn add_text_node(&mut self, source: TextSource<'_, D::Node>, marks: &[Mark<'static>]) -> Result<()> {
+    fn add_text_node(
+        &mut self,
+        source: TextSource<'_, D::Node>,
+        marks: &[Mark<'static>],
+    ) -> Result<()> {
         let local = match self.local_preserve_ws {
             true => PreserveWhitespace::Yes,
             false => PreserveWhitespace::No,
@@ -265,7 +269,11 @@ impl<'p, D: Dom> ParseContext<'p, D> {
 
     /// The marks with those the element's styles add or clear, `None` when a style's rule
     /// ignores the element.
-    fn read_styles(&mut self, node: &D::Node, marks: &[Mark<'static>]) -> Result<Option<Vec<Mark<'static>>>> {
+    fn read_styles(
+        &mut self,
+        node: &D::Node,
+        marks: &[Mark<'static>],
+    ) -> Result<Option<Vec<Mark<'static>>>> {
         let mut marks = marks.to_vec();
         if self.dom.style_count(node)? == 0 {
             return Ok(Some(marks));

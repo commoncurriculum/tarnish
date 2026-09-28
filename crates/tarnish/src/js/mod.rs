@@ -6,7 +6,6 @@ pub mod json;
 use std::borrow::Cow;
 
 use crate::json::{EMPTY, Map, Number, Value};
-use crate::model::{Mark, Node};
 
 /// `Number.MAX_SAFE_INTEGER`.
 pub const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
@@ -186,12 +185,64 @@ pub trait Json<'a>: Copy {
     /// The value as attributes a type is given, as [`attrs`] reads them.
     fn attrs(self) -> Given<'a>;
 
-    /// Told the index of the node read from the value, in the chunk being read, after the
-    /// nodes and marks read from its parts.
-    fn read_node(self, _node: u32) {}
+    /// Told what was read from the value as a node, after the nodes and marks read from its
+    /// parts: whether to set the node's binding flag, which [`NodeRef::flagged`] reads.
+    ///
+    /// [`NodeRef::flagged`]: crate::model::NodeRef::flagged
+    fn read_node(self, _node: &ReadNode) -> bool {
+        false
+    }
 
-    /// Told the index of the mark read from the value, in the chunk being read.
-    fn read_mark(self, _mark: u32) {}
+    /// Told what was read from the value as a mark.
+    fn read_mark(self, _mark: &ReadMark) {}
+}
+
+/// What reading a node's JSON made of it: enough for a binding to tell whether the value read
+/// is what `toJSON` writes back.
+pub struct ReadNode<'r> {
+    /// The node's index in the chunk being read.
+    pub index: u32,
+    /// How many fields `toJSON` writes for it.
+    pub fields: usize,
+    pub children: usize,
+    pub marks: usize,
+    pub attrs: AttrKeys<'r>,
+}
+
+/// What reading a mark's JSON made of it.
+pub struct ReadMark<'r> {
+    pub rank: usize,
+    /// How many fields `toJSON` writes for it.
+    pub fields: usize,
+    pub attrs: AttrKeys<'r>,
+}
+
+/// The keys of the attributes `toJSON` writes for a node or mark read.
+#[derive(Clone, Copy)]
+pub struct AttrKeys<'r>(pub(crate) Keys<'r>);
+
+#[derive(Clone, Copy)]
+pub(crate) enum Keys<'r> {
+    Map(&'r Map),
+    /// Each attribute's value, `None` for one `toJSON` leaves out.
+    Values(&'r [(&'r crate::json::Key, Option<&'r Value>)]),
+}
+
+impl<'r> AttrKeys<'r> {
+    pub fn iter(self) -> impl Iterator<Item = &'r str> {
+        let (map, values) = match self.0 {
+            Keys::Map(map) => (Some(map), None),
+            Keys::Values(values) => (None, Some(values)),
+        };
+        let from_map = map
+            .into_iter()
+            .flat_map(|map| map.keys().map(|key| key.as_str()));
+        let from_values = values
+            .into_iter()
+            .flatten()
+            .filter_map(|(key, value)| value.map(|_| key.as_str()));
+        from_map.chain(from_values)
+    }
 }
 
 impl<'a> Json<'a> for &'a Value {

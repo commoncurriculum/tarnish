@@ -318,7 +318,11 @@ impl NodeHandle {
         mark_type: &MarkTypeHandle,
     ) -> Result<bool> {
         self.node
-            .range_has_mark_type(js::pos(env, from)?, js::pos(env, to)?, &mark_type.mark_type())
+            .range_has_mark_type(
+                js::pos(env, from)?,
+                js::pos(env, to)?,
+                &mark_type.mark_type(),
+            )
             .or_throw(env)
     }
 

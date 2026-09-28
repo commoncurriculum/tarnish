@@ -203,7 +203,7 @@ pub fn text_to_js<'env>(env: &'env Env, text: &Text) -> Result<JsString<'env>> {
 pub fn text_ref_to_js<'env>(env: &'env Env, text: TextRef) -> Result<JsString<'env>> {
     match text.as_str() {
         Some(text) => env.create_string(text),
-        None => env.create_string_utf16(&text.units()),
+        None => env.create_string_utf16(text.units()),
     }
 }
 
@@ -305,7 +305,11 @@ pub fn map_to_js<'env>(env: &'env Env, attrs: &Map) -> Result<Unknown<'env>> {
     Ok(object.to_unknown())
 }
 
-fn ref_to_js<'env>(env: &'env Env, value: ValueRef, attrs: &Attrs<'static>) -> Result<Unknown<'env>> {
+fn ref_to_js<'env>(
+    env: &'env Env,
+    value: ValueRef,
+    attrs: &Attrs<'static>,
+) -> Result<Unknown<'env>> {
     if value.is_null() {
         return Null.into_unknown(env);
     }

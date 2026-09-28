@@ -473,7 +473,6 @@ impl fmt::Debug for ContentMatch<'_> {
     }
 }
 
-
 struct TokenStream<'a> {
     string: String,
     nodes: &'a [NodeTypeData],

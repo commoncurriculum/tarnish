@@ -40,7 +40,11 @@ impl Place {
 }
 
 /// The wrapper of the match: one per state of an expression's automaton.
-pub fn wrap<'env>(env: &'env Env, place: &Place, content_match: &ContentMatch) -> Result<Unknown<'env>> {
+pub fn wrap<'env>(
+    env: &'env Env,
+    place: &Place,
+    content_match: &ContentMatch,
+) -> Result<Unknown<'env>> {
     let (automaton, state) = content_match.id();
     let handle = ContentMatchHandle {
         place: place.clone(),

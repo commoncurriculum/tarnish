@@ -446,8 +446,7 @@ impl<'a> Fitter<'a> {
         }
         let (node_type, matched) = frontier_parts(&self.schema, self.frontier[self.depth()]);
         if !node_type.is_textblock()
-            || content_after_fits(&self.to, self.to.depth(), &node_type, &matched, false)?
-                .is_none()
+            || content_after_fits(&self.to, self.to.depth(), &node_type, &matched, false)?.is_none()
         {
             return Ok(None);
         }

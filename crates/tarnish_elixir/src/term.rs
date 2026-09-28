@@ -3,15 +3,14 @@
 
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
 use std::ops::Range;
 
 use rustler::types::atom;
 use rustler::types::map::MapIterator;
 use rustler::{BigInt, Binary, Encoder, Env, Term, TermType};
-use tarnish::js::{self, Given, WrittenNumber};
+use tarnish::js::{self, AttrKeys, Given, ReadMark, ReadNode, WrittenNumber};
 use tarnish::json::{self, Key, Map, Number, Value};
-use tarnish::{Fields, Mark, Node, stack};
+use tarnish::stack;
 
 rustler::atoms! {
     __struct__,
@@ -33,23 +32,22 @@ const TEXT_PER_MAP: usize = 256;
 /// The value of a term Jason could encode, reading no more than `limit` maps and lists, each
 /// [`TEXT_PER_MAP`] bytes of text counting as one more.
 pub fn read(term: Term, limit: usize) -> Result<Value, Unread> {
-    Ok(read_json(term, limit, |json| json.value())?.0)
+    read_json(term, limit, |json| json.value())
 }
 
-/// What `read` makes of the term, read as JSON, reading no more than [`read`] does, and the
-/// nodes read from maps that aren't what `toJSON` writes for them.
+/// What `read` makes of the term, read as JSON, reading no more than [`read`] does. A node read
+/// from a map that isn't what `toJSON` writes for it is flagged.
 pub fn read_json<'a, T>(
     term: Term<'a>,
     limit: usize,
     read: impl FnOnce(Json<'a, '_>) -> T,
-) -> Result<(T, HashSet<usize>), Unread> {
+) -> Result<T, Unread> {
     let reading = Reading {
         refused: Cell::new(false),
         left: Cell::new(limit),
         keys: RefCell::new(Vec::new()),
         open: RefCell::new(Vec::new()),
         irregular: Cell::new(0),
-        irregular_nodes: RefCell::new(HashSet::new()),
         given: RefCell::new(Vec::new()),
     };
     let read = read(Json {
@@ -61,7 +59,7 @@ pub fn read_json<'a, T>(
     } else if reading.refused.get() {
         Err(Unread::NotJson)
     } else {
-        Ok((read, reading.irregular_nodes.into_inner()))
+        Ok(read)
     }
 }
 
@@ -92,8 +90,6 @@ pub struct Reading<'a> {
     /// A count of the parts read so far that aren't as `toJSON` writes them. A map is as it
     /// writes it only when the count didn't grow while the map was read.
     irregular: Cell<usize>,
-    /// The nodes read from maps that aren't what `toJSON` writes for them, by their ids.
-    irregular_nodes: RefCell<HashSet<usize>>,
     /// The keys of the attributes given the nodes and marks being read.
     given: RefCell<Vec<Key>>,
 }
@@ -126,7 +122,7 @@ impl<'a> Reading<'a> {
     fn close(
         &self,
         fields: usize,
-        attrs: &Map,
+        attrs: AttrKeys,
         more: impl FnOnce(&Open) -> bool,
         parent: impl FnOnce(&mut Open),
     ) -> bool {
@@ -141,11 +137,15 @@ impl<'a> Reading<'a> {
         let given = match closed.attrs.clone() {
             Some(range) => {
                 let keys = &given[range.clone()];
-                let same = keys.len() == attrs.len() && attrs.keys().all(|key| keys.contains(key));
+                let mut written = 0;
+                let same = attrs.iter().all(|key| {
+                    written += 1;
+                    keys.iter().any(|given| given.as_str() == key)
+                }) && written == keys.len();
                 given.truncate(range.start);
                 same
             }
-            None => attrs.is_empty(),
+            None => attrs.iter().next().is_none(),
         };
         closed.size == Some(fields)
             && closed.irregular == self.irregular.get()
@@ -512,29 +512,25 @@ impl<'a> js::Json<'a> for Json<'a, '_> {
         }
     }
 
-    fn read_node(self, node: &Node) {
-        let reading = self.reading;
-        let regular = reading.close(
-            node.field_count(),
-            node.attrs(),
-            |open| {
-                open.children == node.child_count()
-                    && open.marks == node.marks().len()
-                    && open.sorted
-            },
+    /// Flags the node when the map isn't what `toJSON` writes for it.
+    fn read_node(self, node: &ReadNode) -> bool {
+        let regular = self.reading.close(
+            node.fields,
+            node.attrs,
+            |open| open.children == node.children && open.marks == node.marks && open.sorted,
             |parent| parent.children += 1,
         );
         if !regular {
-            reading.irregular();
-            reading.irregular_nodes.borrow_mut().insert(node.id());
+            self.reading.irregular();
         }
+        !regular
     }
 
-    fn read_mark(self, mark: &Mark) {
-        let rank = mark.mark_type().rank();
+    fn read_mark(self, mark: &ReadMark) {
+        let rank = mark.rank;
         let regular = self.reading.close(
-            mark.field_count(),
-            mark.attrs(),
+            mark.fields,
+            mark.attrs,
             |_| true,
             |node| {
                 node.marks += 1;

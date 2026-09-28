@@ -1,9 +1,10 @@
 //! Erlang's external term format, from which the VM makes a whole term in one call: values and
 //! nodes as the terms Jason decodes from the JSON `JSON.stringify` writes for them.
 
+use tarnish::chunk::{Kind, ValueRef};
 use tarnish::js::{self, WrittenNumber};
-use tarnish::json::{Map, Number, Value};
-use tarnish::{Field, Fields, Node, stack};
+use tarnish::json::{Number, Value};
+use tarnish::{Field, Fields, NodeRef, SetRef, stack};
 
 const VERSION: u8 = 131;
 const NEW_FLOAT: u8 = 70;
@@ -23,8 +24,22 @@ pub fn write(value: &Value, limit: usize) -> Option<Vec<u8>> {
     writer.finish()
 }
 
+/// [`write`] of a value a chunk holds.
+pub fn write_ref(value: ValueRef, limit: usize) -> Option<Vec<u8>> {
+    let mut writer = Writer::new(limit, 64);
+    writer.value_ref(value);
+    writer.finish()
+}
+
+/// The list of a set's marks' JSON.
+pub fn write_marks(marks: SetRef, limit: usize) -> Option<Vec<u8>> {
+    let mut writer = Writer::new(limit, 64);
+    writer.list(marks.iter(), Writer::fields);
+    writer.finish()
+}
+
 /// What [`write`] writes for the node's JSON, without making the JSON.
-pub fn write_node(node: &Node, limit: usize) -> Option<Vec<u8>> {
+pub fn write_node(node: NodeRef, limit: usize) -> Option<Vec<u8>> {
     // A document's term takes about four bytes a position.
     let mut writer = Writer::new(limit, node.node_size() * 4 + 64);
     writer.fields(node);
@@ -62,14 +77,43 @@ impl Writer {
             Value::Bool(false) => self.atom("false"),
             Value::Number(number) => self.number(number),
             Value::String(text) => self.binary(text),
-            Value::Array(items) => {
-                self.list(items, |writer, item| stack::grow(|| writer.value(item)))
+            Value::Array(items) => self.list(items.iter(), |writer, item| {
+                stack::grow(|| writer.value(item))
+            }),
+            Value::Object(object) => {
+                self.map_header(object.len());
+                for (key, item) in object {
+                    self.binary(key);
+                    stack::grow(|| self.value(item));
+                }
             }
-            Value::Object(object) => self.map(object),
         }
     }
 
-    fn fields(&mut self, fields: &impl Fields) {
+    fn value_ref(&mut self, value: ValueRef) {
+        if self.full() {
+            return;
+        }
+        match value.kind() {
+            Kind::Null => self.atom("nil"),
+            Kind::Bool(true) => self.atom("true"),
+            Kind::Bool(false) => self.atom("false"),
+            Kind::Number(number) => self.number(&number),
+            Kind::String(text) => self.binary(text),
+            Kind::Array(_) => self.list(value.items(), |writer, item| {
+                stack::grow(|| writer.value_ref(item))
+            }),
+            Kind::Object(len) => {
+                self.map_header(len as usize);
+                for (key, item) in value.entries() {
+                    self.binary(key);
+                    stack::grow(|| self.value_ref(item));
+                }
+            }
+        }
+    }
+
+    fn fields<'c>(&mut self, fields: impl Fields<'c>) {
         if self.full() {
             return;
         }
@@ -78,11 +122,11 @@ impl Writer {
             self.binary(field.key());
             match field {
                 Field::Type(name) => self.binary(name),
-                Field::Attrs(attrs) => self.map(attrs),
-                Field::Content(children) => self.list(children, |writer, child| {
+                Field::Attrs(attrs) => self.value_ref(attrs),
+                Field::Content(node) => self.list(node.children(), |writer, child| {
                     stack::grow(|| writer.fields(child))
                 }),
-                Field::Marks(marks) => self.list(marks, Writer::fields),
+                Field::Marks(marks) => self.list(marks.iter(), Writer::fields),
                 // A binary holds UTF-8, which has no lone surrogate.
                 Field::Text(text) => self.binary(&text.to_string_lossy()),
             }
@@ -94,16 +138,12 @@ impl Writer {
         self.out.extend_from_slice(&(arity as u32).to_be_bytes());
     }
 
-    fn map(&mut self, object: &Map) {
-        self.map_header(object.len());
-        for (key, item) in object {
-            self.binary(key);
-            stack::grow(|| self.value(item));
-        }
-    }
-
-    fn list<T>(&mut self, items: &[T], mut write: impl FnMut(&mut Writer, &T)) {
-        if !items.is_empty() {
+    fn list<T>(
+        &mut self,
+        items: impl ExactSizeIterator<Item = T>,
+        mut write: impl FnMut(&mut Writer, T),
+    ) {
+        if items.len() > 0 {
             self.out.push(LIST);
             self.out
                 .extend_from_slice(&(items.len() as u32).to_be_bytes());

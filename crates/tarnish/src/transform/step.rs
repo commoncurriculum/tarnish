@@ -16,7 +16,12 @@ pub enum StepResult<'a> {
 
 impl<'a> StepResult<'a> {
     /// `doc.replace(from, to, slice)`, a slice that doesn't fit being a failure.
-    pub fn from_replace(doc: Node<'a>, from: usize, to: usize, slice: &Slice<'a>) -> Result<StepResult<'a>> {
+    pub fn from_replace(
+        doc: Node<'a>,
+        from: usize,
+        to: usize,
+        slice: &Slice<'a>,
+    ) -> Result<StepResult<'a>> {
         match doc.replace(from, to, slice) {
             Ok(doc) => Ok(StepResult::Ok(doc)),
             Err(Error::Replace(message)) => Ok(StepResult::Failed(message)),
@@ -263,9 +268,8 @@ impl<'a> Step<'a> {
                 mark,
             } => {
                 let old = doc.slice(*from, *to, false)?;
-                let remove = |node: &Node<'a>, _: &Node<'a>| {
-                    node.mark(mark.remove_from_set(&node.marks()))
-                };
+                let remove =
+                    |node: &Node<'a>, _: &Node<'a>| node.mark(mark.remove_from_set(&node.marks()));
                 let content = map_fragment(old.content(), &remove, &doc);
                 let slice = Slice::new(content, old.open_start(), old.open_end());
                 StepResult::from_replace(doc, *from, *to, &slice)

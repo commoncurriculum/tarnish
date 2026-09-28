@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crate::chunk::{Builder, Chunk, ValueRef, value_equals};
 use crate::error::{Error, Result};
-use crate::js::{self, Given};
+use crate::js::{self, AttrKeys, Given, Keys};
 use crate::json::{Key, Map, Value};
 
 /// A function that raises an error for an attribute value it doesn't accept, `None` being
@@ -217,6 +217,14 @@ impl AttrSet {
         Ok(())
     }
 
+    /// The keys of the attributes written for what [`resolve`](Self::resolve) computed.
+    pub fn keys<'g>(&'g self, computed: &'g Computed<'g>) -> AttrKeys<'g> {
+        AttrKeys(match computed {
+            Computed::Defaults => Keys::Map(self.defaults.as_ref().expect("defaults")),
+            Computed::Values(values) => Keys::Values(values),
+        })
+    }
+
     /// Writes what [`resolve`](Self::resolve) computed: a value ref.
     pub fn write(&self, builder: &mut Builder, type_index: usize, computed: &Computed) -> u32 {
         match computed {
@@ -247,7 +255,18 @@ impl AttrSet {
 
     /// [`check_map`](Self::check_map) of attributes a chunk holds.
     pub fn check_ref(&self, values: ValueRef, kind: &str, type_name: &str) -> Result<()> {
-        self.check_keys(values.keys(), kind, type_name)?;
+        // Value 0 is the empty object, which only a check can refuse.
+        if values.index == 0 && self.attrs.iter().all(|(_, attr)| attr.check.is_none()) {
+            return Ok(());
+        }
+        for (key, _) in values.entries_bytes() {
+            if !self.attrs.iter().any(|(known, _)| known.as_bytes() == key) {
+                let key = String::from_utf8_lossy(key);
+                return Err(Error::Range(format!(
+                    "Unsupported attribute {key} for {kind} of type {type_name}"
+                )));
+            }
+        }
         for (name, attr) in &self.attrs {
             if attr.check.is_some() {
                 check_value(attr, values.get(name).map(Found::Chunk))?;

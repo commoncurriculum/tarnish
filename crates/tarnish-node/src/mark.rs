@@ -77,10 +77,13 @@ impl MarkHandle {
         set: Vec<&MarkHandle>,
     ) -> Result<Option<Unknown<'env>>> {
         let mut set = list(set);
-        let removed = set.iter().position(|other| self.mark == *other).map(|index| {
-            set.remove(index);
-            set
-        });
+        let removed = set
+            .iter()
+            .position(|other| self.mark == *other)
+            .map(|index| {
+                set.remove(index);
+                set
+            });
         changed_list(env, removed)
     }
 

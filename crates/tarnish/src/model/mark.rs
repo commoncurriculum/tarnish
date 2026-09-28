@@ -63,7 +63,10 @@ impl<'a> Marks<'a> {
             None => (0, 0),
         };
         (start..start + len).map(move |member| {
-            let chunk = self.chunk.as_ref().expect("a set with members is in a chunk");
+            let chunk = self
+                .chunk
+                .as_ref()
+                .expect("a set with members is in a chunk");
             let (chunk, index) = Chunk::resolve_shared(chunk, chunk.member(member));
             Mark {
                 chunk: chunk.clone(),

@@ -4,7 +4,9 @@
 use std::borrow::Cow;
 
 use super::schema::{MarkType, NodeType};
-use crate::chunk::{ASCII, Chunk, HELD_AS_UNITS, Record, TEXT_NODE, ValueRef, value_equals};
+use crate::chunk::{
+    ASCII, BINDING, Chunk, HELD_AS_UNITS, NODES, Record, TEXT_NODE, ValueRef, value_equals,
+};
 use crate::js;
 use crate::text::{Text, byte_offset};
 
@@ -17,7 +19,7 @@ pub struct NodeRef<'c> {
 
 impl<'c> NodeRef<'c> {
     #[inline]
-    pub fn at(chunk: &'c Chunk<'c>, id: u32) -> NodeRef<'c> {
+    pub(crate) fn at(chunk: &'c Chunk<'c>, id: u32) -> NodeRef<'c> {
         NodeRef {
             chunk,
             id,
@@ -25,9 +27,24 @@ impl<'c> NodeRef<'c> {
         }
     }
 
+    /// The last node a chunk holds, as [`Node::root`](super::Node::root) finds it.
+    pub fn root(chunk: &'c Chunk<'c>) -> Option<NodeRef<'c>> {
+        let last = chunk.count(NODES).checked_sub(1)?;
+        Some(NodeRef::at(chunk, last))
+    }
+
+    /// Whether a binding's reading set the node's flag, as
+    /// [`Json::read_node`](crate::js::Json::read_node) may.
+    #[inline]
+    pub fn flagged(self) -> bool {
+        self.record.flags & BINDING != 0
+    }
+
     #[inline]
     pub fn node_type(self) -> NodeType<'c> {
-        self.chunk.schema().node_type_at(usize::from(self.record.ty))
+        self.chunk
+            .schema()
+            .node_type_at(usize::from(self.record.ty))
     }
 
     #[inline]
@@ -57,14 +74,33 @@ impl<'c> NodeRef<'c> {
         }
     }
 
+    /// The chunk that holds the list of the node's kids, where it starts, and the bound of the
+    /// kids in that chunk.
+    #[inline]
+    fn kids(self) -> (&'c Chunk<'c>, u32, u32) {
+        self.chunk.kids_of(self.id, self.record.a)
+    }
+
+    /// # Panics
+    ///
+    /// When the node has no child at `index`.
     #[inline]
     pub fn child(self, index: u32) -> NodeRef<'c> {
-        let (chunk, id) = self.chunk.child(self.record.a, index, self.id);
+        assert!(index < self.child_count(), "no child at {index}");
+        let (list, start, bound) = self.kids();
+        let (chunk, id) = list.child(start, index, bound);
         NodeRef::at(chunk, id)
     }
 
     pub fn children(self) -> impl DoubleEndedIterator<Item = NodeRef<'c>> + ExactSizeIterator {
-        (0..self.child_count()).map(move |index| self.child(index))
+        let (list, start, bound) = match self.is_text() {
+            true => (self.chunk, 0, 0),
+            false => self.kids(),
+        };
+        (0..self.child_count()).map(move |index| {
+            let (chunk, id) = list.child(start, index, bound);
+            NodeRef::at(chunk, id)
+        })
     }
 
     #[inline]
@@ -195,8 +231,7 @@ impl<'c> MarkRef<'c> {
     /// `Mark.eq`: the same type, and deeply equal attributes.
     pub fn equals(self, other: MarkRef) -> bool {
         self.ptr_eq(other)
-            || (self.mark_type() == other.mark_type()
-                && value_equals(self.attrs(), other.attrs()))
+            || (self.mark_type() == other.mark_type() && value_equals(self.attrs(), other.attrs()))
     }
 }
 
@@ -280,8 +315,10 @@ impl<'c> TextRef<'c> {
             TextRef::Utf8 { text, .. } => Cow::Owned(text.encode_utf16().collect()),
             TextRef::Units(bytes) => Cow::Owned(
                 bytes
-                    .chunks_exact(2)
-                    .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|&pair| u16::from_le_bytes(pair))
                     .collect(),
             ),
         }

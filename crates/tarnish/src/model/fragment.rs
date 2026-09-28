@@ -37,6 +37,52 @@ pub struct Fragment<'a> {
     bound: u32,
 }
 
+/// A fragment's list being written into a chunk of its own: nodes, and runs of other
+/// fragments' kids, copied as refs.
+struct List<'a> {
+    builder: Builder<'a>,
+    start: u32,
+    count: u32,
+}
+
+impl<'a> List<'a> {
+    fn new(schema: &Schema) -> List<'a> {
+        let builder = Builder::new(schema);
+        let start = builder.kids_end();
+        List {
+            builder,
+            start,
+            count: 0,
+        }
+    }
+
+    fn push(&mut self, node: &Node<'a>) {
+        let kid = self.builder.kid(node.chunk(), node.index());
+        self.builder.push_kid(kid);
+        self.count += 1;
+    }
+
+    /// Adds `fragment`'s children from index `from` to `to`.
+    fn extend(&mut self, fragment: &Fragment<'a>, from: u32, to: u32) {
+        if let Some(chunk) = &fragment.chunk
+            && from < to
+        {
+            let (start, bound) = (fragment.start, fragment.bound);
+            self.builder.copy_kids(chunk, start, bound, from, to);
+            self.count += to - from;
+        }
+    }
+
+    /// The fragment of the list, whose children take `size` positions.
+    fn finish(self, size: usize) -> Fragment<'a> {
+        if self.count == 0 {
+            return Fragment::empty();
+        }
+        let size = u32::try_from(size).expect("a fragment smaller than 4G positions");
+        Fragment::of(self.builder.seal(), self.start, self.count, size, u32::MAX)
+    }
+}
+
 impl<'a> Fragment<'a> {
     pub fn empty() -> Fragment<'a> {
         Fragment {
@@ -64,30 +110,16 @@ impl<'a> Fragment<'a> {
         self.chunk.as_ref()
     }
 
-    #[inline]
-    pub(crate) fn bound(&self) -> u32 {
-        self.bound
-    }
-
     /// A fragment of these nodes, as they are.
     pub(crate) fn new(nodes: &[Node<'a>]) -> Fragment<'a> {
         let Some(first) = nodes.first() else {
             return Fragment::empty();
         };
-        let size: usize = nodes.iter().map(Node::node_size).sum();
-        let mut builder = Builder::new(first.schema());
-        let kids: Vec<u32> = nodes
-            .iter()
-            .map(|node| builder.external(node.chunk(), node.index()))
-            .collect();
-        let start = builder.kids(&kids);
-        Fragment::of(
-            builder.seal(),
-            start,
-            kids.len() as u32,
-            u32::try_from(size).expect("a fragment smaller than 4G positions"),
-            u32::MAX,
-        )
+        let mut list = List::new(first.schema());
+        for node in nodes {
+            list.push(node);
+        }
+        list.finish(nodes.iter().map(Node::node_size).sum())
     }
 
     /// A fragment of these nodes, joining adjacent text nodes with the same marks.
@@ -140,14 +172,20 @@ impl<'a> Fragment<'a> {
     /// The owner and index of child `index`, which must be one.
     #[inline]
     fn kid(&self, index: u32) -> (&Arc<Chunk<'a>>, u32) {
-        let chunk = self.chunk.as_ref().expect("a fragment with children is in a chunk");
+        let chunk = self
+            .chunk
+            .as_ref()
+            .expect("a fragment with children is in a chunk");
         Chunk::child_shared(chunk, self.start, index, self.bound)
     }
 
     /// Child `index`, borrowed.
     #[inline]
     pub(crate) fn child_ref(&self, index: usize) -> NodeRef<'_> {
-        let chunk = self.chunk.as_ref().expect("a fragment with children is in a chunk");
+        let chunk = self
+            .chunk
+            .as_ref()
+            .expect("a fragment with children is in a chunk");
         let (chunk, id) = chunk.child(self.start, index as u32, self.bound);
         NodeRef::at(chunk, id)
     }
@@ -201,15 +239,15 @@ impl<'a> Fragment<'a> {
         })
     }
 
-    /// Refs to the children, for a chunk being written.
-    pub(crate) fn write_kids(&self, builder: &mut Builder<'a>) -> Vec<u32> {
-        (0..self.count)
-            .map(|index| {
-                let (chunk, id) = self.kid(index);
-                let chunk = chunk.clone();
-                builder.external(&chunk, id)
-            })
-            .collect()
+    /// A ref to the fragment's list from a chunk being written, its length and its size: what
+    /// a node written there whose content this is refers to.
+    pub(crate) fn list(&self, builder: &mut Builder<'a>) -> (u32, u32, u32) {
+        match &self.chunk {
+            Some(chunk) if self.count > 0 => {
+                (builder.external(chunk, self.start), self.count, self.size)
+            }
+            _ => (0, 0, 0),
+        }
     }
 
     /// Call `f` for each node, at any depth, between `from` and `to`, counting positions from
@@ -305,17 +343,20 @@ impl<'a> Fragment<'a> {
         if self.size == 0 {
             return other.clone();
         }
-        let mut content: Vec<Node<'a>> = self.children().collect();
-        let mut rest = other.children().peekable();
-        if let Some(last) = content.last_mut()
-            && let Some(first) = rest.peek()
-            && let Some(joined) = last.join_text(first)
-        {
-            *last = joined;
-            rest.next();
+        let (last, count) = (self.count - 1, other.count);
+        let mut list = List::new(other.schema().expect("a fragment with children"));
+        match self.node(last).join_text(&other.node(0)) {
+            Some(joined) => {
+                list.extend(self, 0, last);
+                list.push(&joined);
+                list.extend(other, 1, count);
+            }
+            None => {
+                list.extend(self, 0, last + 1);
+                list.extend(other, 0, count);
+            }
         }
-        content.extend(rest);
-        Fragment::new(&content)
+        list.finish(self.size() + other.size())
     }
 
     /// The part of the fragment between `from` and `to`.
@@ -323,35 +364,43 @@ impl<'a> Fragment<'a> {
         if from == 0 && to == self.size() {
             return self.clone();
         }
-        let mut result = Vec::new();
-        if to > from {
-            let mut pos = 0;
-            for child in self.children() {
-                if pos >= to {
-                    break;
-                }
-                let end = pos + child.node_size();
-                if end > from {
-                    let child = if pos < from || end > to {
-                        child
-                            .cut_text(from.saturating_sub(pos), to - pos)
-                            .unwrap_or_else(|| {
-                                stack::grow(|| {
-                                    child.cut_content(
-                                        from.saturating_sub(pos + 1),
-                                        child.content().size().min(to - pos - 1),
-                                    )
-                                })
-                            })
-                    } else {
-                        child
-                    };
-                    result.push(child);
-                }
-                pos = end;
+        let Some(schema) = self.schema().filter(|_| to > from) else {
+            return Fragment::empty();
+        };
+        let mut list = List::new(schema);
+        let (mut pos, mut size) = (0, 0);
+        // The children from `whole` to the one before `index` lie inside the cut, and aren't
+        // listed yet.
+        let (mut whole, mut index) = (0, 0);
+        while index < self.count && pos < to {
+            let child_size = self.child_ref(index as usize).node_size();
+            let end = pos + child_size;
+            if end <= from {
+                whole = index + 1;
+            } else if pos < from || end > to {
+                list.extend(self, whole, index);
+                let child = self.node(index);
+                let cut = child
+                    .cut_text(from.saturating_sub(pos), to - pos)
+                    .unwrap_or_else(|| {
+                        stack::grow(|| {
+                            child.cut_content(
+                                from.saturating_sub(pos + 1),
+                                child.content().size().min(to - pos - 1),
+                            )
+                        })
+                    });
+                size += cut.node_size();
+                list.push(&cut);
+                whole = index + 1;
+            } else {
+                size += child_size;
             }
+            pos = end;
+            index += 1;
         }
-        Fragment::new(&result)
+        list.extend(self, whole, index);
+        list.finish(size)
     }
 
     /// The children from index `from` to `to`: a part of the same list.
@@ -364,7 +413,9 @@ impl<'a> Fragment<'a> {
         if from == 0 && to == self.child_count() {
             return self.clone();
         }
-        let size: usize = (from..to).map(|index| self.child_ref(index).node_size()).sum();
+        let size: usize = (from..to)
+            .map(|index| self.child_ref(index).node_size())
+            .sum();
         Fragment {
             chunk: self.chunk.clone(),
             start: self.start + from as u32,
@@ -380,22 +431,26 @@ impl<'a> Fragment<'a> {
         if current.ptr_eq(&node) {
             return self.clone();
         }
-        let mut copy: Vec<Node<'a>> = self.children().collect();
-        copy[index] = node;
-        Fragment::new(&copy)
+        let index = index as u32;
+        let mut list = List::new(node.schema());
+        list.extend(self, 0, index);
+        list.push(&node);
+        list.extend(self, index + 1, self.count);
+        list.finish(self.size() - current.node_size() + node.node_size())
     }
 
     pub fn add_to_start(&self, node: Node<'a>) -> Fragment<'a> {
-        let mut children = Vec::with_capacity(self.child_count() + 1);
-        children.push(node);
-        children.extend(self.children());
-        Fragment::new(&children)
+        let mut list = List::new(node.schema());
+        list.push(&node);
+        list.extend(self, 0, self.count);
+        list.finish(self.size() + node.node_size())
     }
 
     pub fn add_to_end(&self, node: Node<'a>) -> Fragment<'a> {
-        let mut children: Vec<Node<'a>> = self.children().collect();
-        children.push(node);
-        Fragment::new(&children)
+        let mut list = List::new(node.schema());
+        list.extend(self, 0, self.count);
+        list.push(&node);
+        list.finish(self.size() + node.node_size())
     }
 
     /// The index of the child at `pos`, and that child's offset. At the end of a child, the

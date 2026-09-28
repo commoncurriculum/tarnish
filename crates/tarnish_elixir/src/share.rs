@@ -1,56 +1,46 @@
 //! A document's JSON as a term that shares the parts of the map it was read from: a node that is
 //! the very node read from a map, which holds what `toJSON` writes for it, is that map again.
 
-use std::collections::HashSet;
-
 use rustler::{Encoder, Env, Term};
-use tarnish::{Field, Fields, Mark, Node, Value, stack};
+use tarnish::{Field, Fields, NodeRef, stack};
 
 use crate::etf;
-
-/// A document as read from a map, and the nodes whose maps aren't what `toJSON` writes.
-pub struct Source {
-    pub doc: Node,
-    pub irregular: HashSet<usize>,
-}
 
 /// A rebuilt map or list item costs about as much as this many bytes of a term.
 const BYTES_PER_ITEM: usize = 64;
 
 /// Reading past this many children for one that was read finds it too rarely to pay.
-const LOOK_AHEAD: usize = 32;
+const LOOK_AHEAD: u32 = 32;
 
 /// Past the work a limit allows.
 pub struct TooBig;
 
-/// The JSON of `doc`, the map `json` being the one `source` was read from, doing no more than
-/// `limit` bytes' worth of work.
+/// The JSON of `doc`, `read` being the document read from the map `json`, doing no more than
+/// `limit` bytes' worth of work. A node read is its map again unless its reading flagged it.
 pub fn json<'a>(
     env: Env<'a>,
-    doc: &Node,
-    source: &Source,
+    doc: NodeRef,
+    read: NodeRef,
     json: Term<'a>,
     limit: usize,
 ) -> Result<Term<'a>, TooBig> {
     let mut sharer = Sharer {
         env,
-        source,
         keys: Vec::new(),
         left: limit,
     };
-    sharer.node(doc, Some((&source.doc, json)))
+    sharer.node(doc, Some((read, json)))
 }
 
-struct Sharer<'a, 's> {
+struct Sharer<'a> {
     env: Env<'a>,
-    source: &'s Source,
     /// Keys and type names made so far, by the address of their text.
     keys: Vec<(usize, Term<'a>)>,
     /// The work left, in bytes.
     left: usize,
 }
 
-impl<'a> Sharer<'a, '_> {
+impl<'a> Sharer<'a> {
     fn spend(&mut self, bytes: usize) -> Result<(), TooBig> {
         self.left = self.left.checked_sub(bytes).ok_or(TooBig)?;
         Ok(())
@@ -68,13 +58,13 @@ impl<'a> Sharer<'a, '_> {
 
     /// The node's term, `read` being the node read that it may be, or may have replaced, and
     /// the map it was read from.
-    fn node(&mut self, node: &Node, read: Option<(&Node, Term<'a>)>) -> Result<Term<'a>, TooBig> {
+    fn node(
+        &mut self,
+        node: NodeRef,
+        read: Option<(NodeRef, Term<'a>)>,
+    ) -> Result<Term<'a>, TooBig> {
         match read {
-            Some((read, map))
-                if read.ptr_eq(node) && !self.source.irregular.contains(&read.id()) =>
-            {
-                Ok(map)
-            }
+            Some((read, map)) if read.ptr_eq(node) && !read.flagged() => Ok(map),
             Some((read, map))
                 if read.node_type() == node.node_type()
                     && read.child_count() > 0
@@ -93,13 +83,13 @@ impl<'a> Sharer<'a, '_> {
     }
 
     /// A new map for the node, whose children may be those of the node read.
-    fn rebuild(&mut self, node: &Node, read: &Node, map: Term<'a>) -> Result<Term<'a>, TooBig> {
+    fn rebuild(&mut self, node: NodeRef, read: NodeRef, map: Term<'a>) -> Result<Term<'a>, TooBig> {
         let content = self.key("content");
         let read_items = map
             .map_get(content)
             .ok()
             .map(items)
-            .filter(|items| items.len() == read.child_count());
+            .filter(|items| items.len() == read.child_count() as usize);
         let (mut keys, mut values) = (Vec::with_capacity(5), Vec::with_capacity(5));
         let mut failed = Ok(());
         node.fields(|field| {
@@ -108,14 +98,9 @@ impl<'a> Sharer<'a, '_> {
             }
             let value = match field {
                 Field::Type(name) => Ok(self.key(name)),
-                Field::Content(children) => self.children(children, read, read_items.as_deref()),
-                Field::Attrs(attrs) => {
-                    self.written(etf::write(&Value::Object(attrs.clone()), self.left))
-                }
-                Field::Marks(marks) => {
-                    let marks = Value::Array(marks.iter().map(Mark::to_json).collect());
-                    self.written(etf::write(&marks, self.left))
-                }
+                Field::Content(node) => self.children(node, read, read_items.as_deref()),
+                Field::Attrs(attrs) => self.written(etf::write_ref(attrs, self.left)),
+                Field::Marks(marks) => self.written(etf::write_marks(marks, self.left)),
                 Field::Text(text) => Ok(text.to_string_lossy().encode(self.env)),
             };
             match value {
@@ -135,30 +120,27 @@ impl<'a> Sharer<'a, '_> {
     /// in its place.
     fn children(
         &mut self,
-        children: &[Node],
-        read: &Node,
+        node: NodeRef,
+        read: NodeRef,
         read_items: Option<&[Term<'a>]>,
     ) -> Result<Term<'a>, TooBig> {
-        let read_children = read_items.map_or(&[][..], |_| read.children());
-        let mut terms = Vec::with_capacity(children.len());
+        let read_count = read_items.map_or(0, |_| read.child_count());
+        let mut terms = Vec::with_capacity(node.child_count() as usize);
         let mut next = 0;
-        for child in children {
+        for child in node.children() {
             self.spend(BYTES_PER_ITEM)?;
-            let found = read_children[next..]
-                .iter()
-                .take(LOOK_AHEAD)
-                .position(|read| read.ptr_eq(child))
-                .map(|offset| next + offset);
+            let found = (next..read_count.min(next + LOOK_AHEAD))
+                .find(|&index| read.child(index).ptr_eq(child));
             let index = match found {
                 Some(index) => {
                     next = index + 1;
                     Some(index)
                 }
-                None => (next < read_children.len()).then_some(next),
+                None => (next < read_count).then_some(next),
             };
             let pair = index
                 .zip(read_items)
-                .map(|(index, items)| (&read_children[index], items[index]));
+                .map(|(index, items)| (read.child(index), items[index as usize]));
             terms.push(stack::grow(|| self.node(child, pair))?);
         }
         Ok(terms.encode(self.env))
