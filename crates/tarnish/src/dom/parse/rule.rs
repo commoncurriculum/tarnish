@@ -87,7 +87,7 @@ pub enum Skip<N> {
 #[derive(Clone)]
 pub struct Rule<K> {
     pub kind: K,
-    /// Where the rule goes among a schema's rules, by [`by_priority`]: higher first, 50 when
+    /// Where the rule goes among a schema's rules, by [`schema_rules`]: higher first, 50 when
     /// not given. A parser tries its rules in the order it is given them.
     pub priority: Option<f64>,
     /// Whether a match keeps later rules from matching.

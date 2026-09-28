@@ -73,5 +73,9 @@ fn steps_that_split_a_surrogate_pair_leave_prosemirrors_text() {
         let inverted = api::invert_steps(&doc, &case["steps"]).expect("their inverse");
         let undone = api::apply_steps(&changed, &inverted).expect("the inverse");
         assert!(undone == doc);
+        // The text, lone surrogates and all, reads back, each one as U+FFFD in its place.
+        let written = json::from_str(case["result"].as_str().expect("JSON text")).expect("JSON");
+        let read = Node::from_json(schema(&schemas, case), &written).expect("a document");
+        assert_eq!(read.content().size(), changed.content().size());
     }
 }

@@ -4,6 +4,13 @@
  * each transform, its schema's index, the starting document, the steps, the document they
  * give, and the positions mapped through them as "from to" pairs. The JSON is what
  * JSON.stringify writes, so the library's output must equal it byte for byte.
+ *
+ * Then fixtures/ops.json: a count and that many schema specs; a count and, for each op list, its
+ * schema's index, the starting document, the ops, and "ok" with the document and steps they
+ * give or "error" with the error; a count and, for each textBetween, its schema's index, the
+ * document, "from to", the block separator and leaf text, and "ok" with the text or "error"
+ * with the error; and a count and, for each textContent, its schema's index, the document and
+ * the text. Text is the hex of its UTF-8, "-" being text not given.
  */
 #define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
@@ -177,6 +184,147 @@ static void run_deep(void) {
     tarnish_schema_free(schema);
 }
 
+/* A line of hex, as harness/test-c.mjs writes text, decoded in place; NULL for "-". */
+static char *read_text(void) {
+    char *line = read_line();
+    if (strcmp(line, "-") == 0) {
+        free(line);
+        return NULL;
+    }
+    size_t length = strlen(line) / 2;
+    for (size_t index = 0; index < length; index++) {
+        char pair[3] = {line[2 * index], line[2 * index + 1], '\0'};
+        line[index] = (char)strtoul(pair, NULL, 16);
+    }
+    line[length] = '\0';
+    return line;
+}
+
+/* Checks that a call gave `expected` when `ok`, and otherwise failed with `expected` as its error.
+ * Frees what it gave and the error. */
+static void expect_outcome(const char *test, const char *what, bool ok, const char *expected, char *given,
+                           char *error) {
+    bool same = ok ? given && strcmp(given, expected) == 0 : !given && error && strcmp(error, expected) == 0;
+    if (!same)
+        fail(test, ok ? what : "the error", expected, given ? given : error);
+    tarnish_free(given);
+    tarnish_free(error);
+}
+
+static void run_op_list(const char *test, const TarnishSchema_t *schema) {
+    char *start = read_line(), *ops = read_line(), *outcome = read_line();
+    bool ok = strcmp(outcome, "ok") == 0;
+    char *expected = read_line(), *expected_steps = ok ? read_line() : NULL;
+    TarnishNode_t *doc = read_node(test, schema, start);
+    if (doc) {
+        char *steps = NULL, *error = NULL;
+        TarnishNode_t *changed = tarnish_transform(doc, ops, &steps, &error);
+        if (changed)
+            expect_json(test, "the document", ok ? expected : "an error", changed);
+        expect_outcome(test, "the steps", ok, ok ? expected_steps : expected, steps, error);
+        tarnish_node_free(changed);
+        tarnish_node_free(doc);
+    }
+    free(start);
+    free(ops);
+    free(outcome);
+    free(expected);
+    free(expected_steps);
+}
+
+static void run_text_between(const char *test, const TarnishSchema_t *schema) {
+    char *start = read_line(), *range = read_line(), *separator = read_text(), *leaf = read_text();
+    char *outcome = read_line();
+    bool ok = strcmp(outcome, "ok") == 0;
+    char *expected = ok ? read_text() : read_line();
+    char *end;
+    size_t from = strtoul(range, &end, 10), to = strtoul(end, NULL, 10);
+    TarnishNode_t *doc = read_node(test, schema, start);
+    if (doc) {
+        char *error = NULL;
+        char *text = tarnish_text_between(doc, from, to, separator, leaf, &error);
+        expect_outcome(test, "the text", ok, expected, text, error);
+        tarnish_node_free(doc);
+    }
+    free(start);
+    free(range);
+    free(separator);
+    free(leaf);
+    free(outcome);
+    free(expected);
+}
+
+static void run_text_content(const char *test, const TarnishSchema_t *schema) {
+    char *start = read_line(), *expected = read_text();
+    TarnishNode_t *doc = read_node(test, schema, start);
+    if (doc) {
+        char *error = NULL;
+        char *text = tarnish_text_content(doc, &error);
+        expect_outcome(test, "the text", true, expected, text, error);
+        tarnish_node_free(doc);
+    }
+    free(start);
+    free(expected);
+}
+
+/* What the library itself refuses, or takes, in the calls fixtures/ops.json's records make. */
+static void run_op_errors(const TarnishSchema_t *schema) {
+    TarnishNode_t *doc = read_node("ops", schema, "{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\"}]}");
+    char *error = NULL;
+    TarnishNode_t *same = tarnish_transform(doc, "[]", NULL, &error);
+    if (!same)
+        fail("ops with nowhere to put their steps", "the document", "a document", error);
+    tarnish_free(error);
+    tarnish_node_free(same);
+
+    error = NULL;
+    TarnishNode_t *none = tarnish_transform(NULL, "[]", NULL, &error);
+    expect_error("ops on no document", none == NULL, error, "Error: The node was NULL");
+    tarnish_node_free(none);
+
+    error = NULL;
+    char *text = tarnish_text_between(doc, 0, 0, "\xff", NULL, &error);
+    expect_error("a block separator that isn't UTF-8", text == NULL, error,
+                 "Error: The block separator wasn't UTF-8");
+    tarnish_free(text);
+    tarnish_node_free(doc);
+}
+
+/* Runs the records of fixtures/ops.json, and gives how many there were. */
+static size_t run_ops(void) {
+    size_t schema_count = read_count();
+    TarnishSchema_t **schemas = calloc(schema_count, sizeof *schemas);
+    for (size_t index = 0; index < schema_count; index++) {
+        char *spec = read_line(), *error = NULL;
+        if (!(schemas[index] = tarnish_schema_new(spec, &error))) {
+            fprintf(stderr, "Ops schema %zu: %s\n", index, error);
+            exit(1);
+        }
+        free(spec);
+    }
+
+    void (*const runs[])(const char *, const TarnishSchema_t *) = {run_op_list, run_text_between,
+                                                                   run_text_content};
+    const char *const names[] = {"op list", "textBetween", "textContent"};
+    size_t records = 0;
+    for (size_t kind = 0; kind < 3; kind++) {
+        size_t count = read_count();
+        for (size_t index = 0; index < count; index++) {
+            size_t schema = read_count();
+            char test[48];
+            snprintf(test, sizeof test, "%s %zu", names[kind], index);
+            runs[kind](test, schemas[schema]);
+        }
+        records += count;
+    }
+
+    run_op_errors(schemas[0]);
+    for (size_t index = 0; index < schema_count; index++)
+        tarnish_schema_free(schemas[index]);
+    free(schemas);
+    return records;
+}
+
 int main(int argc, char **argv) {
     if (argc != 2 || !(fixtures = fopen(argv[1], "r"))) {
         fprintf(stderr, "Usage: %s <fixtures written by harness/test-c.mjs>\n", argv[0]);
@@ -206,6 +354,7 @@ int main(int argc, char **argv) {
         free(result);
         free(mapping);
     }
+    size_t op_records = run_ops();
 
     run_errors(schemas[0]);
     run_deep();
@@ -219,6 +368,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "%d failed\n", failures);
         return 1;
     }
-    printf("%zu transforms, the errors and a deep document: all passed\n", test_count);
+    printf("%zu transforms, %zu op lists and texts, the errors and a deep document: all passed\n", test_count,
+           op_records);
     return 0;
 }
