@@ -105,14 +105,15 @@ impl<'s, 'a> Reader<'s, 'a> {
             }
         };
         let attrs = attr_set.write(&mut self.builder, node_type.index(), &computed);
+        let first = self.builder.push_kids(self.children.drain(kids_start..));
         let index = self.builder.element(
             node_type.index() as u16,
             marks,
             attrs,
-            self.children[kids_start..kids_start + kids].iter().copied(),
+            first,
+            kids as u32,
             size,
         );
-        self.children.truncate(kids_start);
         let read = ReadNode {
             index,
             fields: 1 + usize::from(attrs != 0) + usize::from(size > 0) + usize::from(marks != 0),
@@ -151,8 +152,7 @@ impl<'s, 'a> Reader<'s, 'a> {
     /// Reads a fragment, as a list of kids of its own: where it starts, its length and size.
     pub fn fragment_list<'j>(&mut self, json: impl Json<'j>) -> Result<(u32, u32, u32)> {
         let (start, count, size) = self.fragment(json)?;
-        let kids = self.builder.kids(self.children[start..].iter().copied());
-        self.children.truncate(start);
+        let kids = self.builder.push_kids(self.children.drain(start..));
         Ok((kids, count as u32, size))
     }
 

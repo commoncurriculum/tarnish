@@ -134,7 +134,7 @@ impl<'a> List<'a> {
     }
 
     fn push_kid(&mut self, kid: Kid) {
-        self.builder.push_kid(kid);
+        self.builder.push_kids(std::iter::once(kid));
         self.count += 1;
         self.size += u64::from(kid.size);
     }

@@ -114,7 +114,7 @@ impl<'a> Node<'a> {
             let attrs = builder.map(attrs);
             let marks = marks.write(builder);
             let (first, count, size) = content.list(builder);
-            builder.element_of(node_type.index() as u16, marks, attrs, first, count, size)
+            builder.element(node_type.index() as u16, marks, attrs, first, count, size)
         })
     }
 
@@ -148,7 +148,7 @@ impl<'a> Node<'a> {
     ) -> u32 {
         let marks = builder.reference_markup(self.chunk(), self.record.marks);
         let attrs = builder.reference_markup(self.chunk(), self.record.attrs);
-        builder.element_of(self.record.ty, marks, attrs, first, count, size)
+        builder.element(self.record.ty, marks, attrs, first, count, size)
     }
 
     pub fn node_type(&self) -> NodeType<'_> {
@@ -330,7 +330,7 @@ impl<'a> Node<'a> {
                 })
             } else {
                 let (first, count, size) = self.content.list(builder);
-                builder.element_of(self.record.ty, marks, attrs, first, count, size)
+                builder.element(self.record.ty, marks, attrs, first, count, size)
             }
         })
     }

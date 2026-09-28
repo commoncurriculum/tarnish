@@ -12,6 +12,7 @@ use super::{
     IMPORTS, KIDS, Kid, LOCAL, MAGIC, MARKS, MEMBERS, NODES, Record, SECTIONS, SETS, STRINGS, TEXT,
     TEXT_NODE, UNITS, VALUES, corrupt,
 };
+use crate::json::Map;
 use crate::model::compare_deep::deep_equal;
 use crate::model::{Schema, TextRef};
 use crate::stack;
@@ -249,23 +250,17 @@ impl<'a> Builder<'a> {
         }
     }
 
-    /// Adds a kid to the kids section.
-    pub fn push_kid(&mut self, kid: Kid) {
-        self.push(KIDS, &kid.to_bytes());
-    }
-
     /// Adds kids to the kids section: where they start.
-    pub fn push_kids(&mut self, kids: &[Kid]) -> u32 {
+    pub fn push_kids(&mut self, kids: impl ExactSizeIterator<Item = Kid>) -> u32 {
         let start = self.counts[KIDS];
         self.counts[KIDS] = start
             .checked_add(kids.len() as u32)
             .filter(|&total| total < EXTERN)
             .expect("a chunk holds fewer than 2^31 of anything");
         let list = &mut self.scratch.sections[KIDS];
-        let written = list.len();
-        list.resize(written + kids.len() * 12, 0);
-        for (kid, bytes) in kids.iter().zip(list[written..].as_chunks_mut::<12>().0) {
-            *bytes = kid.to_bytes();
+        list.reserve(kids.len() * 12);
+        for kid in kids {
+            list.extend_from_slice(&kid.to_bytes());
         }
         start
     }
@@ -311,30 +306,21 @@ impl<'a> Builder<'a> {
                 }
                 self.array(base)
             }
-            Kind::Object(_) => {
-                let base = self.scratch.entries.len();
-                for (key, item) in value.entries() {
-                    let item = stack::grow(|| self.write(item));
-                    let (start, len) = self.key(key);
-                    self.scratch.entries.push((start, len, item));
-                }
-                self.object(base)
-            }
+            Kind::Object(_) => self.object(value.entries(), |builder, item| {
+                stack::grow(|| builder.write(item))
+            }),
         }
     }
 
     /// An object's value; value 0, the empty object, for an empty one.
-    pub fn map(&mut self, map: &crate::json::Map) -> u32 {
+    pub fn map(&mut self, map: &Map) -> u32 {
         if map.is_empty() {
             return 0;
         }
-        let base = self.scratch.entries.len();
-        for (key, value) in map {
-            let value = stack::grow(|| self.write(value));
-            let (start, len) = self.key(key);
-            self.scratch.entries.push((start, len, value));
-        }
-        self.object(base)
+        let entries = map.iter().map(|(key, value)| (key.as_str(), value));
+        self.object(entries, |builder, value| {
+            stack::grow(|| builder.write(value))
+        })
     }
 
     fn number(&mut self, number: &crate::json::Number) -> u32 {
@@ -360,7 +346,18 @@ impl<'a> Builder<'a> {
         self.push_value(Tag::Array, start, len)
     }
 
-    fn object(&mut self, base: usize) -> u32 {
+    /// An object of these entries, each value written by `write` before its key is.
+    fn object<'k, T>(
+        &mut self,
+        entries: impl IntoIterator<Item = (&'k str, T)>,
+        mut write: impl FnMut(&mut Self, T) -> u32,
+    ) -> u32 {
+        let base = self.scratch.entries.len();
+        for (key, value) in entries {
+            let value = write(self, value);
+            let (start, len) = self.key(key);
+            self.scratch.entries.push((start, len, value));
+        }
         let start = self.counts[ENTRIES];
         let len = (self.scratch.entries.len() - base) as u32;
         let mut bytes = std::mem::take(&mut self.scratch.sections[ENTRIES]);
@@ -376,16 +373,11 @@ impl<'a> Builder<'a> {
 
     /// An object of these entries, each a key and a value written before.
     pub fn object_of<'k>(&mut self, entries: impl IntoIterator<Item = (&'k str, u32)>) -> u32 {
-        let base = self.scratch.entries.len();
-        for (key, value) in entries {
-            let (start, len) = self.key(key);
-            self.scratch.entries.push((start, len, value));
-        }
-        self.object(base)
+        self.object(entries, |_, value| value)
     }
 
     /// The value of a node type's default attributes, written once.
-    pub fn defaults(&mut self, type_index: usize, defaults: &crate::json::Map) -> u32 {
+    pub fn defaults(&mut self, type_index: usize, defaults: &Map) -> u32 {
         if defaults.is_empty() {
             return 0;
         }
@@ -395,13 +387,7 @@ impl<'a> Builder<'a> {
         if let Some(written) = self.scratch.defaults[type_index] {
             return written;
         }
-        let base = self.scratch.entries.len();
-        for (key, value) in defaults {
-            let value = self.write(value);
-            let (start, len) = self.key(key);
-            self.scratch.entries.push((start, len, value));
-        }
-        let written = self.object(base);
+        let written = self.map(defaults);
         self.scratch.defaults[type_index] = Some(written);
         written
     }
@@ -469,24 +455,14 @@ impl<'a> Builder<'a> {
     }
 
     /// A mark type's mark with its defaults, and the set of just that mark, written once.
-    pub fn instance(&mut self, rank: usize, defaults: &crate::json::Map) -> (u32, u32) {
+    pub fn instance(&mut self, rank: usize, defaults: &Map) -> (u32, u32) {
         if self.scratch.instances.len() <= rank {
             self.scratch.instances.resize(rank + 1, None);
         }
         if let Some(written) = self.scratch.instances[rank] {
             return written;
         }
-        let attrs = if defaults.is_empty() {
-            0
-        } else {
-            let base = self.scratch.entries.len();
-            for (key, value) in defaults {
-                let value = self.write(value);
-                let (start, len) = self.key(key);
-                self.scratch.entries.push((start, len, value));
-            }
-            self.object(base)
-        };
+        let attrs = self.map(defaults);
         let mark = self.mark(rank as u32, attrs);
         let set = self.set(&[mark]);
         self.scratch.instances[rank] = Some((mark, set));
@@ -618,22 +594,8 @@ impl<'a> Builder<'a> {
         })
     }
 
-    /// A node that isn't text, with these kids and content this size.
-    pub fn element(
-        &mut self,
-        ty: u16,
-        marks: u32,
-        attrs: u32,
-        kids: impl ExactSizeIterator<Item = Kid>,
-        size: u32,
-    ) -> u32 {
-        let count = kids.len() as u32;
-        let first = self.kids(kids);
-        self.element_of(ty, marks, attrs, first, count, size)
-    }
-
     /// A node that isn't text, whose `count` kids are listed from `first`, a kids ref.
-    pub fn element_of(
+    pub fn element(
         &mut self,
         ty: u16,
         marks: u32,
@@ -653,18 +615,8 @@ impl<'a> Builder<'a> {
         })
     }
 
-    /// Where the next kid added to the kids section goes.
     pub fn kids_end(&self) -> u32 {
         self.counts[KIDS]
-    }
-
-    /// A list of kids: where it starts.
-    pub fn kids(&mut self, kids: impl Iterator<Item = Kid>) -> u32 {
-        let start = self.counts[KIDS];
-        for kid in kids {
-            self.push_kid(kid);
-        }
-        start
     }
 
     /// The chunk's bytes, a header and each section in turn, and where each section starts.

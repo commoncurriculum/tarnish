@@ -129,9 +129,9 @@ impl<'k, 'a> Copier<'k, 'a> {
             });
         }
         let attrs = self.value(node.attrs());
-        let first = self.builder.push_kids(&kids);
+        let first = self.builder.push_kids(kids.into_iter());
         self.builder
-            .element_of(record.ty, marks, attrs, first, count, record.size)
+            .element(record.ty, marks, attrs, first, count, record.size)
     }
 }
 
