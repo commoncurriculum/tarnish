@@ -97,10 +97,8 @@ impl<'c> NodeRef<'c> {
             true => (self.chunk, 0, 0),
             false => self.kids(),
         };
-        (0..self.child_count()).map(move |index| {
-            let (chunk, id) = list.child(start, index, bound);
-            NodeRef::at(chunk, id)
-        })
+        list.children(start, self.child_count(), bound)
+            .map(|(chunk, id)| NodeRef::at(chunk, id))
     }
 
     #[inline]

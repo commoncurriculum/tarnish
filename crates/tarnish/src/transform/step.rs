@@ -22,7 +22,7 @@ impl<'a> StepResult<'a> {
         to: usize,
         slice: &Slice<'a>,
     ) -> Result<StepResult<'a>> {
-        match doc.replace(from, to, slice) {
+        match doc.into_replaced(from, to, slice) {
             Ok(doc) => Ok(StepResult::Ok(doc)),
             Err(Error::Replace(message)) => Ok(StepResult::Failed(message)),
             Err(error) => Err(error),

@@ -7,7 +7,7 @@ use super::node::Node;
 use super::read::Reader;
 use super::schema::Schema;
 use super::view::NodeRef;
-use crate::chunk::{Builder, Chunk};
+use crate::chunk::{Builder, Chunk, Kid};
 use crate::error::{Error, Result};
 use crate::js::Json;
 use crate::json::Value;
@@ -57,7 +57,13 @@ impl<'a> List<'a> {
     }
 
     fn push(&mut self, node: &Node<'a>) {
-        let kid = self.builder.kid(node.chunk(), node.index());
+        let kid = self
+            .builder
+            .kid(node.chunk(), node.index(), node.node_size());
+        self.push_kid(kid);
+    }
+
+    fn push_kid(&mut self, kid: Kid) {
         self.builder.push_kid(kid);
         self.count += 1;
     }
@@ -108,6 +114,12 @@ impl<'a> Fragment<'a> {
     #[inline]
     pub(crate) fn chunk(&self) -> Option<&Arc<Chunk<'a>>> {
         self.chunk.as_ref()
+    }
+
+    /// Where the list starts in its chunk's kids.
+    #[inline]
+    pub(crate) fn start(&self) -> u32 {
+        self.start
     }
 
     /// A fragment of these nodes, as they are.
@@ -188,6 +200,16 @@ impl<'a> Fragment<'a> {
             .expect("a fragment with children is in a chunk");
         let (chunk, id) = chunk.child(self.start, index as u32, self.bound);
         NodeRef::at(chunk, id)
+    }
+
+    /// The size of child `index`, which the list holds with the child.
+    #[inline]
+    pub(crate) fn child_size(&self, index: u32) -> usize {
+        let chunk = self
+            .chunk
+            .as_ref()
+            .expect("a fragment with children is in a chunk");
+        chunk.kid_size(self.start, index) as usize
     }
 
     /// The children, borrowed.
@@ -345,14 +367,17 @@ impl<'a> Fragment<'a> {
         }
         let (last, count) = (self.count - 1, other.count);
         let mut list = List::new(other.schema().expect("a fragment with children"));
-        match self.node(last).join_text(&other.node(0)) {
+        list.extend(self, 0, last);
+        match self
+            .node(last)
+            .join_text_into(&mut list.builder, &other.node(0))
+        {
             Some(joined) => {
-                list.extend(self, 0, last);
-                list.push(&joined);
+                list.push_kid(joined);
                 list.extend(other, 1, count);
             }
             None => {
-                list.extend(self, 0, last + 1);
+                list.extend(self, last, last + 1);
                 list.extend(other, 0, count);
             }
         }
@@ -373,25 +398,28 @@ impl<'a> Fragment<'a> {
         // listed yet.
         let (mut whole, mut index) = (0, 0);
         while index < self.count && pos < to {
-            let child_size = self.child_ref(index as usize).node_size();
+            let child_size = self.child_size(index);
             let end = pos + child_size;
             if end <= from {
                 whole = index + 1;
             } else if pos < from || end > to {
                 list.extend(self, whole, index);
                 let child = self.node(index);
-                let cut = child
-                    .cut_text(from.saturating_sub(pos), to - pos)
-                    .unwrap_or_else(|| {
-                        stack::grow(|| {
-                            child.cut_content(
-                                from.saturating_sub(pos + 1),
-                                child.content().size().min(to - pos - 1),
-                            )
-                        })
-                    });
-                size += cut.node_size();
-                list.push(&cut);
+                let (cut_from, cut_to) = (from.saturating_sub(pos), to - pos);
+                match child.cut_text_into(&mut list.builder, cut_from, cut_to) {
+                    Some(kid) => {
+                        size += cut_to.min(child_size) - cut_from;
+                        list.push_kid(kid);
+                    }
+                    None => {
+                        let cut = stack::grow(|| {
+                            let content_to = child.content().size().min(cut_to - 1);
+                            child.cut_content(from.saturating_sub(pos + 1), content_to)
+                        });
+                        size += cut.node_size();
+                        list.push(&cut);
+                    }
+                }
                 whole = index + 1;
             } else {
                 size += child_size;
@@ -413,9 +441,7 @@ impl<'a> Fragment<'a> {
         if from == 0 && to == self.child_count() {
             return self.clone();
         }
-        let size: usize = (from..to)
-            .map(|index| self.child_ref(index).node_size())
-            .sum();
+        let size: usize = (from..to).map(|index| self.child_size(index as u32)).sum();
         Fragment {
             chunk: self.chunk.clone(),
             start: self.start + from as u32,
@@ -469,8 +495,8 @@ impl<'a> Fragment<'a> {
             )));
         }
         let mut offset = 0;
-        for (index, child) in self.refs().enumerate() {
-            let end = offset + child.node_size();
+        for index in 0..self.child_count() {
+            let end = offset + self.child_size(index as u32);
             if end >= pos {
                 if end == pos {
                     return Ok((index + 1, end));

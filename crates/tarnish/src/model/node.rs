@@ -12,7 +12,7 @@ use super::replace::{self, Slice};
 use super::resolved_pos::ResolvedPos;
 use super::schema::{MarkType, NodeType, Schema};
 use super::view::{NodeRef, TextRef};
-use crate::chunk::{Builder, Chunk, EXTERN, NODES, Record, TEXT_NODE, ValueRef};
+use crate::chunk::{ASCII, Builder, Chunk, EXTERN, Kid, NODES, Record, TEXT_NODE, ValueRef};
 use crate::error::{Error, Result};
 use crate::js::Json;
 use crate::json::{self, Map};
@@ -344,7 +344,7 @@ impl<'a> Node<'a> {
             return self.clone();
         }
         Node::build(self.chunk().schema(), |builder| {
-            let marks = builder.reference(self.chunk(), self.record.marks);
+            let marks = builder.reference_markup(self.chunk(), self.record.marks);
             builder.text_of(self.record.ty, marks, text)
         })
     }
@@ -355,27 +355,71 @@ impl<'a> Node<'a> {
         if from == 0 && to == text.len() {
             return self.clone();
         }
-        let Some((start, end)) = text.byte_range(from, to) else {
-            return self.with_nonempty_text(&text.slice(from, to));
-        };
         Node::build(self.chunk().schema(), |builder| {
-            let mut record = self.record;
-            record.marks = builder.reference(self.chunk(), self.record.marks);
-            record.attrs = 0;
-            let (chunk, offset) = Chunk::resolve_shared(self.chunk(), self.record.a);
-            let chunk = chunk.clone();
-            record.a = builder.external(&chunk, offset + start as u32);
-            record.b = (end - start) as u32;
-            record.size = (to - from) as u32;
-            if record.flags & crate::chunk::ASCII == 0
-                && text
-                    .as_str()
-                    .is_some_and(|text| text[start..end].is_ascii())
-            {
-                record.flags |= crate::chunk::ASCII;
-            }
-            builder.text_record(record)
+            self.write_text_part(builder, text, from, to)
         })
+    }
+
+    /// Writes [`text_part`](Self::text_part) into `builder`: its index.
+    fn write_text_part(
+        &self,
+        builder: &mut Builder<'a>,
+        text: TextRef,
+        from: usize,
+        to: usize,
+    ) -> u32 {
+        let marks = builder.reference_markup(self.chunk(), self.record.marks);
+        let Some((start, end)) = text.byte_range(from, to) else {
+            return builder.text_of(self.record.ty, marks, &text.slice(from, to));
+        };
+        let (chunk, offset) = Chunk::resolve_shared(self.chunk(), self.record.a);
+        let ascii = self.record.flags & ASCII != 0
+            || text
+                .as_str()
+                .is_some_and(|text| text[start..end].is_ascii());
+        let a = builder.external(chunk, offset + start as u32);
+        builder.text_record(Record {
+            flags: if ascii { TEXT_NODE | ASCII } else { TEXT_NODE },
+            marks,
+            attrs: 0,
+            a,
+            b: (end - start) as u32,
+            size: (to - from) as u32,
+            ..self.record
+        })
+    }
+
+    /// A kid in `builder` for this text node with only its text from `from` to `to`, which
+    /// mustn't be empty: the node itself, or one written there. `None` for a node that isn't
+    /// text.
+    pub(crate) fn cut_text_into(
+        &self,
+        builder: &mut Builder<'a>,
+        from: usize,
+        to: usize,
+    ) -> Option<Kid> {
+        let text = self.text()?;
+        let to = to.min(text.len());
+        let from = from.min(to);
+        Some(match from == 0 && to == text.len() {
+            true => builder.kid(self.chunk(), self.id, to),
+            false => {
+                let part = self.write_text_part(builder, text, from, to);
+                Kid::local(part, (to - from) as u32)
+            }
+        })
+    }
+
+    /// Writes into `builder` this text node and `next` as one, when both are text with the same
+    /// marks.
+    pub(crate) fn join_text_into(&self, builder: &mut Builder<'a>, next: &Node<'a>) -> Option<Kid> {
+        let (text, more) = (self.text()?, next.text()?);
+        if !self.same_markup(next) {
+            return None;
+        }
+        let marks = builder.reference_markup(self.chunk(), self.record.marks);
+        let joined = builder.text_of_parts(self.record.ty, marks, text, more);
+        Some(Kid::local(joined, (text.len() + more.len()) as u32))
     }
 
     /// The node with only its content between `from` and `to`; for a text node, only that part
@@ -412,11 +456,9 @@ impl<'a> Node<'a> {
 
     /// This text node and `next` as one, when both are text with the same marks.
     pub(crate) fn join_text(&self, next: &Node<'a>) -> Option<Node<'a>> {
-        let (text, more) = (self.text()?, next.text()?);
-        if !self.same_markup(next) {
-            return None;
-        }
-        Some(self.with_nonempty_text(&[&text.to_text(), &more.to_text()].into_iter().collect()))
+        let mut builder = Builder::new(self.schema());
+        let joined = self.join_text_into(&mut builder, next)?;
+        Some(Node::at(builder.seal(), joined.index))
     }
 
     /// The document between `from` and `to` as a slice. With `include_parents`, the slice is
@@ -449,9 +491,46 @@ impl<'a> Node<'a> {
         replace::replace(&self.resolve(from)?, &self.resolve(to)?, slice)
     }
 
-    /// [`replace`](Self::replace), on a document the caller gives up.
+    /// [`replace`](Self::replace), on a document the caller gives up. When the range lies inside
+    /// one of its children, and nothing else holds the document or the list of its children,
+    /// the new child takes the old one's place in the list, which isn't copied.
     pub fn into_replaced(self, from: usize, to: usize, slice: &Slice<'a>) -> Result<Node<'a>> {
-        self.replace(from, to, slice)
+        let replaced = replace::replace_top(&self.resolve(from)?, &self.resolve(to)?, slice)?;
+        Ok(match replaced {
+            replace::Replaced::Node(node) => node,
+            replace::Replaced::Child(index, child) => self.with_child(index as u32, child),
+        })
+    }
+
+    /// The node with its child at `index` replaced: in place, when the node's record is in a
+    /// chunk only the node holds, and its list in one only that chunk holds.
+    fn with_child(self, index: u32, child: Node<'a>) -> Node<'a> {
+        let Node {
+            content,
+            record,
+            id,
+            own,
+        } = self;
+        let Some(mut chunk) = own else {
+            let node = Node {
+                content,
+                record,
+                id,
+                own: None,
+            };
+            return node.copy(node.content.replace_child(index as usize, child));
+        };
+        let (start, old_size) = (content.start(), content.child_size(index));
+        drop(content);
+        let size = record.size as usize - old_size + child.node_size();
+        if set_child(&mut chunk, record.a, start, index, &child).is_some() {
+            Arc::get_mut(&mut chunk)
+                .expect("a chunk changed in place")
+                .set_size(id, size as u32);
+            return Node::at(chunk, id);
+        }
+        let node = Node::at(chunk, id);
+        node.copy(node.content.replace_child(index as usize, child))
     }
 
     /// The node directly after `pos`.
@@ -714,6 +793,29 @@ impl<'a> Node<'a> {
         let id = reader.node(json)?;
         Ok(Node::at(reader.finish(), id))
     }
+}
+
+/// Puts `child` in place of kid `position` of the list at `start` that `kids`, a ref in `chunk`,
+/// names in an import: `None`, having changed nothing, unless `chunk` and that import are held
+/// by nothing else and own their bytes.
+fn set_child<'a>(
+    chunk: &mut Arc<Chunk<'a>>,
+    kids: u32,
+    start: u32,
+    position: u32,
+    child: &Node<'a>,
+) -> Option<()> {
+    let chunk = Arc::get_mut(chunk).filter(|chunk| chunk.is_owned())?;
+    let (slot, _) = chunk.external_ref(kids)?;
+    let list = chunk.import_mut(slot).filter(|list| list.is_owned())?;
+    let child_slot = list.import_in_place(child.chunk())?;
+    let kid = Kid {
+        slot: child_slot,
+        index: child.id,
+        size: child.node_size() as u32,
+    };
+    list.set_kid(start, position, kid);
+    Some(())
 }
 
 enum Failed {

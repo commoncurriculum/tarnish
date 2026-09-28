@@ -6,7 +6,7 @@ use std::sync::Arc;
 use super::node::Node;
 use super::schema::Schema;
 use super::view::{NodeRef, SetRef};
-use crate::chunk::{Builder, Chunk, LOCAL, Record, ValueRef};
+use crate::chunk::{Builder, Chunk, Kid, Record, ValueRef};
 use crate::stack;
 
 /// What a copy has written of what it copies: each value and set it copied, by where it was,
@@ -89,10 +89,10 @@ impl<'k, 'a> Copier<'k, 'a> {
     }
 
     /// The node written into the chunk, or where it is in a chunk kept: a kid.
-    fn node(&mut self, node: NodeRef) -> (u32, u32) {
+    fn node(&mut self, node: NodeRef) -> Kid {
         match self.kept_chunk(node.chunk) {
-            Some(kept) => self.builder.kid(kept, node.id),
-            None => (LOCAL, self.copy(node)),
+            Some(kept) => self.builder.kid(kept, node.id, node.node_size()),
+            None => Kid::local(self.copy(node), node.node_size() as u32),
         }
     }
 
@@ -112,7 +112,7 @@ impl<'k, 'a> Copier<'k, 'a> {
                 None => self.builder.text_of(record.ty, marks, &text.to_text()),
             };
         }
-        let kids: Vec<(u32, u32)> = node
+        let kids: Vec<Kid> = node
             .children()
             .map(|child| stack::grow(|| self.node(child)))
             .collect();

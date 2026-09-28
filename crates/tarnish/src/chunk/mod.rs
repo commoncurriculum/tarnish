@@ -13,10 +13,9 @@
 //!
 //! | section  | element                                            | bytes |
 //! |----------|----------------------------------------------------|-------|
-//! | imports  | an imported chunk's id                             | 8     |
 //! | externs  | an import's slot, and an index in it               | 8     |
 //! | nodes    | [`Record`]                                         | 24    |
-//! | kids     | a node: an import's slot, or all ones for this chunk, and its index | 8 |
+//! | kids     | a node: an import's slot, or all ones for this chunk, its index, and its size | 12 |
 //! | sets     | a set's first member, and its size                 | 8     |
 //! | members  | a mark ref                                         | 4     |
 //! | marks    | a mark type's rank, and an attrs value ref         | 8     |
@@ -26,6 +25,10 @@
 //! | text     | text nodes' UTF-8                                  | 1     |
 //! | units    | the UTF-16 units of text that has a lone surrogate | 2     |
 //! | strings  | attribute strings and keys, UTF-8                  | 1     |
+//! | imports  | an imported chunk's id                             | 8     |
+//!
+//! Imports come last, so that a change made in place, to a chunk only it holds, can import
+//! another chunk by adding to the end.
 
 mod build;
 mod value;
@@ -42,23 +45,23 @@ use crate::model::Schema;
 
 const MAGIC: [u8; 4] = *b"TRN1";
 
-pub(crate) const IMPORTS: usize = 0;
-pub(crate) const EXTERNS: usize = 1;
-pub(crate) const NODES: usize = 2;
-pub(crate) const KIDS: usize = 3;
-pub(crate) const SETS: usize = 4;
-pub(crate) const MEMBERS: usize = 5;
-pub(crate) const MARKS: usize = 6;
-pub(crate) const VALUES: usize = 7;
-pub(crate) const ELEMENTS: usize = 8;
-pub(crate) const ENTRIES: usize = 9;
-pub(crate) const TEXT: usize = 10;
-pub(crate) const UNITS: usize = 11;
-pub(crate) const STRINGS: usize = 12;
+pub(crate) const EXTERNS: usize = 0;
+pub(crate) const NODES: usize = 1;
+pub(crate) const KIDS: usize = 2;
+pub(crate) const SETS: usize = 3;
+pub(crate) const MEMBERS: usize = 4;
+pub(crate) const MARKS: usize = 5;
+pub(crate) const VALUES: usize = 6;
+pub(crate) const ELEMENTS: usize = 7;
+pub(crate) const ENTRIES: usize = 8;
+pub(crate) const TEXT: usize = 9;
+pub(crate) const UNITS: usize = 10;
+pub(crate) const STRINGS: usize = 11;
+pub(crate) const IMPORTS: usize = 12;
 pub(crate) const SECTIONS: usize = 13;
 
 /// Each section's element size in bytes.
-pub(crate) const WIDTHS: [usize; SECTIONS] = [8, 8, 24, 8, 8, 4, 8, 12, 4, 12, 1, 2, 1];
+pub(crate) const WIDTHS: [usize; SECTIONS] = [8, 24, 12, 8, 4, 8, 12, 4, 12, 1, 2, 1, 8];
 
 /// The magic, a word kept at zero, the schema's fingerprint, the chunk's id, and each section's
 /// element count.
@@ -67,10 +70,40 @@ pub(crate) const HEADER: usize = 4 + 4 + 8 + 8 + 4 * SECTIONS;
 /// A reference to something another chunk holds: the rest is an index into `externs`.
 pub(crate) const EXTERN: u32 = 1 << 31;
 
+/// The most imports a change in place gives a chunk, past which the change copies instead.
+const IMPORTS_IN_PLACE: usize = 16;
+
 /// A kid's slot for a node in the kid's own chunk. A kid names its node's chunk itself, rather
 /// than through `externs`, so that a list copies from one chunk to another kid by kid, as
 /// changes copy their parents' lists.
 pub(crate) const LOCAL: u32 = u32::MAX;
+
+/// A node in a list of kids: the slot of the chunk that holds it, or [`LOCAL`], its index there,
+/// and its size, which positions are found by without reading the node.
+#[derive(Clone, Copy)]
+pub(crate) struct Kid {
+    pub slot: u32,
+    pub index: u32,
+    pub size: u32,
+}
+
+impl Kid {
+    pub fn local(index: u32, size: u32) -> Kid {
+        Kid {
+            slot: LOCAL,
+            index,
+            size,
+        }
+    }
+
+    fn to_bytes(self) -> [u8; 12] {
+        let mut bytes = [0; 12];
+        bytes[..4].copy_from_slice(&self.slot.to_le_bytes());
+        bytes[4..8].copy_from_slice(&self.index.to_le_bytes());
+        bytes[8..].copy_from_slice(&self.size.to_le_bytes());
+        bytes
+    }
+}
 
 /// A record's flag for text held as UTF-16 units, because it has a lone surrogate.
 pub(crate) const HELD_AS_UNITS: u16 = 1;
@@ -234,12 +267,14 @@ impl<'a> Chunk<'a> {
         })
     }
 
+    /// A chunk a builder packed, with where it put each section and how many of each there are.
     pub(crate) fn from_parts(
         bytes: Vec<u8>,
         schema: Schema,
         imports: Vec<Arc<Chunk<'a>>>,
+        starts: [u32; SECTIONS],
+        counts: [u32; SECTIONS],
     ) -> Chunk<'a> {
-        let (starts, counts) = layout(&bytes).expect("a chunk the builder wrote");
         Chunk {
             id: double_word(&bytes, 16),
             bytes: Cow::Owned(bytes),
@@ -314,6 +349,16 @@ impl<'a> Chunk<'a> {
         (word(&self.bytes, at), word(&self.bytes, at + 4))
     }
 
+    /// The size of the node at `position` in a list of kids starting at `first`.
+    #[inline]
+    pub(crate) fn kid_size(&self, first: u32, position: u32) -> u32 {
+        let at = self.at(
+            KIDS,
+            first.checked_add(position).unwrap_or_else(|| corrupt()),
+        );
+        word(&self.bytes, at + 8)
+    }
+
     /// The import slot and index an extern names.
     #[inline]
     fn external(&self, reference: u32) -> (usize, u32) {
@@ -386,6 +431,27 @@ impl<'a> Chunk<'a> {
             (LOCAL, _) => corrupt(),
             (slot, index) => (self.import(slot), index),
         }
+    }
+
+    /// The nodes of `count` kids listed from `first`, which must be before `bound` where they
+    /// are in this chunk: each one's chunk and index.
+    #[inline]
+    pub(crate) fn children(
+        &self,
+        first: u32,
+        count: u32,
+        bound: u32,
+    ) -> impl DoubleEndedIterator<Item = (&Chunk<'a>, u32)> + ExactSizeIterator {
+        let kids = self.span(KIDS, first, count).as_chunks::<12>().0;
+        kids.iter().map(move |kid| {
+            let slot = u32::from_le_bytes([kid[0], kid[1], kid[2], kid[3]]);
+            let index = u32::from_le_bytes([kid[4], kid[5], kid[6], kid[7]]);
+            match slot {
+                LOCAL if index < bound => (self, index),
+                LOCAL => corrupt(),
+                slot => (&**self.import(slot), index),
+            }
+        })
     }
 
     #[inline]
@@ -490,6 +556,72 @@ impl<'a> Chunk<'a> {
     #[inline]
     pub fn ptr_eq(&self, other: &Chunk) -> bool {
         std::ptr::eq(self.bytes.as_ptr(), other.bytes.as_ptr())
+    }
+
+    /// The import slot and index a ref to another chunk names; `None` for a ref into this one.
+    pub(crate) fn external_ref(&self, reference: u32) -> Option<(usize, u32)> {
+        (reference & EXTERN != 0).then(|| self.external(reference))
+    }
+
+    /// An import, to change in place: `None` unless the chunk holds it alone.
+    pub(crate) fn import_mut(&mut self, slot: usize) -> Option<&mut Chunk<'a>> {
+        self.imports.get_mut(slot).and_then(Arc::get_mut)
+    }
+
+    /// Whether the chunk's bytes are its own, so that it may be changed in place once nothing
+    /// else holds it.
+    pub(crate) fn is_owned(&self) -> bool {
+        matches!(self.bytes, Cow::Owned(_))
+    }
+
+    /// Words of the chunk's own bytes written over, at byte `at`.
+    fn write_words(&mut self, at: usize, words: &[u32]) {
+        let Cow::Owned(bytes) = &mut self.bytes else {
+            panic!("a chunk changed in place owns its bytes");
+        };
+        for (word, bytes) in words.iter().zip(bytes[at..].as_chunks_mut::<4>().0) {
+            *bytes = word.to_le_bytes();
+        }
+    }
+
+    /// The slot of `chunk`, importing it, at the end, when it isn't an import yet: `None` once
+    /// the chunk has as many imports as changes in place may give it, which would otherwise
+    /// keep every chunk they made alive.
+    pub(crate) fn import_in_place(&mut self, chunk: &Arc<Chunk<'a>>) -> Option<u32> {
+        if let Some(slot) = self
+            .imports
+            .iter()
+            .position(|import| Arc::ptr_eq(import, chunk))
+        {
+            return Some(slot as u32);
+        }
+        if self.imports.len() >= IMPORTS_IN_PLACE {
+            return None;
+        }
+        let Cow::Owned(bytes) = &mut self.bytes else {
+            panic!("a chunk changed in place owns its bytes");
+        };
+        bytes.extend_from_slice(&chunk.id.to_le_bytes());
+        let slot = self.imports.len() as u32;
+        self.counts[IMPORTS] = slot + 1;
+        self.write_words(24 + IMPORTS * 4, &[slot + 1]);
+        self.imports.push(chunk.clone());
+        Some(slot)
+    }
+
+    /// Kid `position` of the list starting at `first` written over.
+    pub(crate) fn set_kid(&mut self, first: u32, position: u32, kid: Kid) {
+        let at = self.at(
+            KIDS,
+            first.checked_add(position).unwrap_or_else(|| corrupt()),
+        );
+        self.write_words(at, &[kid.slot, kid.index, kid.size]);
+    }
+
+    /// Node `id`'s size written over.
+    pub(crate) fn set_size(&mut self, id: u32, size: u32) {
+        let at = self.at(NODES, id);
+        self.write_words(at + 20, &[size]);
     }
 
     /// The chunks this one imports, and theirs, each once, this one's last.

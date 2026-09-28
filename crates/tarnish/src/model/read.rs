@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use super::attrs::Computed;
 use super::schema::Schema;
-use crate::chunk::{ASCII, BINDING, Builder, Chunk, HELD_AS_UNITS, LOCAL, Record, TEXT_NODE};
+use crate::chunk::{ASCII, BINDING, Builder, Chunk, HELD_AS_UNITS, Kid, Record, TEXT_NODE};
 use crate::error::{Error, Result};
 use crate::js::{AttrKeys, Given, Json, Keys, ReadMark, ReadNode};
 use crate::json::{EMPTY, Value};
@@ -19,7 +19,7 @@ pub(crate) struct Reader<'s, 'a> {
     builder: Builder<'a>,
     text_type: u16,
     /// The children of the fragments being read, the innermost's last.
-    children: Vec<u32>,
+    children: Vec<Kid>,
     /// The marks of the node being read: each one's rank and index.
     marks: Vec<(u32, u32)>,
 }
@@ -109,9 +109,7 @@ impl<'s, 'a> Reader<'s, 'a> {
             node_type.index() as u16,
             marks,
             attrs,
-            self.children[kids_start..kids_start + kids]
-                .iter()
-                .map(|&kid| (LOCAL, kid)),
+            self.children[kids_start..kids_start + kids].iter().copied(),
             size,
         );
         self.children.truncate(kids_start);
@@ -153,9 +151,7 @@ impl<'s, 'a> Reader<'s, 'a> {
     /// Reads a fragment, as a list of kids of its own: where it starts, its length and size.
     pub fn fragment_list<'j>(&mut self, json: impl Json<'j>) -> Result<(u32, u32, u32)> {
         let (start, count, size) = self.fragment(json)?;
-        let kids = self
-            .builder
-            .kids(self.children[start..].iter().map(|&kid| (LOCAL, kid)));
+        let kids = self.builder.kids(self.children[start..].iter().copied());
         self.children.truncate(start);
         Ok((kids, count as u32, size))
     }
@@ -175,15 +171,18 @@ impl<'s, 'a> Reader<'s, 'a> {
             && record.flags & TEXT_NODE != 0
             && let Some(&last) = self.children.last()
         {
-            let previous = self.builder.record(last);
+            let previous = self.builder.record(last.index);
             if previous.flags & TEXT_NODE != 0
                 && self.builder.sets_equal(previous.marks, record.marks)
             {
-                self.join_text(last, previous, record);
+                self.join_text(last.index, previous, record);
+                if let Some(last) = self.children.last_mut() {
+                    last.size += size as u32;
+                }
                 return size;
             }
         }
-        self.children.push(node);
+        self.children.push(Kid::local(node, size as u32));
         size
     }
 

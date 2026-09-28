@@ -221,12 +221,12 @@ impl<'c> ValueRef<'c> {
 
     /// `typeof`, `null` being `"null"`.
     pub fn type_of(self) -> &'static str {
-        match self.kind() {
-            Kind::Null => "null",
-            Kind::Bool(_) => "boolean",
-            Kind::Number(_) => "number",
-            Kind::String(_) => "string",
-            Kind::Array(..) | Kind::Object(..) => "object",
+        match Tag::from_word(self.chunk.value(self.index).0) {
+            Tag::Null => "null",
+            Tag::False | Tag::True => "boolean",
+            Tag::Int | Tag::UInt | Tag::Float => "number",
+            Tag::String => "string",
+            Tag::Array | Tag::Object => "object",
         }
     }
 
