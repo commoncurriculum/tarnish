@@ -150,6 +150,26 @@ fn node_spec(spec: &Map) -> Result<NodeSpec> {
         linebreak_replacement: flag(spec, "linebreakReplacement"),
         leaf_text: None,
         to_debug_string: None,
+        extra: rest(
+            spec,
+            &[
+                "content",
+                "marks",
+                "group",
+                "inline",
+                "atom",
+                "attrs",
+                "selectable",
+                "draggable",
+                "code",
+                "whitespace",
+                "definingAsContext",
+                "definingForContent",
+                "defining",
+                "isolating",
+                "linebreakReplacement",
+            ],
+        ),
     })
 }
 
@@ -161,7 +181,26 @@ fn mark_spec(spec: &Map) -> Result<MarkSpec> {
         group: truthy_string(spec, "group")?,
         spanning: unless_false(spec, "spanning"),
         code: flag(spec, "code"),
+        extra: rest(
+            spec,
+            &[
+                "attrs",
+                "inclusive",
+                "excludes",
+                "group",
+                "spanning",
+                "code",
+            ],
+        ),
     })
+}
+
+/// The properties of the spec other than those read.
+fn rest(spec: &Map, read: &[&str]) -> Map {
+    spec.iter()
+        .filter(|(key, _)| !read.contains(&key.as_str()))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
 }
 
 /// The node or mark types under `key`, in order: an object of each type's spec, or, where the
@@ -193,7 +232,7 @@ impl SchemaSpec {
     /// A spec from data: `nodes` and `marks`, each an object of the types' specs in order or an
     /// array of `[name, spec]` pairs, and `topNode`, as ProseMirror's `SchemaSpec` holds them.
     /// Functions a spec can hold in JavaScript, such as `toDOM` and `leafText`, have no place
-    /// here, and other properties are ignored.
+    /// here, and properties ProseMirror doesn't read are kept in each spec's `extra`.
     pub fn from_json(json: &Value) -> Result<SchemaSpec> {
         let spec = json
             .as_object()

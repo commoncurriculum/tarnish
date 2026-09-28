@@ -192,10 +192,94 @@ impl StyleRule {
     }
 }
 
-/// Rules in the order a parser made from a schema tries them: higher priority first, 50 when a
-/// rule gives none, and otherwise in the order given, which for a schema is each mark type's
-/// rules and then each node type's, in schema order.
-pub fn by_priority<T>(
+/// A rule of a node or mark type's `parseDOM`.
+#[derive(Clone)]
+pub enum ParseRule<N> {
+    Tag(Rule<TagRule<N>>),
+    Style(Rule<StyleRule>),
+}
+
+/// A field that says what a rule makes, as [`schema_rules`] reads it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuleField {
+    Node,
+    Mark,
+    Ignore,
+    ClearMark,
+}
+
+/// A parse rule as [`schema_rules`] orders it and names its type in it.
+pub trait SchemaRule {
+    fn priority(&self) -> Option<f64>;
+    fn has(&self, field: RuleField) -> bool;
+    /// Make the rule's `node` or `mark` the type of this name.
+    fn set(&mut self, field: RuleField, name: &str);
+}
+
+impl<N> SchemaRule for ParseRule<N> {
+    fn priority(&self) -> Option<f64> {
+        match self {
+            ParseRule::Tag(rule) => rule.priority,
+            ParseRule::Style(rule) => rule.priority,
+        }
+    }
+
+    fn has(&self, field: RuleField) -> bool {
+        match (self, field) {
+            (ParseRule::Tag(rule), RuleField::Node) => rule.kind.element.node.is_some(),
+            (ParseRule::Style(rule), RuleField::ClearMark) => rule.kind.clear_mark.is_some(),
+            (ParseRule::Tag(rule), RuleField::Mark) => rule.mark.is_some(),
+            (ParseRule::Style(rule), RuleField::Mark) => rule.mark.is_some(),
+            (ParseRule::Tag(rule), RuleField::Ignore) => rule.ignore,
+            (ParseRule::Style(rule), RuleField::Ignore) => rule.ignore,
+            _ => false,
+        }
+    }
+
+    fn set(&mut self, field: RuleField, name: &str) {
+        match (self, field) {
+            (ParseRule::Tag(rule), RuleField::Node) => rule.kind.element.node = Some(name.into()),
+            (ParseRule::Tag(rule), RuleField::Mark) => rule.mark = Some(name.into()),
+            (ParseRule::Style(rule), RuleField::Mark) => rule.mark = Some(name.into()),
+            _ => {}
+        }
+    }
+}
+
+/// `DOMParser.schemaRules`: each mark type's rules and then each node type's, given in schema
+/// order, in the order a parser tries them: higher priority first, 50 when a rule gives none,
+/// and otherwise as given. A rule that doesn't say what it makes is for its own type: a mark
+/// type's without a `mark`, `ignore` or `clearMark`, and a node type's without a `node`,
+/// `ignore` or `mark`.
+pub fn schema_rules<R: SchemaRule>(
+    schema: &Schema,
+    marks: Vec<Vec<R>>,
+    nodes: Vec<Vec<R>>,
+) -> Vec<R> {
+    let mark_names = schema.mark_types().map(|mark_type| mark_type.name());
+    let node_names = schema.node_types().map(|node_type| node_type.name());
+    let of_marks = marks.into_iter().zip(mark_names).map(|(rules, name)| {
+        let named = [RuleField::Mark, RuleField::Ignore, RuleField::ClearMark];
+        (rules, name, RuleField::Mark, named)
+    });
+    let of_nodes = nodes.into_iter().zip(node_names).map(|(rules, name)| {
+        let named = [RuleField::Node, RuleField::Ignore, RuleField::Mark];
+        (rules, name, RuleField::Node, named)
+    });
+    let rules = of_marks
+        .chain(of_nodes)
+        .flat_map(|(rules, name, field, named)| {
+            rules.into_iter().map(move |mut rule| {
+                if !named.iter().any(|&own| rule.has(own)) {
+                    rule.set(field, name);
+                }
+                rule
+            })
+        });
+    by_priority(rules, R::priority)
+}
+
+fn by_priority<T>(
     rules: impl IntoIterator<Item = T>,
     priority: impl Fn(&T) -> Option<f64>,
 ) -> Vec<T> {

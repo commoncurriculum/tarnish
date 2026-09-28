@@ -62,6 +62,30 @@ impl FragmentHandle {
     }
 
     #[napi]
+    pub fn maybe_child<'env>(&self, env: &'env Env, index: f64) -> Result<Option<Unknown<'env>>> {
+        let child = (index >= 0.0 && index.fract() == 0.0)
+            .then(|| self.fragment.maybe_child(index as usize))
+            .flatten();
+        child.map(|child| node::wrap(env, &child)).transpose()
+    }
+
+    #[napi(getter)]
+    pub fn first_child<'env>(&self, env: &'env Env) -> Result<Option<Unknown<'env>>> {
+        self.fragment
+            .first_child()
+            .map(|child| node::wrap(env, &child))
+            .transpose()
+    }
+
+    #[napi(getter)]
+    pub fn last_child<'env>(&self, env: &'env Env) -> Result<Option<Unknown<'env>>> {
+        self.fragment
+            .last_child()
+            .map(|child| node::wrap(env, &child))
+            .transpose()
+    }
+
+    #[napi]
     pub fn nodes_between(
         &self,
         env: &Env,

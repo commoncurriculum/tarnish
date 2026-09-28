@@ -8,8 +8,8 @@ use napi_derive::napi;
 use tarnish::Mark;
 use tarnish::dom::{
     AttrsHook, ClearMarkHook, Content, ContentElement, DomParser, ElementRule, FindPosition,
-    GetAttrsResult, GetContentHook, Namespace, ParseOptions, PreserveWhitespace, Rule,
-    RuleFromNode, Skip, StyleAttrsHook, StyleRule, TagRule,
+    GetAttrsResult, GetContentHook, Namespace, ParseOptions, PreserveWhitespace, Rule, RuleField,
+    RuleFromNode, SchemaRule, Skip, StyleAttrsHook, StyleRule, TagRule,
 };
 
 use super::{JsDom, JsNode, dom_node};
@@ -287,35 +287,82 @@ fn with_options<T>(
     Ok(result)
 }
 
-/// `DOMParser.schemaRules`: the schema's rules, given by type as its mark and node types come,
-/// in parse order, each as `[ofMark, typeIndex, ruleIndex, named]`. A rule is `named` when it
-/// gets its type's name: a mark type's rule without a `mark`, `ignore` or `clearMark`, and a
-/// node type's without a `node`, `ignore` or `mark`.
-#[napi]
-pub fn schema_rules(
-    marks: Vec<Vec<Object>>,
-    nodes: Vec<Vec<Object>>,
-) -> Result<Vec<(bool, u32, u32, bool)>> {
-    let mut rules = Vec::new();
-    for (of_mark, types) in [(true, marks), (false, nodes)] {
-        let own = match of_mark {
-            true => ["mark", "ignore", "clearMark"],
-            false => ["node", "ignore", "mark"],
-        };
-        for (type_index, type_rules) in types.iter().enumerate() {
-            for (rule_index, rule) in type_rules.iter().enumerate() {
-                let mut named = true;
-                for key in own {
-                    if truthy(rule, key)? {
-                        named = false;
-                        break;
-                    }
-                }
-                let entry = (of_mark, type_index as u32, rule_index as u32, named);
-                rules.push((priority(rule)?, entry));
+const RULE_FIELDS: [(RuleField, &str); 4] = [
+    (RuleField::Node, "node"),
+    (RuleField::Mark, "mark"),
+    (RuleField::Ignore, "ignore"),
+    (RuleField::ClearMark, "clearMark"),
+];
+
+fn field_key(field: RuleField) -> &'static str {
+    RULE_FIELDS
+        .iter()
+        .find(|(of, _)| *of == field)
+        .map(|(_, key)| *key)
+        .expect("a rule field")
+}
+
+/// A JavaScript rule, with what [`schema_rules`] reads of it, and the type name it gives it.
+struct JsRule<'env> {
+    object: Object<'env>,
+    priority: Option<f64>,
+    has: Vec<RuleField>,
+    named: Option<(RuleField, String)>,
+}
+
+impl<'env> JsRule<'env> {
+    fn read(object: Object<'env>) -> Result<Self> {
+        let mut has = Vec::new();
+        for (field, key) in RULE_FIELDS {
+            if truthy(&object, key)? {
+                has.push(field);
             }
         }
+        Ok(JsRule {
+            priority: priority(&object)?,
+            object,
+            has,
+            named: None,
+        })
     }
-    let ordered = tarnish::dom::by_priority(rules, |(priority, _)| *priority);
-    Ok(ordered.into_iter().map(|(_, entry)| entry).collect())
+}
+
+impl SchemaRule for JsRule<'_> {
+    fn priority(&self) -> Option<f64> {
+        self.priority
+    }
+
+    fn has(&self, field: RuleField) -> bool {
+        self.has.contains(&field)
+    }
+
+    fn set(&mut self, field: RuleField, name: &str) {
+        self.named = Some((field, name.to_owned()));
+    }
+}
+
+/// `DOMParser.schemaRules` of the rules given by type, as the schema's mark and node types
+/// come: the same rules, in parse order, each given its type's name where it gets one.
+#[napi]
+pub fn schema_rules<'env>(
+    schema: &SchemaHandle,
+    marks: Vec<Vec<Object<'env>>>,
+    nodes: Vec<Vec<Object<'env>>>,
+) -> Result<Vec<Object<'env>>> {
+    let read = |types: Vec<Vec<Object<'env>>>| -> Result<Vec<Vec<JsRule<'env>>>> {
+        types
+            .into_iter()
+            .map(|rules| rules.into_iter().map(JsRule::read).collect())
+            .collect()
+    };
+    let (marks, nodes) = (read(marks)?, read(nodes)?);
+    tarnish::dom::schema_rules(&schema.schema, marks, nodes)
+        .into_iter()
+        .map(|mut rule| {
+            if let Some((field, name)) = rule.named {
+                rule.object.set(field_key(field), name)?;
+            }
+            Ok(rule.object)
+        })
+        .collect()
 }

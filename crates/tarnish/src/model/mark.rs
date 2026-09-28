@@ -237,18 +237,23 @@ impl<'a> Mark<'a> {
 
     /// The set without this mark, or the set itself when it doesn't have it.
     pub fn remove_from_set(&self, set: &Marks<'a>) -> Marks<'a> {
-        let marks = set.to_vec();
-        match marks.iter().position(|other| self == other) {
-            Some(index) => {
-                let kept: Vec<Mark<'a>> = marks[..index]
-                    .iter()
-                    .chain(&marks[index + 1..])
-                    .cloned()
-                    .collect();
-                Marks::from_list(&kept)
-            }
+        match self.removed_from(&set.to_vec()) {
+            Some(kept) => Marks::from_list(&kept),
             None => set.clone(),
         }
+    }
+
+    /// [`remove_from_set`](Self::remove_from_set) on a list of marks, `None` when it doesn't
+    /// have this mark.
+    pub fn removed_from(&self, marks: &[Mark<'a>]) -> Option<Vec<Mark<'a>>> {
+        let index = marks.iter().position(|other| self == other)?;
+        Some(
+            marks[..index]
+                .iter()
+                .chain(&marks[index + 1..])
+                .cloned()
+                .collect(),
+        )
     }
 
     pub fn is_in_set(&self, set: &Marks) -> bool {
@@ -277,9 +282,14 @@ impl<'a> Mark<'a> {
         if marks.is_sorted_by_key(|mark| mark.view().rank()) {
             return Marks::from_list(marks);
         }
+        Marks::from_list(&Mark::sorted(marks))
+    }
+
+    /// The marks sorted by rank, as `Mark.setFrom` sorts an array.
+    pub fn sorted(marks: &[Mark<'a>]) -> Vec<Mark<'a>> {
         let mut copy = marks.to_vec();
         copy.sort_by_key(|mark| mark.view().rank());
-        Marks::from_list(&copy)
+        copy
     }
 
     pub fn from_json<'j>(schema: &Schema, json: impl Json<'j>) -> Result<Mark<'static>> {

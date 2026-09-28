@@ -128,11 +128,11 @@ export class Fragment {
   addToStart(node) { return this.h.addToStart(node.h) }
   addToEnd(node) { return this.h.addToEnd(node.h) }
   eq(other) { return this.h.eq(other.h) }
-  get firstChild() { return this.content.length ? this.content[0] : null }
-  get lastChild() { return this.content.length ? this.content[this.content.length - 1] : null }
+  get firstChild() { return this.h.firstChild ?? null }
+  get lastChild() { return this.h.lastChild ?? null }
   get childCount() { return this.h.childCount }
   child(index) { return this.h.child(index) }
-  maybeChild(index) { return this.content[index] || null }
+  maybeChild(index) { return this.h.maybeChild(index) ?? null }
   forEach(f) { this.h.forEach(f) }
   findDiffStart(other, pos = 0) { return this.h.findDiffStart(other.h, pos) }
   findDiffEnd(other, pos = this.size, otherPos = other.size) { return this.h.findDiffEnd(other.h, pos, otherPos) }
@@ -252,11 +252,11 @@ export class NodeRange {
 
   /// @internal
   get h() { return (this.#h ??= new native.NodeRangeHandle(this.$from.h, this.$to.h, this.depth)) }
-  get start() { return this.$from.before(this.depth + 1) }
-  get end() { return this.$to.after(this.depth + 1) }
-  get parent() { return this.$from.node(this.depth) }
-  get startIndex() { return this.$from.index(this.depth) }
-  get endIndex() { return this.$to.indexAfter(this.depth) }
+  get start() { return this.h.start }
+  get end() { return this.h.end }
+  get parent() { return this.h.parent }
+  get startIndex() { return this.h.startIndex }
+  get endIndex() { return this.h.endIndex }
 }
 
 export class ContentMatch {
@@ -315,11 +315,11 @@ export class NodeType {
     this.markSet = null
   }
 
-  get isInline() { return !this.isBlock }
-  get isTextblock() { return this.isBlock && this.inlineContent }
+  get isInline() { return this.h.isInline }
+  get isTextblock() { return this.h.isTextblock }
   get isLeaf() { return this.h.isLeaf }
-  get isAtom() { return this.isLeaf || !!this.spec.atom }
-  isInGroup(group) { return this.groups.indexOf(group) > -1 }
+  get isAtom() { return this.h.isAtom }
+  isInGroup(group) { return this.h.isInGroup(group) }
   get whitespace() { return this.h.whitespace }
   hasRequiredAttrs() { return this.h.hasRequiredAttrs }
   compatibleContent(other) { return this == other || this.h.compatibleContent(other.h) }
@@ -413,9 +413,7 @@ export class Schema {
       type = this.nodeType(type)
     else if (!(type instanceof NodeType))
       throw new RangeError("Invalid node type: " + type)
-    else if (type.schema != this)
-      throw new RangeError("Node type from different schema used (" + type.name + ")")
-    return type.createChecked(attrs, content, marks)
+    return this.h.node(type.h, attrs, Fragment.from(content).h, markHandles(marks))
   }
 
   text(text, marks) { return this.h.text(text, markHandles(marks)) }
@@ -462,14 +460,8 @@ export class DOMParser {
   parseSlice(dom, options = {}) { return this.h.parseSlice(dom, parseOptions(options, this.schema)) }
 
   static schemaRules(schema) {
-    let rulesOf = type => type.spec.parseDOM || []
-    let order = native.schemaRules(schema.markList.map(rulesOf), schema.nodeList.map(rulesOf))
-    return order.map(([ofMark, typeIndex, ruleIndex, named]) => {
-      let type = (ofMark ? schema.markList : schema.nodeList)[typeIndex]
-      let rule = copy(rulesOf(type)[ruleIndex])
-      if (named) rule[ofMark ? "mark" : "node"] = type.name
-      return rule
-    })
+    let rulesOf = type => (type.spec.parseDOM || []).map(copy)
+    return native.schemaRules(schema.h, schema.markList.map(rulesOf), schema.nodeList.map(rulesOf))
   }
 
   static fromSchema(schema) {

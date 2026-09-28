@@ -17,8 +17,8 @@ use node_context::NodeContext;
 
 pub use rule::{
     AttrsHook, ClearMarkHook, Content, ContentElement, ContentElementHook, ElementRule,
-    GetAttrsResult, GetContentHook, Namespace, PreserveWhitespace, Rule, RuleFromNode, Skip,
-    StyleAttrsHook, StyleRule, TagRule, by_priority,
+    GetAttrsResult, GetContentHook, Namespace, ParseRule, PreserveWhitespace, Rule, RuleField,
+    RuleFromNode, SchemaRule, Skip, StyleAttrsHook, StyleRule, TagRule, schema_rules,
 };
 
 /// A DOM position to find the document position of: the offset into `node`. Parsing sets `pos`
@@ -115,8 +115,30 @@ impl<N: Clone> DomParser<N> {
         })
     }
 
+    /// `DOMParser.fromSchema`: a parser of each mark type's rules and each node type's, given in
+    /// schema order, ordered and named by [`schema_rules`].
+    pub fn from_schema(
+        schema: Schema,
+        marks: Vec<Vec<ParseRule<N>>>,
+        nodes: Vec<Vec<ParseRule<N>>>,
+    ) -> Result<Self> {
+        let (mut tags, mut styles) = (Vec::new(), Vec::new());
+        for rule in schema_rules(&schema, marks, nodes) {
+            match rule {
+                ParseRule::Tag(rule) => tags.push(rule),
+                ParseRule::Style(rule) => styles.push(rule),
+            }
+        }
+        DomParser::new(schema, tags, styles)
+    }
+
     pub fn schema(&self) -> &Schema {
         &self.schema
+    }
+
+    /// The tag rules and the style rules, each kind in the order it is tried.
+    pub fn rules(&self) -> (&[Rule<TagRule<N>>], &[Rule<StyleRule>]) {
+        (&self.tags, &self.styles)
     }
 
     /// Parse a document from the content of a DOM node.

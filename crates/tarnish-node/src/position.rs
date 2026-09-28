@@ -173,4 +173,29 @@ impl NodeRangeHandle {
             range: NodeRange::new(from.pos.clone(), to.pos.clone(), depth as usize),
         }
     }
+
+    #[napi(getter)]
+    pub fn start(&self) -> u32 {
+        self.range.start() as u32
+    }
+
+    #[napi(getter)]
+    pub fn end(&self) -> u32 {
+        self.range.end() as u32
+    }
+
+    #[napi(getter)]
+    pub fn parent<'env>(&self, env: &'env Env) -> Result<Unknown<'env>> {
+        node::wrap(env, self.range.parent())
+    }
+
+    #[napi(getter)]
+    pub fn start_index(&self) -> u32 {
+        self.range.start_index() as u32
+    }
+
+    #[napi(getter)]
+    pub fn end_index(&self) -> u32 {
+        self.range.end_index() as u32
+    }
 }

@@ -138,6 +138,29 @@ impl SchemaHandle {
         mark::wrap(env, &mark)
     }
 
+    #[napi]
+    pub fn node<'env>(
+        &self,
+        env: &'env Env,
+        node_type: &NodeTypeHandle,
+        attrs: Unknown,
+        content: &FragmentHandle,
+        marks: Option<Vec<&MarkHandle>>,
+    ) -> Result<Unknown<'env>> {
+        let attrs = js::attrs_from_js(attrs)?;
+        let marks = mark::list(marks.unwrap_or_default());
+        let node = self
+            .schema
+            .node(
+                &node_type.node_type(),
+                attrs.as_ref(),
+                content.fragment.clone(),
+                &marks,
+            )
+            .or_throw(env)?;
+        node::wrap(env, &node)
+    }
+
     /// The index of the node type of this name, raising an error when there is none.
     #[napi]
     pub fn expect_node_type(&self, env: &Env, name: String) -> Result<u32> {
@@ -194,6 +217,26 @@ impl NodeTypeHandle {
     #[napi(getter)]
     pub fn is_leaf(&self) -> bool {
         self.node_type().is_leaf()
+    }
+
+    #[napi(getter)]
+    pub fn is_inline(&self) -> bool {
+        self.node_type().is_inline()
+    }
+
+    #[napi(getter)]
+    pub fn is_textblock(&self) -> bool {
+        self.node_type().is_textblock()
+    }
+
+    #[napi(getter)]
+    pub fn is_atom(&self) -> bool {
+        self.node_type().is_atom()
+    }
+
+    #[napi]
+    pub fn is_in_group(&self, group: String) -> bool {
+        self.node_type().is_in_group(&group)
     }
 
     #[napi(getter)]
@@ -335,16 +378,7 @@ impl NodeTypeHandle {
         env: &'env Env,
         marks: Vec<&MarkHandle>,
     ) -> Result<Option<Unknown<'env>>> {
-        let marks = mark::list(marks);
-        let node_type = self.node_type();
-        let changed = (!node_type.allows_mark_list(&marks)).then(|| {
-            marks
-                .iter()
-                .filter(|mark| node_type.allows_mark_type(&mark.mark_type()))
-                .cloned()
-                .collect()
-        });
-        mark::changed_list(env, changed)
+        mark::changed_list(env, self.node_type().allowed_from(&mark::list(marks)))
     }
 }
 
@@ -403,18 +437,7 @@ impl MarkTypeHandle {
         env: &'env Env,
         set: Vec<&MarkHandle>,
     ) -> Result<Option<Unknown<'env>>> {
-        let set = mark::list(set);
-        let mark_type = self.mark_type();
-        let changed = set
-            .iter()
-            .any(|mark| mark.mark_type() == mark_type)
-            .then(|| {
-                set.iter()
-                    .filter(|mark| mark.mark_type() != mark_type)
-                    .cloned()
-                    .collect()
-            });
-        mark::changed_list(env, changed)
+        mark::changed_list(env, self.mark_type().removed_from(&mark::list(set)))
     }
 
     #[napi]

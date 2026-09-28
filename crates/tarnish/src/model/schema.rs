@@ -46,6 +46,8 @@ pub struct NodeSpec {
     pub linebreak_replacement: bool,
     pub leaf_text: Option<NodeHook<Text>>,
     pub to_debug_string: Option<NodeHook<String>>,
+    /// The spec's other properties, as given, such as prosemirror-tables' `tableRole`.
+    pub extra: Map,
 }
 
 #[derive(Clone, Default)]
@@ -57,6 +59,8 @@ pub struct MarkSpec {
     pub group: Option<String>,
     pub spanning: Option<bool>,
     pub code: bool,
+    /// The spec's other properties, as given.
+    pub extra: Map,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -681,11 +685,19 @@ impl<'s> NodeType<'s> {
         if self.allows_marks(marks) {
             return marks.clone();
         }
-        let kept: Vec<Mark<'a>> = marks
-            .iter()
+        Mark::set_from(&self.allowed(marks.iter()))
+    }
+
+    /// [`allowed_marks`](Self::allowed_marks) on a list of marks, `None` when this type allows
+    /// them all.
+    pub fn allowed_from<'a>(&self, marks: &[Mark<'a>]) -> Option<Vec<Mark<'a>>> {
+        (!self.allows_mark_list(marks)).then(|| self.allowed(marks.iter().cloned()))
+    }
+
+    fn allowed<'a>(&self, marks: impl Iterator<Item = Mark<'a>>) -> Vec<Mark<'a>> {
+        marks
             .filter(|mark| self.allows_mark_type(&mark.mark_type()))
-            .collect();
-        Mark::set_from(&kept)
+            .collect()
     }
 }
 
@@ -752,11 +764,20 @@ impl<'s> MarkType<'s> {
         if !set.iter().any(|mark| mark.mark_type() == *self) {
             return set.clone();
         }
-        let kept: Vec<Mark<'a>> = set
+        Mark::set_from(&self.without(set.iter()))
+    }
+
+    /// [`remove_from_set`](Self::remove_from_set) on a list of marks, `None` when it has none of
+    /// this type.
+    pub fn removed_from<'a>(&self, marks: &[Mark<'a>]) -> Option<Vec<Mark<'a>>> {
+        marks
             .iter()
-            .filter(|mark| mark.mark_type() != *self)
-            .collect();
-        Mark::set_from(&kept)
+            .any(|mark| mark.mark_type() == *self)
+            .then(|| self.without(marks.iter().cloned()))
+    }
+
+    fn without<'a>(&self, marks: impl Iterator<Item = Mark<'a>>) -> Vec<Mark<'a>> {
+        marks.filter(|mark| mark.mark_type() != *self).collect()
     }
 
     /// The mark of this type in the set, if there is one.

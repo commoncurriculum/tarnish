@@ -76,15 +76,7 @@ impl MarkHandle {
         env: &'env Env,
         set: Vec<&MarkHandle>,
     ) -> Result<Option<Unknown<'env>>> {
-        let mut set = list(set);
-        let removed = set
-            .iter()
-            .position(|other| self.mark == *other)
-            .map(|index| {
-                set.remove(index);
-                set
-            });
-        changed_list(env, removed)
+        changed_list(env, self.mark.removed_from(&list(set)))
     }
 
     #[napi]
@@ -110,7 +102,5 @@ pub fn marks_same_set(a: Vec<&MarkHandle>, b: Vec<&MarkHandle>) -> bool {
 
 #[napi]
 pub fn marks_set_from<'env>(env: &'env Env, marks: Vec<&MarkHandle>) -> Result<Unknown<'env>> {
-    let mut marks = list(marks);
-    marks.sort_by_key(|mark| mark.mark_type().rank());
-    wrap_list(env, &marks)
+    wrap_list(env, &Mark::sorted(&list(marks)))
 }
