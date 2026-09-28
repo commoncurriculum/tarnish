@@ -857,25 +857,14 @@ impl<'c> Walk<'c> {
         }
         data.attrs
             .check_ref(node.attrs(), "node", node_type.name())?;
-        let marks = node.marks();
-        for mark in marks.iter() {
-            let mark_type = mark.mark_type();
-            mark_type
-                .data()
-                .attrs
-                .check_ref(mark.attrs(), "mark", mark_type.name())?;
-        }
-        // Adding one mark to no marks gives that mark, so only a longer set can be invalid.
-        if marks.len() > 1 && !valid_set(marks) {
-            let names: Vec<&str> = marks.iter().map(|mark| mark.mark_type().name()).collect();
-            return Err(Failed::Error(Error::Range(format!(
-                "Invalid collection of marks for node {}: {}",
-                node_type.name(),
-                names.join(",")
-            ))));
-        }
+        check_marks(node)?;
         for index in 0..self.kids.len() - base {
             let child = self.kids[base + index];
+            // Text has no content and no attributes, so only its marks can be wrong.
+            if child.is_text() {
+                check_marks(child)?;
+                continue;
+            }
             self.path.push(index as u32);
             stack::grow(|| self.check(child))?;
             self.path.pop();
@@ -883,6 +872,28 @@ impl<'c> Walk<'c> {
         self.kids.truncate(base);
         Ok(())
     }
+}
+
+/// Checks a node's marks' attributes, and that they make a set.
+fn check_marks(node: NodeRef) -> Result<(), Failed> {
+    let marks = node.marks();
+    for mark in marks.iter() {
+        let mark_type = mark.mark_type();
+        mark_type
+            .data()
+            .attrs
+            .check_ref(mark.attrs(), "mark", mark_type.name())?;
+    }
+    // Adding one mark to no marks gives that mark, so only a longer set can be invalid.
+    if marks.len() > 1 && !valid_set(marks) {
+        let names: Vec<&str> = marks.iter().map(|mark| mark.mark_type().name()).collect();
+        return Err(Failed::Error(Error::Range(format!(
+            "Invalid collection of marks for node {}: {}",
+            node.node_type().name(),
+            names.join(",")
+        ))));
+    }
+    Ok(())
 }
 
 /// Whether adding each mark in turn to no marks gives the set back: sorted by rank, with no

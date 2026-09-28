@@ -47,6 +47,7 @@ struct Scratch {
 const KEYS: usize = 64;
 
 thread_local! {
+    #[expect(clippy::vec_box, reason = "a builder takes its scratch boxed, so as not to move it")]
     static SPARE: RefCell<Vec<Box<Scratch>>> = const { RefCell::new(Vec::new()) };
 }
 

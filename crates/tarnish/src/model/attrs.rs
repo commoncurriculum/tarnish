@@ -259,17 +259,36 @@ impl AttrSet {
         if values.index == 0 && self.attrs.iter().all(|(_, attr)| attr.check.is_none()) {
             return Ok(());
         }
-        for (key, _) in values.entries_bytes() {
-            if !self.attrs.iter().any(|(known, _)| known.as_bytes() == key) {
-                let key = String::from_utf8_lossy(key);
-                return Err(Error::Range(format!(
-                    "Unsupported attribute {key} for {kind} of type {type_name}"
-                )));
+        // Each attribute's value, found as the keys are checked, for the checks that follow.
+        let (mut few, mut many);
+        let found: &mut [Option<ValueRef>] = match self.attrs.len() {
+            len @ ..=8 => {
+                few = [None; 8];
+                &mut few[..len]
+            }
+            len => {
+                many = vec![None; len];
+                &mut many
+            }
+        };
+        for (key, value) in values.entries_bytes() {
+            match self
+                .attrs
+                .iter()
+                .position(|(known, _)| known.as_bytes() == key)
+            {
+                Some(index) => found[index] = Some(value),
+                None => {
+                    let key = String::from_utf8_lossy(key);
+                    return Err(Error::Range(format!(
+                        "Unsupported attribute {key} for {kind} of type {type_name}"
+                    )));
+                }
             }
         }
-        for (name, attr) in &self.attrs {
+        for ((_, attr), value) in self.attrs.iter().zip(found.iter()) {
             if attr.check.is_some() {
-                check_value(attr, values.get(name).map(Found::Chunk))?;
+                check_value(attr, value.map(Found::Chunk))?;
             }
         }
         Ok(())

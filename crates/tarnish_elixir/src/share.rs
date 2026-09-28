@@ -10,7 +10,7 @@ use crate::etf;
 const BYTES_PER_ITEM: usize = 64;
 
 /// Reading past this many children for one that was read finds it too rarely to pay.
-const LOOK_AHEAD: u32 = 32;
+const LOOK_AHEAD: usize = 32;
 
 /// Past the work a limit allows.
 pub struct TooBig;
@@ -124,23 +124,29 @@ impl<'a> Sharer<'a> {
         read: NodeRef,
         read_items: Option<&[Term<'a>]>,
     ) -> Result<Term<'a>, TooBig> {
-        let read_count = read_items.map_or(0, |_| read.child_count());
+        let read_children: Vec<NodeRef> = match read_items {
+            Some(_) => read.children().collect(),
+            None => Vec::new(),
+        };
         let mut terms = Vec::with_capacity(node.child_count() as usize);
         let mut next = 0;
         for child in node.children() {
             self.spend(BYTES_PER_ITEM)?;
-            let found = (next..read_count.min(next + LOOK_AHEAD))
-                .find(|&index| read.child(index).ptr_eq(child));
+            let found = read_children[next..]
+                .iter()
+                .take(LOOK_AHEAD)
+                .position(|read| read.ptr_eq(child))
+                .map(|offset| next + offset);
             let index = match found {
                 Some(index) => {
                     next = index + 1;
                     Some(index)
                 }
-                None => (next < read_count).then_some(next),
+                None => (next < read_children.len()).then_some(next),
             };
             let pair = index
                 .zip(read_items)
-                .map(|(index, items)| (read.child(index), items[index as usize]));
+                .map(|(index, items)| (read_children[index], items[index]));
             terms.push(stack::grow(|| self.node(child, pair))?);
         }
         Ok(terms.encode(self.env))
