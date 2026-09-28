@@ -77,7 +77,7 @@ impl<'c> NodeRef<'c> {
     /// The chunk that holds the list of the node's kids, where it starts, and the bound of the
     /// kids in that chunk.
     #[inline]
-    fn kids(self) -> (&'c Chunk<'c>, u32, u32) {
+    pub(crate) fn kids(self) -> (&'c Chunk<'c>, u32, u32) {
         self.chunk.kids_of(self.id, self.record.a)
     }
 

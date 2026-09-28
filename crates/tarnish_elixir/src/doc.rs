@@ -92,18 +92,25 @@ impl<'a> Doc<'a> {
         (self.schema, binaries).encode(env)
     }
 
-    /// `doc` in a new chunk, and how many of the oldest chunks it refers into.
+    /// `doc` in a new chunk, and how many of the oldest chunks it refers into. The chunks the
+    /// change wrote, which hold no less than the new chunk will, tell how big it is before it's
+    /// written, so that it's written once.
     fn flatten(&self, doc: &Node<'a>) -> (Node<'a>, usize) {
+        let held = |chunk: &Arc<Chunk>| self.chunks.iter().any(|held| held.ptr_eq(chunk));
+        let mut size: usize = Chunk::closure(doc.chunk())
+            .iter()
+            .filter(|chunk| !held(chunk))
+            .map(|chunk| chunk.bytes().len())
+            .sum();
         let mut kept = self.chunks.len();
-        let mut flat = doc.flatten(&self.chunks);
         while kept > 1 {
             let newest = self.chunks[kept - 1].bytes().len();
-            if kept < MOST_CHUNKS && newest > 2 * flat.chunk().bytes().len() {
+            if kept < MOST_CHUNKS && newest > 2 * size {
                 break;
             }
             kept -= 1;
-            flat = doc.flatten(&self.chunks[..kept]);
+            size += newest;
         }
-        (flat, kept)
+        (doc.flatten(&self.chunks[..kept]), kept)
     }
 }

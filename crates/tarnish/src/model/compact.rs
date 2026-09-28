@@ -88,14 +88,6 @@ impl<'k, 'a> Copier<'k, 'a> {
         written
     }
 
-    /// The node written into the chunk, or where it is in a chunk kept: a kid.
-    fn node(&mut self, node: NodeRef) -> Kid {
-        match self.kept_chunk(node.chunk) {
-            Some(kept) => self.builder.kid(kept, node.id, node.node_size()),
-            None => Kid::local(self.copy(node), node.node_size() as u32),
-        }
-    }
-
     /// The node written into the chunk: its index.
     fn copy(&mut self, node: NodeRef) -> u32 {
         let marks = self.set(node.marks());
@@ -112,13 +104,29 @@ impl<'k, 'a> Copier<'k, 'a> {
                 None => self.builder.text_of(record.ty, marks, &text.to_text()),
             };
         }
-        let kids: Vec<Kid> = node
-            .children()
-            .map(|child| stack::grow(|| self.node(child)))
-            .collect();
+        let (list, start, bound) = node.kids();
+        let count = node.child_count();
+        let mut kids = Vec::with_capacity(count as usize);
+        // Kids come in runs from one chunk, whose slot here, if it's kept, is found once a run.
+        let mut run: Option<(&Chunk, Option<u32>)> = None;
+        for (chunk, index, size) in list.kids(start, count, bound) {
+            let slot = match run {
+                Some((last, slot)) if last.ptr_eq(chunk) => slot,
+                _ => {
+                    let slot = self.kept_chunk(chunk).map(|kept| self.builder.import(kept));
+                    run = Some((chunk, slot));
+                    slot
+                }
+            };
+            kids.push(match slot {
+                Some(slot) => Kid { slot, index, size },
+                None => Kid::local(stack::grow(|| self.copy(NodeRef::at(chunk, index))), size),
+            });
+        }
         let attrs = self.value(node.attrs());
+        let first = self.builder.push_kids(&kids);
         self.builder
-            .element(record.ty, marks, attrs, kids.into_iter(), record.size)
+            .element_of(record.ty, marks, attrs, first, count, record.size)
     }
 }
 

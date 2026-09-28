@@ -540,7 +540,16 @@ impl<'a> Node<'a> {
     /// one of its children, and nothing else holds the document or the list of its children,
     /// the new child takes the old one's place in the list, which isn't copied.
     pub fn into_replaced(self, from: usize, to: usize, slice: &Slice<'a>) -> Result<Node<'a>> {
-        let replaced = replace::replace_top(&self.resolve(from)?, &self.resolve(to)?, slice)?;
+        // The positions hold the node, which must be held by nothing else to change in place.
+        let replaced = {
+            let start = self.resolve(from)?;
+            let end = if to == from {
+                None
+            } else {
+                Some(self.resolve(to)?)
+            };
+            replace::replace_top(&start, end.as_ref().unwrap_or(&start), slice)?
+        };
         Ok(match replaced {
             replace::Replaced::Node(node) => node,
             replace::Replaced::Child(index, child) => self.with_child(index as u32, child),

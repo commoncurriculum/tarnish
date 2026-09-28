@@ -450,14 +450,27 @@ impl<'a> Chunk<'a> {
         count: u32,
         bound: u32,
     ) -> impl DoubleEndedIterator<Item = (&Chunk<'a>, u32)> + ExactSizeIterator {
+        self.kids(first, count, bound)
+            .map(|(chunk, index, _)| (chunk, index))
+    }
+
+    /// [`children`](Self::children), with the size each kid holds.
+    #[inline]
+    pub(crate) fn kids(
+        &self,
+        first: u32,
+        count: u32,
+        bound: u32,
+    ) -> impl DoubleEndedIterator<Item = (&Chunk<'a>, u32, u32)> + ExactSizeIterator {
         let kids = self.span(KIDS, first, count).as_chunks::<12>().0;
         kids.iter().map(move |kid| {
             let slot = u32::from_le_bytes([kid[0], kid[1], kid[2], kid[3]]);
             let index = u32::from_le_bytes([kid[4], kid[5], kid[6], kid[7]]);
+            let size = u32::from_le_bytes([kid[8], kid[9], kid[10], kid[11]]);
             match slot {
-                LOCAL if index < bound => (self, index),
+                LOCAL if index < bound => (self, index, size),
                 LOCAL => corrupt(),
-                slot => (&**self.import(slot), index),
+                slot => (&**self.import(slot), index, size),
             }
         })
     }

@@ -119,13 +119,19 @@ impl<'a> Builder<'a> {
     }
 
     /// The slot of an imported chunk, importing it if it isn't yet.
+    #[inline]
     pub fn import(&mut self, chunk: &Arc<Chunk<'a>>) -> u32 {
-        let address = Arc::as_ptr(chunk) as *const u8 as usize;
-        if let Some(last) = self.imports.last()
-            && Arc::ptr_eq(last, chunk)
-        {
-            return self.imports.len() as u32 - 1;
+        match self.imports.last() {
+            Some(last) if Arc::ptr_eq(last, chunk) => self.imports.len() as u32 - 1,
+            _ => self.import_other(chunk),
         }
+    }
+
+    /// [`import`](Self::import) of a chunk other than the last imported.
+    #[cold]
+    #[inline(never)]
+    fn import_other(&mut self, chunk: &Arc<Chunk<'a>>) -> u32 {
+        let address = Arc::as_ptr(chunk) as *const u8 as usize;
         if self.imports.len() <= 8 {
             if let Some(slot) = self
                 .imports
@@ -240,6 +246,22 @@ impl<'a> Builder<'a> {
     /// Adds a kid to the kids section.
     pub fn push_kid(&mut self, kid: Kid) {
         self.push(KIDS, &kid.to_bytes());
+    }
+
+    /// Adds kids to the kids section: where they start.
+    pub fn push_kids(&mut self, kids: &[Kid]) -> u32 {
+        let start = self.counts[KIDS];
+        self.counts[KIDS] = start
+            .checked_add(kids.len() as u32)
+            .filter(|&total| total < EXTERN)
+            .expect("a chunk holds fewer than 2^31 of anything");
+        let list = &mut self.scratch.sections[KIDS];
+        let written = list.len();
+        list.resize(written + kids.len() * 12, 0);
+        for (kid, bytes) in kids.iter().zip(list[written..].as_chunks_mut::<12>().0) {
+            *bytes = kid.to_bytes();
+        }
+        start
     }
 
     /// Where a string is in `strings`.
