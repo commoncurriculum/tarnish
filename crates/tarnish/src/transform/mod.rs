@@ -12,7 +12,7 @@ mod transform;
 pub use map::{MapResult, Mappable, Mapping, MappingSlice, Recover, StepMap};
 pub use mark::MarkMatch;
 pub use replace::replace_step;
-pub use step::{MarkOp, Step, StepResult};
+pub use step::{CustomStep, MarkOp, Step, StepFromJson, StepResult, register_step};
 pub use structure::{
     BlockAttrs, Wrapper, can_join, can_split, drop_point, find_wrapping, insert_point, join_point,
     lift_target,

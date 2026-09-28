@@ -6,7 +6,8 @@ use napi::bindgen_prelude::{FnArgs, FromNapiValue, JsObjectValue, Object, Unknow
 use napi::{Env, Error, Result};
 use napi_derive::napi;
 use tarnish::{
-    AttributeSpec, MarkType, NodeHook, NodeType, Schema, SchemaSpec, Text, Validate, Whitespace,
+    AttributeDefault, AttributeSpec, MarkType, NodeHook, NodeType, Schema, SchemaSpec, Text,
+    Validate, Whitespace,
 };
 
 use crate::content::Place;
@@ -38,8 +39,8 @@ fn attribute_hooks(attrs: &mut [(String, AttributeSpec)], spec: &Object) -> Resu
                 })
             })));
         }
-        if attr.default.is_none() && spec.has_own_property("default")? {
-            attr.default = Some(None);
+        if matches!(attr.default, AttributeDefault::Required) && spec.has_own_property("default")? {
+            attr.default = AttributeDefault::Undefined;
         }
     }
     Ok(())

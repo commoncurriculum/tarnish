@@ -7,7 +7,7 @@ use super::attrs::Attrs;
 use super::read::Reader;
 use super::schema::{MarkType, Schema};
 use super::view::{MarkRef, SetRef};
-use crate::chunk::{Builder, Chunk, ValueRef};
+use crate::chunk::{Builder, Chunk, EMPTY_SET, Holder, ValueRef};
 use crate::error::Result;
 use crate::js::Json;
 use crate::json::Map;
@@ -29,11 +29,10 @@ pub struct Marks<'a> {
 }
 
 impl<'a> Marks<'a> {
-    /// The set a ref in `chunk` names.
     pub(crate) fn at(chunk: &Arc<Chunk<'a>>, reference: u32) -> Marks<'a> {
-        let (chunk, set) = Chunk::resolve_shared(chunk, reference);
+        let (chunk, set) = chunk.resolve(reference);
         match set {
-            0 => Marks::default(),
+            EMPTY_SET => Marks::default(),
             set => Marks {
                 chunk: Some(chunk.clone()),
                 set,
@@ -67,7 +66,7 @@ impl<'a> Marks<'a> {
                 .chunk
                 .as_ref()
                 .expect("a set with members is in a chunk");
-            let (chunk, index) = Chunk::resolve_shared(chunk, chunk.member(member));
+            let (chunk, index) = chunk.resolve(chunk.member(member));
             Mark {
                 chunk: chunk.clone(),
                 index,
@@ -121,7 +120,7 @@ impl<'a> Marks<'a> {
     pub(crate) fn write(&self, builder: &mut Builder<'a>) -> u32 {
         match &self.chunk {
             Some(chunk) => builder.external(chunk, self.set),
-            None => 0,
+            None => EMPTY_SET,
         }
     }
 }
@@ -171,7 +170,7 @@ impl<'a> Mark<'a> {
     }
 
     pub fn attrs(&self) -> Attrs<'a> {
-        let (chunk, value) = Chunk::resolve_shared(&self.chunk, self.chunk.mark(self.index).1);
+        let (chunk, value) = self.chunk.resolve(self.chunk.mark(self.index).1);
         Attrs {
             chunk: chunk.clone(),
             value,
@@ -205,34 +204,7 @@ impl<'a> Mark<'a> {
     /// [`add_to_set`](Self::add_to_set) on a list of marks, `None` when it leaves them as they
     /// are.
     pub fn added_to(&self, marks: &[Mark<'a>]) -> Option<Vec<Mark<'a>>> {
-        let mut copy: Option<Vec<Mark<'a>>> = None;
-        let mut placed = false;
-        let my_type = self.mark_type();
-        for (index, other) in marks.iter().enumerate() {
-            if self == other {
-                return None;
-            }
-            let other_type = other.mark_type();
-            if my_type.excludes(&other_type) {
-                copy.get_or_insert_with(|| marks[..index].to_vec());
-            } else if other_type.excludes(&my_type) {
-                return None;
-            } else {
-                if !placed && other_type.rank() > my_type.rank() {
-                    copy.get_or_insert_with(|| marks[..index].to_vec())
-                        .push(self.clone());
-                    placed = true;
-                }
-                if let Some(copy) = &mut copy {
-                    copy.push(other.clone());
-                }
-            }
-        }
-        let mut copy = copy.unwrap_or_else(|| marks.to_vec());
-        if !placed {
-            copy.push(self.clone());
-        }
-        Some(copy)
+        added_to(self, marks)
     }
 
     /// The set without this mark, or the set itself when it doesn't have it.
@@ -306,6 +278,66 @@ impl PartialEq for Mark<'_> {
     fn eq(&self, other: &Mark) -> bool {
         self.view().equals(other.view())
     }
+}
+
+/// A mark as `addToSet` reads it: a handle, or a mark borrowed from its chunk.
+pub(crate) trait SetMember: Clone {
+    fn mark_type(&self) -> MarkType<'_>;
+
+    /// `Mark.eq`.
+    fn same(&self, other: &Self) -> bool;
+}
+
+impl SetMember for Mark<'_> {
+    fn mark_type(&self) -> MarkType<'_> {
+        Mark::mark_type(self)
+    }
+
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+impl SetMember for MarkRef<'_> {
+    fn mark_type(&self) -> MarkType<'_> {
+        MarkRef::mark_type(*self)
+    }
+
+    fn same(&self, other: &Self) -> bool {
+        self.equals(*other)
+    }
+}
+
+/// `mark.addToSet(marks)` on a list, `None` when it leaves them as they are.
+pub(crate) fn added_to<M: SetMember>(mark: &M, marks: &[M]) -> Option<Vec<M>> {
+    let mut copy: Option<Vec<M>> = None;
+    let mut placed = false;
+    let my_type = mark.mark_type();
+    for (index, other) in marks.iter().enumerate() {
+        if mark.same(other) {
+            return None;
+        }
+        let other_type = other.mark_type();
+        if my_type.excludes(&other_type) {
+            copy.get_or_insert_with(|| marks[..index].to_vec());
+        } else if other_type.excludes(&my_type) {
+            return None;
+        } else {
+            if !placed && other_type.rank() > my_type.rank() {
+                copy.get_or_insert_with(|| marks[..index].to_vec())
+                    .push(mark.clone());
+                placed = true;
+            }
+            if let Some(copy) = &mut copy {
+                copy.push(other.clone());
+            }
+        }
+    }
+    let mut copy = copy.unwrap_or_else(|| marks.to_vec());
+    if !placed {
+        copy.push(mark.clone());
+    }
+    Some(copy)
 }
 
 impl fmt::Debug for Mark<'_> {

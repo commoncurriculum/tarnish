@@ -5,8 +5,8 @@ ProseMirror's document model and transforms in Rust: `prosemirror-model` 1.25.11
 and apply the steps editors send, without running JavaScript.
 
 - **The whole API.** Schemas, nodes, fragments, marks, slices, resolved positions, content
-  expressions, the eight step types, step maps and mappings, every `Transform` operation, and
-  `DOMParser` and `DOMSerializer` over a DOM you plug in.
+  expressions, the eight step types and step types of your own, step maps and mappings, every
+  `Transform` operation, and `DOMParser` and `DOMSerializer` over a DOM you plug in.
 - **Proven by ProseMirror's own tests.** Both packages' test suites run unedited against tarnish:
   309 of 309 model tests and 238 of 238 transform tests pass.
 - **Bindings.** Elixir, taking and returning Erlang terms, and C, taking and returning JSON, for
@@ -146,6 +146,7 @@ Names are Rust's: `nodeSize` is `node_size`, `Transform.addMark` is `Transform::
 | `node.textBetween`, `node.textContent` | `Node::text_between`, `Node::text_content`; `api::text_between`, `api::text_content` for the bindings |
 | `Transform` and every operation on it | `transform::Transform`; `api::transform` applies ops, from JSON, for the bindings |
 | `ReplaceStep`, `ReplaceAroundStep`, `AddMarkStep`, `RemoveMarkStep`, `AddNodeMarkStep`, `RemoveNodeMarkStep`, `AttrStep`, `DocAttrStep` | `transform::Step`, one variant each |
+| A `Step` subclass, `Step.jsonID`, `step instanceof MyStep` | A `transform::CustomStep`, `transform::register_step`, `Step::custom::<MyStep>()` |
 | `StepMap`, `Mapping`, `MapResult` | `transform::StepMap`, `Mapping`, `MapResult` |
 | `liftTarget`, `findWrapping`, `canSplit`, `canJoin`, `joinPoint`, `insertPoint`, `dropPoint`, `replaceStep` | The same functions in `transform` |
 | `DOMParser`, `DOMSerializer`, `DOMParser.schemaRules` | `dom::DomParser` (`from_schema`), `dom::DomSerializer`, `dom::schema_rules`, over the `dom::Dom` trait |
@@ -153,16 +154,27 @@ Names are Rust's: `nodeSize` is `node_size`, `Transform.addMark` is `Transform::
 Positions count UTF-16 units, as they do in the browser, so a step lands where it did there, even
 one that splits a surrogate pair.
 
-## What isn't here yet
+## Scope
 
-- **Custom step types.** `Step.jsonID` registers a new kind of step in JavaScript. tarnish's steps
-  are ProseMirror's own eight.
-- **An HTML parser.** `DomParser` and `DomSerializer` run over the `Dom` trait. Implement it for
-  your DOM (html5ever's, for example) to parse or write HTML. The test bridge implements it for
-  jsdom.
-- **Functions in specs from data.** A spec read from JSON, Elixir or C has no `toDOM`,
-  `getAttrs` or `leafText`: those are JavaScript functions. In Rust you give them as closures.
-  The bindings' `text_between` takes the text for leaves as a string.
+tarnish is ProseMirror's model and transform layer: what a server needs to hold documents and
+change them.
+
+- Read, check, compare and write documents in ProseMirror's JSON, and read their text.
+- Apply the steps editors send, of ProseMirror's types and of an application's own.
+- Invert, map, merge and rebase steps, and map positions through them, as a collaboration
+  authority does.
+- Change documents on the server with every `Transform` operation, from Rust, and from Elixir and
+  C as ops.
+- Parse and serialize with `DOMParser` and `DOMSerializer`, over the DOM you plug in, as
+  ProseMirror takes the browser's or jsdom's. The test bridge plugs in jsdom.
+
+The editor is not part of it: `prosemirror-state` (editor state, selections, plugins),
+`prosemirror-view`, commands, keymaps, input rules and history run in the browser.
+
+A schema's functions (`toDOM`, `getAttrs`, `leafText`) and a custom step's methods are code,
+which JSON can't carry. Rust gives them as closures and `CustomStep` implementations; a schema
+read from JSON, Elixir or C has none, and the bindings' `text_between` takes the text for leaves
+as a string.
 
 ## How it's proven
 
@@ -181,18 +193,24 @@ The proof doesn't depend on anyone reading the Rust. CI checks it:
    packages, and CI fails if they change:
    - every transform the upstream transform suite checks: its schema, starting document, steps,
      resulting document and mapped positions;
-   - what `prosemirror-model` does with inputs its tests don't give.
+   - what `prosemirror-model` does with inputs its tests don't give;
+   - a step type defined with `Step.jsonID`: applied among ProseMirror's own steps, inverted,
+     mapped, merged, and its errors;
+   - 273 lists of `Transform` operations, 96 of them failing, and `textBetween` and
+     `textContent`, as the bindings take them.
 
-   The Elixir tests apply every recorded transform, invert it and map its positions. The C test
-   does the same, and its JSON must equal `JSON.stringify`'s byte for byte.
+   The Elixir tests apply every recorded transform, invert it and map its positions, and run every
+   recorded op list and text read. The C test does the same, and its JSON must equal
+   `JSON.stringify`'s byte for byte. The Rust tests define the same custom step in Rust and expect
+   what JavaScript recorded.
 
 | Check | Result |
 | --- | --- |
 | prosemirror-model's suite, against tarnish | 309 passing |
 | prosemirror-transform's suite, against tarnish | 238 passing |
-| tarnish's own suite, against JavaScript and tarnish | 34 passing |
-| Elixir (`mix test`) | 203 tests |
-| C (`npm run test:c`) | 148 recorded transforms, the error cases and a 200,000-deep attribute |
+| tarnish's own suite, against JavaScript and tarnish | 36 passing |
+| Elixir (`mix test`) | 516 tests |
+| C (`npm run test:c`) | 148 recorded transforms, 308 op lists and texts, the error cases and a 200,000-deep attribute |
 | Rust (`cargo test`) | the recorded cases, and a 20,000-deep document through every operation on a 256 KB stack |
 
 ## Speed

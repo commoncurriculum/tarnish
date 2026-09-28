@@ -239,6 +239,36 @@ impl Map {
         }
         map
     }
+
+    /// The map with its keys as a JavaScript object orders them: array indices first, ascending,
+    /// then the rest in the order they came. `JSON.parse` gives this order; an embedder that
+    /// builds objects another way puts them in it with this.
+    pub fn into_js_order(self) -> Map {
+        if !self.keys().any(|key| array_index(key).is_some()) {
+            return self;
+        }
+        let mut indices = Vec::new();
+        let mut others = Vec::new();
+        for (key, value) in self {
+            match array_index(&key) {
+                Some(index) => indices.push((index, key, value)),
+                None => others.push((key, value)),
+            }
+        }
+        indices.sort_by_key(|(index, _, _)| *index);
+        Map {
+            entries: indices
+                .into_iter()
+                .map(|(_, key, value)| (key, value))
+                .chain(others)
+                .collect(),
+        }
+    }
+}
+
+fn array_index(key: &str) -> Option<u32> {
+    let index: u32 = key.parse().ok()?;
+    (index != u32::MAX && index.to_string() == key).then_some(index)
 }
 
 impl FromIterator<(Key, Value)> for Map {

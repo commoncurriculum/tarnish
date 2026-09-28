@@ -3,9 +3,10 @@
 
 use std::borrow::Cow;
 
+use super::compare_deep::deep_equal;
 use super::schema::{MarkType, NodeType};
 use crate::chunk::{
-    ASCII, BINDING, Chunk, HELD_AS_UNITS, NODES, Record, TEXT_NODE, ValueRef, value_equals,
+    ASCII, BINDING, Chunk, EMPTY_SET, HELD_AS_UNITS, Holder, NODES, Record, TEXT_NODE, ValueRef,
 };
 use crate::js;
 use crate::text::{self, Raw, Text, byte_offset};
@@ -65,13 +66,7 @@ impl<'c> NodeRef<'c> {
 
     #[inline]
     pub fn node_size(self) -> usize {
-        if self.is_text() {
-            self.record.size as usize
-        } else if self.node_type().is_leaf() {
-            1
-        } else {
-            2 + self.record.size as usize
-        }
+        self.record.node_size(self.chunk.schema())
     }
 
     /// The chunk that holds the list of the node's kids, where it starts, and the bound of the
@@ -137,7 +132,7 @@ impl<'c> NodeRef<'c> {
     /// Whether the nodes have the same type, attributes and marks.
     pub fn same_markup(self, other: NodeRef) -> bool {
         self.node_type() == other.node_type()
-            && value_equals(self.attrs(), other.attrs())
+            && deep_equal(self.attrs(), other.attrs())
             && self.marks().same(other.marks())
     }
 
@@ -205,7 +200,7 @@ impl<'c> SetRef<'c> {
 
     #[inline]
     pub fn len(self) -> usize {
-        if self.set == 0 {
+        if self.set == EMPTY_SET {
             return 0;
         }
         self.chunk.set(self.set).1 as usize
@@ -218,7 +213,7 @@ impl<'c> SetRef<'c> {
 
     pub fn iter(self) -> impl DoubleEndedIterator<Item = MarkRef<'c>> + ExactSizeIterator {
         let (start, len) = match self.set {
-            0 => (0, 0),
+            EMPTY_SET => (0, 0),
             set => self.chunk.set(set),
         };
         (start..start + len).map(move |member| {
@@ -228,7 +223,7 @@ impl<'c> SetRef<'c> {
     }
 
     pub fn ptr_eq(self, other: SetRef) -> bool {
-        (self.set == 0 && other.set == 0)
+        (self.set == EMPTY_SET && other.set == EMPTY_SET)
             || (self.set == other.set && self.chunk.ptr_eq(other.chunk))
     }
 
@@ -269,7 +264,7 @@ impl<'c> MarkRef<'c> {
     /// `Mark.eq`: the same type, and deeply equal attributes.
     pub fn equals(self, other: MarkRef) -> bool {
         self.ptr_eq(other)
-            || (self.mark_type() == other.mark_type() && value_equals(self.attrs(), other.attrs()))
+            || (self.mark_type() == other.mark_type() && deep_equal(self.attrs(), other.attrs()))
     }
 }
 
@@ -356,17 +351,15 @@ impl<'c> TextRef<'c> {
         }
     }
 
-    pub fn units(self) -> Cow<'c, [u16]> {
+    pub fn units(self) -> Vec<u16> {
         match self {
-            TextRef::Utf8 { text, .. } => Cow::Owned(text.encode_utf16().collect()),
-            TextRef::Units(bytes) => Cow::Owned(
-                bytes
-                    .as_chunks::<2>()
-                    .0
-                    .iter()
-                    .map(|&pair| u16::from_le_bytes(pair))
-                    .collect(),
-            ),
+            TextRef::Utf8 { text, .. } => text.encode_utf16().collect(),
+            TextRef::Units(bytes) => bytes
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|&pair| u16::from_le_bytes(pair))
+                .collect(),
         }
     }
 
