@@ -28,4 +28,4 @@ pub use resolved_pos::{NodePredicate, NodeRange, ResolvedPos};
 pub use schema::{
     MarkSpec, MarkType, NodeHook, NodeSpec, NodeType, Schema, SchemaSpec, Whitespace,
 };
-pub use view::{MarkRef, NodeRef, SetRef, TextRef};
+pub use view::{MarkRef, NodeId, NodeRef, SetRef, TextRef};

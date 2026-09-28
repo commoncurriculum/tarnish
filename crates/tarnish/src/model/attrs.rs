@@ -294,12 +294,7 @@ impl AttrSet {
             };
             match index {
                 Some(index) => found[index] = Some(value),
-                None => {
-                    let key = String::from_utf8_lossy(key);
-                    return Err(Error::Range(format!(
-                        "Unsupported attribute {key} for {kind} of type {type_name}"
-                    )));
-                }
+                None => return Err(unsupported(key, kind, type_name)),
             }
         }
         if self.checked {
@@ -327,6 +322,7 @@ impl AttrSet {
     }
 }
 
+#[inline(always)]
 fn check_value(attr: &Attribute, value: Option<Found>) -> Result<()> {
     match &attr.check {
         None => Ok(()),
@@ -341,12 +337,25 @@ fn check_value(attr: &Attribute, value: Option<Found>) -> Result<()> {
                 Some(Found::Json(value)) => TypeOf::of(Some(value)),
                 Some(Found::Chunk(value)) => value.type_of(),
             };
-            if allowed & bit(type_of) != 0 {
-                return Ok(());
+            match allowed & bit(type_of) {
+                0 => Err(wrong_type(expected, type_of)),
+                _ => Ok(()),
             }
-            Err(Error::Range(format!("{expected}, got {}", type_of.name())))
         }
     }
+}
+
+#[cold]
+fn wrong_type(expected: &str, type_of: TypeOf) -> Error {
+    Error::Range(format!("{expected}, got {}", type_of.name()))
+}
+
+#[cold]
+fn unsupported(key: &[u8], kind: &str, type_name: &str) -> Error {
+    let key = String::from_utf8_lossy(key);
+    Error::Range(format!(
+        "Unsupported attribute {key} for {kind} of type {type_name}"
+    ))
 }
 
 /// The attributes' defaults, when every attribute has one.

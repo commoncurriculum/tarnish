@@ -2,7 +2,7 @@
 //! the very node read from a map, which holds what `toJSON` writes for it, is that map again.
 
 use rustler::{Encoder, Env, Term};
-use tarnish::{Field, Fields, NodeRef, stack};
+use tarnish::{Field, Fields, NodeId, NodeRef, stack};
 
 use crate::etf;
 
@@ -29,7 +29,7 @@ pub fn json<'a>(
         keys: Vec::new(),
         left: limit,
     };
-    sharer.node(doc, Some((read, json)))
+    sharer.node(doc.id(), Some((read.id(), json)))
 }
 
 struct Sharer<'a> {
@@ -58,13 +58,15 @@ impl<'a> Sharer<'a> {
 
     /// The node's term, `read` being the node read that it may be, or may have replaced, and
     /// the map it was read from.
-    fn node(
-        &mut self,
-        node: NodeRef,
-        read: Option<(NodeRef, Term<'a>)>,
-    ) -> Result<Term<'a>, TooBig> {
-        match read {
-            Some((read, map)) if read.ptr_eq(node) && !read.flagged() => Ok(map),
+    fn node(&mut self, node: NodeId, read: Option<(NodeId, Term<'a>)>) -> Result<Term<'a>, TooBig> {
+        if let Some((read, map)) = read
+            && read.same(node)
+            && !read.flagged()
+        {
+            return Ok(map);
+        }
+        let node = node.view();
+        match read.map(|(read, map)| (read.view(), map)) {
             Some((read, map))
                 if read.node_type() == node.node_type()
                     && read.child_count() > 0
@@ -85,11 +87,12 @@ impl<'a> Sharer<'a> {
     /// A new map for the node, whose children may be those of the node read.
     fn rebuild(&mut self, node: NodeRef, read: NodeRef, map: Term<'a>) -> Result<Term<'a>, TooBig> {
         let content = self.key("content");
+        let count = read.child_count() as usize;
         let read_items = map
             .map_get(content)
             .ok()
-            .map(items)
-            .filter(|items| items.len() == read.child_count() as usize);
+            .map(|list| items(list, count))
+            .filter(|items| items.len() == count);
         let (mut keys, mut values) = (Vec::with_capacity(5), Vec::with_capacity(5));
         let mut failed = Ok(());
         node.fields(|field| {
@@ -124,18 +127,27 @@ impl<'a> Sharer<'a> {
         read: NodeRef,
         read_items: Option<&[Term<'a>]>,
     ) -> Result<Term<'a>, TooBig> {
-        let read_children: Vec<NodeRef> = match read_items {
-            Some(_) => read.children().collect(),
+        let read_children: Vec<NodeId> = match read_items {
+            Some(_) => read.child_ids().collect(),
             None => Vec::new(),
         };
         let mut terms = Vec::with_capacity(node.child_count() as usize);
         let mut next = 0;
-        for child in node.children() {
+        for child in node.child_ids() {
             self.spend(BYTES_PER_ITEM)?;
+            // Most children are the very child read in the same place.
+            if let (Some(read), Some(items)) = (read_children.get(next), read_items)
+                && read.same(child)
+                && !read.flagged()
+            {
+                terms.push(items[next]);
+                next += 1;
+                continue;
+            }
             let found = read_children[next..]
                 .iter()
                 .take(LOOK_AHEAD)
-                .position(|read| read.ptr_eq(child))
+                .position(|read| read.same(child))
                 .map(|offset| next + offset);
             let index = match found {
                 Some(index) => {
@@ -153,9 +165,9 @@ impl<'a> Sharer<'a> {
     }
 }
 
-/// A proper list's items.
-fn items(list: Term) -> Vec<Term> {
-    let mut items = Vec::new();
+/// A proper list's items, of which there are likely `count`.
+fn items(list: Term, count: usize) -> Vec<Term> {
+    let mut items = Vec::with_capacity(count);
     let mut rest = list;
     while let Ok((head, tail)) = rest.list_get_cell() {
         items.push(head);

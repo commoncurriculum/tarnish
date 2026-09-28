@@ -93,12 +93,26 @@ impl<'c> NodeRef<'c> {
     }
 
     pub fn children(self) -> impl DoubleEndedIterator<Item = NodeRef<'c>> + ExactSizeIterator {
+        self.child_ids().map(NodeId::view)
+    }
+
+    /// Where the children are, which tells which children are the same nodes without reading
+    /// them.
+    pub fn child_ids(self) -> impl DoubleEndedIterator<Item = NodeId<'c>> + ExactSizeIterator {
         let (list, start, bound) = match self.is_text() {
             true => (self.chunk, 0, 0),
             false => self.kids(),
         };
         list.children(start, self.child_count(), bound)
-            .map(|(chunk, id)| NodeRef::at(chunk, id))
+            .map(|(chunk, id)| NodeId { chunk, id })
+    }
+
+    #[inline]
+    pub fn id(self) -> NodeId<'c> {
+        NodeId {
+            chunk: self.chunk,
+            id: self.id,
+        }
     }
 
     #[inline]
@@ -146,6 +160,32 @@ impl<'c> NodeRef<'c> {
             }
             _ => false,
         }
+    }
+}
+
+/// Where a node is: the chunk that holds it and its index there, the same for every view of it.
+#[derive(Clone, Copy)]
+pub struct NodeId<'c> {
+    chunk: &'c Chunk<'c>,
+    id: u32,
+}
+
+impl<'c> NodeId<'c> {
+    #[inline]
+    pub fn view(self) -> NodeRef<'c> {
+        NodeRef::at(self.chunk, self.id)
+    }
+
+    /// Whether this is where `other` is.
+    #[inline]
+    pub fn same(self, other: NodeId) -> bool {
+        self.id == other.id && self.chunk.ptr_eq(other.chunk)
+    }
+
+    /// [`NodeRef::flagged`], reading only the flag.
+    #[inline]
+    pub fn flagged(self) -> bool {
+        self.chunk.flags(self.id) & BINDING != 0
     }
 }
 

@@ -341,6 +341,13 @@ impl<'a> Chunk<'a> {
         )
     }
 
+    /// A record's flags, read alone.
+    #[inline]
+    pub(crate) fn flags(&self, id: u32) -> u16 {
+        let at = self.at(NODES, id);
+        u16::from_le_bytes([self.bytes[at + 2], self.bytes[at + 3]])
+    }
+
     /// Kid `index` of the kids section: its slot, which is [`LOCAL`] for a node here, and the
     /// node's index.
     #[inline]
@@ -563,7 +570,7 @@ impl<'a> Chunk<'a> {
     }
 
     /// [`entry`](Self::entry), its key as bytes, which comparing needn't check are UTF-8.
-    #[inline]
+    #[inline(always)]
     pub(crate) fn entry_bytes(&self, parent: u32, index: u32) -> (&[u8], u32) {
         let at = self.at(ENTRIES, index);
         let (start, len, value) = (
