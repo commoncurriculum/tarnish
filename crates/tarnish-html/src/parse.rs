@@ -189,10 +189,7 @@ impl TreeSink for Sink<'_> {
         let mut tree = self.tree.borrow_mut();
         let element = tree.element_mut(*target).expect("an element");
         for attr in attrs(attributes) {
-            let exists = element.attrs.iter().any(|existing| {
-                existing.name.ns == attr.name.ns && existing.name.local == attr.name.local
-            });
-            if !exists {
+            if element.attr_ns(&attr.name.ns, &attr.name.local).is_none() {
                 element.attrs.push(attr);
             }
         }

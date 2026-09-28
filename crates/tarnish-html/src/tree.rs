@@ -1,6 +1,6 @@
 //! The arena a DOM's nodes live in, linked to each other by index.
 
-use html5ever::{QualName, ns};
+use html5ever::{LocalName, Namespace, QualName, ns};
 use tarnish_css::Declarations;
 
 pub(crate) type NodeId = usize;
@@ -47,6 +47,15 @@ pub(crate) struct Attr {
     pub(crate) value: String,
 }
 
+/// The namespaces whose elements have `style` and are written by their local name.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Space {
+    Html,
+    Svg,
+    MathMl,
+    Other,
+}
+
 impl Element {
     pub(crate) fn new(name: QualName, attrs: Vec<Attr>) -> Element {
         Element {
@@ -58,8 +67,32 @@ impl Element {
         }
     }
 
+    pub(crate) fn space(&self) -> Space {
+        match self.name.ns {
+            ns!(html) => Space::Html,
+            ns!(svg) => Space::Svg,
+            ns!(mathml) => Space::MathMl,
+            _ => Space::Other,
+        }
+    }
+
     pub(crate) fn is_html(&self) -> bool {
         self.name.ns == ns!(html)
+    }
+
+    pub(crate) fn attr_ns(&self, namespace: &Namespace, local: &LocalName) -> Option<&Attr> {
+        let mut attrs = self.attrs.iter();
+        attrs.find(|attr| attr.name.ns == *namespace && attr.name.local == *local)
+    }
+
+    /// Set the value of the attribute of the name's namespace and local name, or add one, as
+    /// `setAttributeNS` does.
+    pub(crate) fn set_attr_ns(&mut self, name: QualName, value: String) {
+        let mut attrs = self.attrs.iter_mut();
+        match attrs.find(|attr| attr.name.ns == name.ns && attr.name.local == name.local) {
+            Some(attr) => attr.value = value,
+            None => self.attrs.push(Attr { name, value }),
+        }
     }
 
     /// `qualifiedName`: the prefix and the local name.

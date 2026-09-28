@@ -13,7 +13,7 @@ use crate::interface::interface;
 use crate::names::{self, NameKind};
 use crate::select::{self, Selectors};
 use crate::serialize;
-use crate::tree::{Attr, Data, Element, FOLLOWING, NodeId, PRECEDING, Tree};
+use crate::tree::{Attr, Data, Element, FOLLOWING, NodeId, PRECEDING, Space, Tree};
 use tarnish_css::Declarations;
 
 /// An HTML document and the nodes made in it: what [`parse_document`](HtmlDom::parse_document)
@@ -167,26 +167,20 @@ impl HtmlDom {
         let mut tree = node.dom.tree();
         let Some(element) = tree
             .element_mut(node.id)
-            .filter(|element| has_style(element))
+            .filter(|element| element.space() != Space::Other)
         else {
             return none;
         };
-        let style = element.style.get_or_insert_with(|| {
-            let css = element.attrs.iter().find(|attr| is_style(&attr.name));
-            Declarations::parse(css.map_or("", |attr| &attr.value))
-        });
+        let style = match element.style {
+            Some(ref style) => style,
+            None => {
+                let css = element.attr_ns(&ns!(), &local_name!("style"));
+                let style = Declarations::parse(css.map_or("", |attr| &attr.value));
+                element.style.insert(style)
+            }
+        };
         read(style)
     }
-}
-
-fn is_style(name: &QualName) -> bool {
-    name.ns == ns!() && name.local == local_name!("style")
-}
-
-/// Whether the element has `style`: HTML's, SVG's and MathML's do.
-fn has_style(element: &Element) -> bool {
-    let namespace = &element.name.ns;
-    *namespace == ns!(html) || *namespace == ns!(svg) || *namespace == ns!(mathml)
 }
 
 impl HtmlNode {
@@ -476,15 +470,7 @@ impl Dom for HtmlDom {
             }
             Some(namespace) => {
                 let name = names::validate_and_extract(namespace, name, NameKind::Attribute)?;
-                let name = qual_name(name);
-                let existing = element
-                    .attrs
-                    .iter_mut()
-                    .find(|attr| attr.name.ns == name.ns && attr.name.local == name.local);
-                match existing {
-                    Some(attr) => attr.value = value,
-                    None => element.attrs.push(Attr { name, value }),
-                }
+                element.set_attr_ns(qual_name(name), value);
             }
         }
         element.style = None;
@@ -495,19 +481,13 @@ impl Dom for HtmlDom {
         let id = self.element_of(element)?;
         let mut tree = self.tree();
         let element = tree.element_mut(id).expect("an element");
-        if !has_style(element) {
+        if element.space() == Space::Other {
             return Ok(false);
         }
-        // Setting `cssText` writes the attribute from the declarations kept.
+        // The attribute gets the declarations kept, not the text given.
         let style = Declarations::parse(&js::to_string(css));
-        let text = style.css_text();
-        match element.attrs.iter_mut().find(|attr| is_style(&attr.name)) {
-            Some(attr) => attr.value = text,
-            None => element.attrs.push(Attr {
-                name: QualName::new(None, ns!(), local_name!("style")),
-                value: text,
-            }),
-        }
+        let name = QualName::new(None, ns!(), local_name!("style"));
+        element.set_attr_ns(name, style.css_text());
         element.style = Some(style);
         Ok(true)
     }
@@ -523,10 +503,7 @@ impl Dom for HtmlDom {
             {
                 element.attribute("href").unwrap_or_default().to_owned()
             }
-            Data::Element(element) => format!(
-                "[object {}]",
-                interface(&element.name.ns, &element.name.local)
-            ),
+            Data::Element(element) => format!("[object {}]", interface(element)),
             Data::Text(_) => "[object Text]".into(),
             Data::Comment(_) => "[object Comment]".into(),
             Data::Document => "[object Document]".into(),

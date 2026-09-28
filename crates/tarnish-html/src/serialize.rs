@@ -3,9 +3,9 @@
 
 use std::borrow::Cow;
 
-use html5ever::{QualName, ns};
+use html5ever::QualName;
 
-use crate::tree::{Data, Element, NodeId, Tree};
+use crate::tree::{Data, Element, NodeId, Space, Tree};
 
 /// Whether an HTML element of this local name is void: written without content or an end tag.
 pub fn is_void(local: &str) -> bool {
@@ -79,14 +79,12 @@ fn escape(out: &mut String, text: &str, attribute: bool) {
     out.push_str(&text[start..]);
 }
 
-/// An element's tag: its local name in HTML's, SVG's and MathML's namespaces, else its
-/// qualified name.
-fn tag_name(element: &Element) -> String {
-    let namespace = &element.name.ns;
-    match *namespace == ns!(html) || *namespace == ns!(svg) || *namespace == ns!(mathml) {
-        true => element.name.local.to_string(),
-        false => element.qualified_name(),
+fn write_tag(out: &mut String, element: &Element) {
+    if let (Space::Other, Some(prefix)) = (element.space(), &element.name.prefix) {
+        out.push_str(prefix);
+        out.push(':');
     }
+    out.push_str(&element.name.local);
 }
 
 fn write_attribute_name(out: &mut String, name: &QualName) {
@@ -144,7 +142,7 @@ fn write(tree: &Tree, node: NodeId, out: &mut String) {
             Step::Close(node) => {
                 let element = tree.element(node).expect("an element");
                 out.push_str("</");
-                out.push_str(&tag_name(element));
+                write_tag(out, element);
                 out.push('>');
                 continue;
             }
@@ -152,7 +150,7 @@ fn write(tree: &Tree, node: NodeId, out: &mut String) {
         match &tree.node(node).data {
             Data::Element(element) => {
                 out.push('<');
-                out.push_str(&tag_name(element));
+                write_tag(out, element);
                 for attr in &element.attrs {
                     out.push(' ');
                     write_attribute_name(out, &attr.name);

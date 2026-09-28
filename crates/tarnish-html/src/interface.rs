@@ -1,19 +1,18 @@
 //! The interfaces the linkedom fork gives elements, which WebIDL names when it converts one to
 //! a string.
 
-use html5ever::{Namespace, ns};
+use crate::tree::{Element, Space};
 
-/// The interface an element of this namespace and local name has.
-pub(crate) fn interface(namespace: &Namespace, local: &str) -> &'static str {
-    if *namespace == ns!(svg) {
-        return "SVGElement";
+pub(crate) fn interface(element: &Element) -> &'static str {
+    match element.space() {
+        Space::Html => html(&element.name.local),
+        Space::Svg => "SVGElement",
+        Space::MathMl => "MathMLElement",
+        Space::Other => "Element",
     }
-    if *namespace == ns!(mathml) {
-        return "MathMLElement";
-    }
-    if *namespace != ns!(html) {
-        return "Element";
-    }
+}
+
+fn html(local: &str) -> &'static str {
     match local {
         "applet" | "bgsound" | "blink" | "isindex" | "keygen" | "multicol" | "nextid"
         | "spacer" => "HTMLUnknownElement",
