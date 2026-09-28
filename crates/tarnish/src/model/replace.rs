@@ -318,16 +318,8 @@ fn joinable<'r, 'a>(
     Ok(node)
 }
 
-fn add_node<'a>(child: Node<'a>, target: &mut Vec<Node<'a>>) {
-    if let Some(last) = target.last_mut()
-        && let Some(joined) = last.join_text(&child)
-    {
-        *last = joined;
-    } else {
-        target.push(child);
-    }
-}
-
+/// Adds to `target` the children of the node at `depth` between `start` and `end`, which
+/// [`Fragment::from_array`] joins as `addNode` does.
 fn add_range<'a>(
     start: Option<&ResolvedPos<'a>>,
     end: Option<&ResolvedPos<'a>>,
@@ -342,18 +334,18 @@ fn add_range<'a>(
         if start.depth() > depth {
             start_index += 1;
         } else if start.text_offset() > 0 {
-            add_node(start.node_after().expect("text after"), target);
+            target.push(start.node_after().expect("text after"));
             start_index += 1;
         }
     }
     for index in start_index.min(end_index)..end_index {
-        add_node(node.maybe_child(index).expect("a child"), target);
+        target.push(node.maybe_child(index).expect("a child"));
     }
     if let Some(end) = end
         && end.depth() == depth
         && end.text_offset() > 0
     {
-        add_node(end.node_before().expect("text before"), target);
+        target.push(end.node_before().expect("text before"));
     }
 }
 
@@ -395,32 +387,22 @@ fn replace_three_way<'a>(
         (Some(open_start), Some(open_end)) if start.index(depth) == end.index(depth) => {
             check_join(open_start, open_end)?;
             let inner = stack::grow(|| replace_three_way(from, start, end, to, depth + 1))?;
-            add_node(close(open_start, inner)?, &mut content);
+            content.push(close(open_start, inner)?);
         }
         _ => {
             if let Some(open_start) = open_start {
-                add_node(
-                    close(
-                        open_start,
-                        stack::grow(|| replace_two_way(from, start, depth + 1))?,
-                    )?,
-                    &mut content,
-                );
+                let inner = stack::grow(|| replace_two_way(from, start, depth + 1))?;
+                content.push(close(open_start, inner)?);
             }
             add_range(Some(start), Some(end), depth, &mut content);
             if let Some(open_end) = open_end {
-                add_node(
-                    close(
-                        open_end,
-                        stack::grow(|| replace_two_way(end, to, depth + 1))?,
-                    )?,
-                    &mut content,
-                );
+                let inner = stack::grow(|| replace_two_way(end, to, depth + 1))?;
+                content.push(close(open_end, inner)?);
             }
         }
     }
     add_range(Some(to), None, depth, &mut content);
-    Ok(Fragment::new(&content))
+    Ok(Fragment::from_array(content))
 }
 
 fn replace_two_way<'a>(
@@ -432,13 +414,11 @@ fn replace_two_way<'a>(
     add_range(None, Some(from), depth, &mut content);
     if from.depth() > depth {
         let node = joinable(from, to, depth + 1)?;
-        add_node(
-            close(node, stack::grow(|| replace_two_way(from, to, depth + 1))?)?,
-            &mut content,
-        );
+        let inner = stack::grow(|| replace_two_way(from, to, depth + 1))?;
+        content.push(close(node, inner)?);
     }
     add_range(Some(to), None, depth, &mut content);
-    Ok(Fragment::new(&content))
+    Ok(Fragment::from_array(content))
 }
 
 /// The slice placed in copies of `along`'s ancestors, and resolved where it starts and ends.

@@ -180,7 +180,7 @@ impl<'a> Builder<'a> {
     }
 
     /// Adds to the kids section kids `from..to` of the list at `start` in `chunk`, which must be
-    /// below `bound` where they are in `chunk`.
+    /// below `bound` where they are in `chunk`: the positions they take.
     pub fn copy_kids(
         &mut self,
         chunk: &Arc<Chunk<'a>>,
@@ -188,7 +188,7 @@ impl<'a> Builder<'a> {
         bound: u32,
         from: u32,
         to: u32,
-    ) {
+    ) -> u64 {
         let count = to.saturating_sub(from);
         let kids = chunk.span(
             KIDS,
@@ -206,7 +206,9 @@ impl<'a> Builder<'a> {
         // `chunk`'s own slot here, and its first import slots, once used.
         let mut own = LOCAL;
         let mut slots = [LOCAL; 8];
+        let mut size = 0;
         for (kid, copy) in kids.as_chunks::<12>().0.iter().zip(copies) {
+            size += u64::from(u32::from_le_bytes([kid[8], kid[9], kid[10], kid[11]]));
             let theirs = u32::from_le_bytes([kid[0], kid[1], kid[2], kid[3]]);
             let index = u32::from_le_bytes([kid[4], kid[5], kid[6], kid[7]]);
             let slot = match theirs {
@@ -232,6 +234,7 @@ impl<'a> Builder<'a> {
             copy[4..].copy_from_slice(&kid[4..]);
         }
         self.scratch.sections[KIDS] = list;
+        size
     }
 
     /// A kid for node `index` of `chunk`, which is `size` positions long.

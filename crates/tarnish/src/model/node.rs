@@ -422,18 +422,6 @@ impl<'a> Node<'a> {
         })
     }
 
-    /// Writes into `builder` this text node and `next` as one, when both are text with the same
-    /// marks.
-    pub(crate) fn join_text_into(&self, builder: &mut Builder<'a>, next: &Node<'a>) -> Option<Kid> {
-        let (text, more) = (self.text()?, next.text()?);
-        if !self.same_markup(next) {
-            return None;
-        }
-        let marks = builder.reference_markup(self.chunk(), self.record.marks);
-        let joined = builder.text_of_parts(self.record.ty, marks, &[text, more]);
-        Some(Kid::local(joined, (text.len() + more.len()) as u32))
-    }
-
     /// Writes into `builder` one text node of these parts of text nodes with the same markup,
     /// each from and to a UTF-16 offset, with the first's markup.
     pub(crate) fn join_texts_into(
@@ -497,13 +485,6 @@ impl<'a> Node<'a> {
         let to = to.min(text.len());
         let from = from.min(to);
         Some(self.text_part(text, from, to))
-    }
-
-    /// This text node and `next` as one, when both are text with the same marks.
-    pub(crate) fn join_text(&self, next: &Node<'a>) -> Option<Node<'a>> {
-        let mut builder = Builder::new(self.schema());
-        let joined = self.join_text_into(&mut builder, next)?;
-        Some(Node::at(builder.seal(), joined.index))
     }
 
     /// The document between `from` and `to` as a slice. With `include_parents`, the slice is
