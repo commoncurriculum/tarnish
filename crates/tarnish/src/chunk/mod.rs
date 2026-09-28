@@ -203,9 +203,13 @@ pub(crate) const TEXT_NODE: u16 = 4;
 /// reads nor copies: a node written anew doesn't have it.
 pub(crate) const BINDING: u16 = 1 << 15;
 
+/// The set every chunk has first: no marks.
+pub(crate) const EMPTY_SET: u32 = 0;
+/// The value every chunk has first: the object without properties.
+pub(crate) const EMPTY_OBJECT: u32 = 0;
+
 /// A node: its type's index in the schema, its marks and attributes, and for text its text, or
-/// for another node its children. Every chunk's set 0 is the empty set, and its value 0 the
-/// empty object.
+/// for another node its children.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Record {
     pub ty: u16,

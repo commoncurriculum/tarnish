@@ -6,7 +6,7 @@ use std::sync::Arc;
 use super::node::Node;
 use super::schema::Schema;
 use super::view::{NodeRef, SetRef};
-use crate::chunk::{Builder, Chunk, Holder, Kid, Record, ValueRef};
+use crate::chunk::{Builder, Chunk, EMPTY_OBJECT, EMPTY_SET, Holder, Kid, Record, ValueRef};
 use crate::stack;
 
 /// What a copy has written of what it copies: each value and set it copied, by where it was,
@@ -45,8 +45,8 @@ impl<'k, 'a> Copier<'k, 'a> {
     }
 
     fn value(&mut self, value: ValueRef) -> u32 {
-        if value.index == 0 {
-            return 0;
+        if value.index == EMPTY_OBJECT {
+            return EMPTY_OBJECT;
         }
         let key = (address(value.chunk), value.index);
         if let Some(&written) = self.values.get(&key) {
@@ -62,7 +62,7 @@ impl<'k, 'a> Copier<'k, 'a> {
 
     fn set(&mut self, set: SetRef) -> u32 {
         if set.is_empty() {
-            return 0;
+            return EMPTY_SET;
         }
         let key = (address(set.chunk), set.set);
         if let Some(&written) = self.sets.get(&key) {
@@ -97,7 +97,7 @@ impl<'k, 'a> Copier<'k, 'a> {
             return match self.kept(chunk, start) {
                 Some(a) => self.builder.text_record(Record {
                     marks,
-                    attrs: 0,
+                    attrs: EMPTY_OBJECT,
                     a,
                     ..record
                 }),

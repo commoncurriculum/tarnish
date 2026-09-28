@@ -5,7 +5,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use super::compare_deep::deep_equal;
-use crate::chunk::{Builder, Chunk, JsonView, ValueRef};
+use crate::chunk::{Builder, Chunk, EMPTY_OBJECT, JsonView, ValueRef};
 use crate::error::{Error, Result};
 use crate::js::{AttrKeys, Given, Keys, TypeOf};
 use crate::json::{Key, Map, Value};
@@ -243,7 +243,7 @@ impl AttrSet {
             }
             Computed::Values(values) => {
                 if values.iter().all(|(_, value)| value.is_none()) {
-                    return 0;
+                    return EMPTY_OBJECT;
                 }
                 let written: Vec<(&str, u32)> = values
                     .iter()
@@ -262,7 +262,7 @@ impl AttrSet {
     /// [`check_map`](Self::check_map) of attributes a chunk holds.
     pub fn check_ref(&self, values: ValueRef) -> Result<()> {
         // Only a check can refuse the empty object.
-        if values.index == 0 && !self.checked {
+        if values.index == EMPTY_OBJECT && !self.checked {
             return Ok(());
         }
         self.check(values.entries_bytes())

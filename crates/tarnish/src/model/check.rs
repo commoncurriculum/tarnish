@@ -3,6 +3,7 @@
 use super::mark::added_to;
 use super::node::Node;
 use super::view::{MarkRef, NodeRef, SetRef};
+use crate::chunk::EMPTY_SET;
 use crate::error::{Error, Result};
 use crate::stack;
 
@@ -77,8 +78,7 @@ impl<'c> Walk<'c> {
 /// Checks a node's marks' attributes, and that they make a set.
 #[inline]
 fn check_marks(node: NodeRef) -> Result<(), Failed> {
-    // Set 0 is the empty set in every chunk.
-    if node.record.marks == 0 {
+    if node.record.marks == EMPTY_SET {
         return Ok(());
     }
     let marks = node.marks();

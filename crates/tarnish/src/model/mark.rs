@@ -7,7 +7,7 @@ use super::attrs::Attrs;
 use super::read::Reader;
 use super::schema::{MarkType, Schema};
 use super::view::{MarkRef, SetRef};
-use crate::chunk::{Builder, Chunk, Holder, ValueRef};
+use crate::chunk::{Builder, Chunk, EMPTY_SET, Holder, ValueRef};
 use crate::error::Result;
 use crate::js::Json;
 use crate::json::Map;
@@ -33,7 +33,7 @@ impl<'a> Marks<'a> {
     pub(crate) fn at(chunk: &Arc<Chunk<'a>>, reference: u32) -> Marks<'a> {
         let (chunk, set) = chunk.resolve(reference);
         match set {
-            0 => Marks::default(),
+            EMPTY_SET => Marks::default(),
             set => Marks {
                 chunk: Some(chunk.clone()),
                 set,
@@ -121,7 +121,7 @@ impl<'a> Marks<'a> {
     pub(crate) fn write(&self, builder: &mut Builder<'a>) -> u32 {
         match &self.chunk {
             Some(chunk) => builder.external(chunk, self.set),
-            None => 0,
+            None => EMPTY_SET,
         }
     }
 }

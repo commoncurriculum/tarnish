@@ -4,7 +4,9 @@ use std::sync::Arc;
 
 use super::attrs::Computed;
 use super::schema::Schema;
-use crate::chunk::{ASCII, BINDING, Builder, Chunk, HELD_AS_UNITS, Kid, Record, TEXT_NODE};
+use crate::chunk::{
+    ASCII, BINDING, Builder, Chunk, EMPTY_OBJECT, EMPTY_SET, HELD_AS_UNITS, Kid, Record, TEXT_NODE,
+};
 use crate::error::{Error, Result};
 use crate::js::{AttrKeys, Given, Json, Keys, ReadMark, ReadNode};
 use crate::json::{EMPTY, Value};
@@ -59,7 +61,7 @@ impl<'s, 'a> Reader<'s, 'a> {
         }
         let [name, text, content, marks, attrs] = fields;
         let (marks, mark_count) = match marks.filter(|marks| marks.truthy()) {
-            None => (0, 0),
+            None => (EMPTY_SET, 0),
             Some(marks) => self.marks(marks)?,
         };
         let name = name.map_or("undefined".into(), Json::string);
@@ -73,7 +75,7 @@ impl<'s, 'a> Reader<'s, 'a> {
             let index = self.builder.text(self.text_type, marks, &text);
             let read = ReadNode {
                 index,
-                fields: 2 + usize::from(marks != 0),
+                fields: 2 + usize::from(marks != EMPTY_SET),
                 children: 0,
                 marks: mark_count,
                 attrs: AttrKeys(Keys::Map(&EMPTY)),
@@ -116,7 +118,10 @@ impl<'s, 'a> Reader<'s, 'a> {
         );
         let read = ReadNode {
             index,
-            fields: 1 + usize::from(attrs != 0) + usize::from(size > 0) + usize::from(marks != 0),
+            fields: 1
+                + usize::from(attrs != EMPTY_OBJECT)
+                + usize::from(size > 0)
+                + usize::from(marks != EMPTY_SET),
             children: kids,
             marks: mark_count,
             attrs: attr_set.keys(&computed),
@@ -242,7 +247,7 @@ impl<'s, 'a> Reader<'s, 'a> {
             ),
             _ => {
                 let attrs = attr_set.write(&mut self.builder, usize::MAX, &computed);
-                (self.builder.mark(rank as u32, attrs), attrs != 0)
+                (self.builder.mark(rank as u32, attrs), attrs != EMPTY_OBJECT)
             }
         };
         json.read_mark(&ReadMark {

@@ -8,9 +8,9 @@ use std::sync::Arc;
 
 use super::value::{JsonView, Kind, Tag};
 use super::{
-    ASCII, BINDING, Chunk, ELEMENTS, ENTRIES, EXTERN, EXTERNS, HEADER, HELD_AS_UNITS, Holder,
-    IMPORTS, KIDS, Kid, LOCAL, MAGIC, MARKS, MEMBERS, NODES, Record, SECTIONS, SETS, STRINGS, TEXT,
-    TEXT_NODE, UNITS, VALUES, corrupt,
+    ASCII, BINDING, Chunk, ELEMENTS, EMPTY_OBJECT, EMPTY_SET, ENTRIES, EXTERN, EXTERNS, HEADER,
+    HELD_AS_UNITS, Holder, IMPORTS, KIDS, Kid, LOCAL, MAGIC, MARKS, MEMBERS, NODES, Record,
+    SECTIONS, SETS, STRINGS, TEXT, TEXT_NODE, UNITS, VALUES, corrupt,
 };
 use crate::json::Map;
 use crate::model::compare_deep::deep_equal;
@@ -91,8 +91,9 @@ impl<'a> Builder<'a> {
             counts: [0; SECTIONS],
             scratch: scratch(),
         };
-        builder.push_words(SETS, &[0, 0]);
-        builder.push_value(Tag::Object, 0, 0);
+        let empty_set = builder.push_words(SETS, &[0, 0]);
+        let empty_object = builder.push_value(Tag::Object, 0, 0);
+        debug_assert_eq!((empty_set, empty_object), (EMPTY_SET, EMPTY_OBJECT));
         builder
     }
 
@@ -171,11 +172,12 @@ impl<'a> Builder<'a> {
         self.external(chunk, index)
     }
 
-    /// [`reference`](Self::reference) to a set or value: set and value 0, empty in every chunk,
-    /// stay 0.
+    /// [`reference`](Self::reference) to a set or a value, which for the empty one stays as it
+    /// is.
     pub fn reference_markup(&mut self, chunk: &Arc<Chunk<'a>>, reference: u32) -> u32 {
+        const { assert!(EMPTY_SET == EMPTY_OBJECT) };
         match reference {
-            0 => 0,
+            EMPTY_SET => reference,
             reference => self.reference(chunk, reference),
         }
     }
@@ -312,10 +314,9 @@ impl<'a> Builder<'a> {
         }
     }
 
-    /// An object's value; value 0, the empty object, for an empty one.
     pub fn map(&mut self, map: &Map) -> u32 {
         if map.is_empty() {
-            return 0;
+            return EMPTY_OBJECT;
         }
         let entries = map.iter().map(|(key, value)| (key.as_str(), value));
         self.object(entries, |builder, value| {
@@ -379,7 +380,7 @@ impl<'a> Builder<'a> {
     /// The value of a node type's default attributes, written once.
     pub fn defaults(&mut self, type_index: usize, defaults: &Map) -> u32 {
         if defaults.is_empty() {
-            return 0;
+            return EMPTY_OBJECT;
         }
         if self.scratch.defaults.len() <= type_index {
             self.scratch.defaults.resize(type_index + 1, None);
@@ -472,7 +473,7 @@ impl<'a> Builder<'a> {
     /// A set of these marks, each a mark ref.
     pub fn set(&mut self, members: &[u32]) -> u32 {
         if members.is_empty() {
-            return 0;
+            return EMPTY_SET;
         }
         let start = self.counts[MEMBERS];
         for &member in members {
@@ -526,7 +527,7 @@ impl<'a> Builder<'a> {
             ty,
             flags,
             marks,
-            attrs: 0,
+            attrs: EMPTY_OBJECT,
             a,
             b: text.len() as u32,
             size: u32::try_from(size).expect("a text shorter than 4G units"),
@@ -541,7 +542,7 @@ impl<'a> Builder<'a> {
             ty,
             flags: TEXT_NODE | HELD_AS_UNITS,
             marks,
-            attrs: 0,
+            attrs: EMPTY_OBJECT,
             a,
             b: units.len() as u32,
             size: units.len() as u32,
@@ -579,7 +580,7 @@ impl<'a> Builder<'a> {
             ty,
             flags: if ascii { TEXT_NODE | ASCII } else { TEXT_NODE },
             marks,
-            attrs: 0,
+            attrs: EMPTY_OBJECT,
             a: start,
             b: bytes as u32,
             size: parts.iter().map(|part| part.len()).sum::<usize>() as u32,

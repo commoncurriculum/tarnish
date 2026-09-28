@@ -13,7 +13,7 @@ use super::resolved_pos::ResolvedPos;
 use super::schema::{MarkType, NodeType, Schema};
 use super::view::{NodeRef, TextRef};
 use crate::chunk::{
-    ASCII, Builder, Chunk, EXTERN, Holder, Kid, NODES, Record, TEXT_NODE, ValueRef,
+    ASCII, Builder, Chunk, EMPTY_OBJECT, EXTERN, Holder, Kid, NODES, Record, TEXT_NODE, ValueRef,
 };
 use crate::error::{Error, Result};
 use crate::js::Json;
@@ -395,7 +395,7 @@ impl<'a> Node<'a> {
         builder.text_record(Record {
             flags: if ascii { TEXT_NODE | ASCII } else { TEXT_NODE },
             marks,
-            attrs: 0,
+            attrs: EMPTY_OBJECT,
             a,
             b: (end - start) as u32,
             size: (to - from) as u32,

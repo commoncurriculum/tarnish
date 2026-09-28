@@ -6,7 +6,7 @@ use std::borrow::Cow;
 use super::compare_deep::deep_equal;
 use super::schema::{MarkType, NodeType};
 use crate::chunk::{
-    ASCII, BINDING, Chunk, HELD_AS_UNITS, Holder, NODES, Record, TEXT_NODE, ValueRef,
+    ASCII, BINDING, Chunk, EMPTY_SET, HELD_AS_UNITS, Holder, NODES, Record, TEXT_NODE, ValueRef,
 };
 use crate::js;
 use crate::text::{self, Raw, Text, byte_offset};
@@ -206,7 +206,7 @@ impl<'c> SetRef<'c> {
 
     #[inline]
     pub fn len(self) -> usize {
-        if self.set == 0 {
+        if self.set == EMPTY_SET {
             return 0;
         }
         self.chunk.set(self.set).1 as usize
@@ -219,7 +219,7 @@ impl<'c> SetRef<'c> {
 
     pub fn iter(self) -> impl DoubleEndedIterator<Item = MarkRef<'c>> + ExactSizeIterator {
         let (start, len) = match self.set {
-            0 => (0, 0),
+            EMPTY_SET => (0, 0),
             set => self.chunk.set(set),
         };
         (start..start + len).map(move |member| {
@@ -229,7 +229,7 @@ impl<'c> SetRef<'c> {
     }
 
     pub fn ptr_eq(self, other: SetRef) -> bool {
-        (self.set == 0 && other.set == 0)
+        (self.set == EMPTY_SET && other.set == EMPTY_SET)
             || (self.set == other.set && self.chunk.ptr_eq(other.chunk))
     }
 
