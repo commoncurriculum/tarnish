@@ -49,6 +49,79 @@ println!("{}", tr.doc().to_json_string());
 
 This example is the crate's doctest, so it compiles and runs in CI.
 
+### HTML, in Rust
+
+`tarnish-html` is a DOM for `DomParser` and `DomSerializer` to read and write HTML with. It
+parses HTML with html5ever, as jsdom's parse5 does, and writes it as jsdom's `innerHTML` does.
+
+```toml
+[dependencies]
+tarnish = { git = "https://github.com/commoncurriculum/tarnish" }
+tarnish-html = { git = "https://github.com/commoncurriculum/tarnish" }
+```
+
+```rust
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use tarnish::dom::{
+    DomParser, DomSerializer, DomSpec, GetAttrsResult, MarkToDom, NodeToDom, ParseOptions,
+    ParseRule, Rule, TagRule,
+};
+use tarnish::{api, json};
+use tarnish_html::{HtmlNode, parse_html, to_html};
+
+let spec = r#"{"nodes": {"doc": {"content": "paragraph+"},
+                         "paragraph": {"content": "text*"}, "text": {}},
+               "marks": {"link": {"attrs": {"href": {}}}}}"#;
+let schema = api::schema(&json::from_str(spec).expect("JSON"))?;
+
+// Each type's parse rules, in schema order: the marks', then the nodes'.
+let mut link = TagRule::new("a[href]");
+link.get_attrs = Some(Arc::new(|element: &HtmlNode| {
+    let href = element.attribute("href").unwrap_or_default();
+    Ok(GetAttrsResult::Attrs(json::object!({"href": href})))
+}));
+let marks = vec![vec![ParseRule::Tag(Rule::new(link))]];
+let nodes = vec![vec![], vec![ParseRule::Tag(Rule::new(TagRule::new("p")))], vec![]];
+let parser = DomParser::from_schema(schema, marks, nodes)?;
+
+let html = "<p>Read <a href='/docs'>the docs</a>.</p>";
+let doc = parse_html(&parser, html, ParseOptions::default())?;
+
+let paragraph: NodeToDom<HtmlNode> = Arc::new(|_| Ok(json::json!(["p", 0]).into()));
+let link: MarkToDom<HtmlNode> = Arc::new(|mark, _| {
+    let href = mark.attrs().to_map().remove("href").unwrap_or_default();
+    Ok(DomSpec::from(json::json!(["a", {"href": href}, 0])))
+});
+let serializer = DomSerializer::new(
+    HashMap::from([("paragraph".to_owned(), paragraph)]),
+    HashMap::from([("link".to_owned(), link)]),
+);
+let html = to_html(&serializer, doc.content())?;
+assert_eq!(html, r#"<p>Read <a href="/docs">the docs</a>.</p>"#);
+```
+
+This example is `tarnish-html`'s doctest.
+
+- **Rules are closures.** A rule's `getAttrs` gets an `HtmlNode`, which reads the element's
+  attributes and inline style. `parseDOM` and `toDOM` aren't read from a spec's JSON.
+- **Fragments and documents.** `parse_html` parses HTML as a `<template>`'s content holds it.
+  `HtmlDom::parse_document` parses a whole document, whose `body()` a parser can read.
+- **Proven against jsdom.** `npm run test:js` records to `fixtures/dom.json` what ProseMirror
+  does in jsdom with prosemirror-schema-basic and prosemirror-schema-list: 297 parses of 287
+  HTML inputs, as a template's content and as a document, 450 documents written as HTML, 85
+  inline styles and 40 DOM output specs. The crate's tests write those schemas' rules and
+  `toDOM`s in Rust, and must build the same trees, documents and HTML.
+- **Where the trees differ.** The tests print both trees for four inputs, where html5ever
+  follows the HTML standard and jsdom doesn't, but for `<isindex>`:
+  - text moved out of a table, which jsdom puts after the table instead of before it;
+  - elements in a `<select>`, which html5ever keeps, as the standard now does, and jsdom's
+    parse5 drops;
+  - a CDATA section in MathML's `<mi>`, text to html5ever and a comment to parse5;
+  - an end tag past an `<isindex>`, which html5ever still treats as special, as the standard
+    did before it dropped `<isindex>`.
+
 ### Elixir
 
 ```elixir
@@ -166,7 +239,8 @@ change them.
 - Change documents on the server with every `Transform` operation, from Rust, and from Elixir and
   C as ops.
 - Parse and serialize with `DOMParser` and `DOMSerializer`, over the DOM you plug in, as
-  ProseMirror takes the browser's or jsdom's. The test bridge plugs in jsdom.
+  ProseMirror takes the browser's or jsdom's. `tarnish-html` is one, which builds the trees jsdom
+  does; the test bridge plugs in jsdom itself.
 
 The editor is not part of it: `prosemirror-state` (editor state, selections, plugins),
 `prosemirror-view`, commands, keymaps, input rules and history run in the browser.
@@ -267,7 +341,9 @@ tarnish reads two things:
 - ProseMirror's content expressions, such as `paragraph+ (heading | list)*`, a grammar only
   ProseMirror has.
 
-HTML comes in through the `Dom` trait, from whatever parser the caller uses.
+HTML comes in through the `Dom` trait. `tarnish-html` parses it with html5ever, which follows the
+HTML standard as jsdom's parse5 does. oxc and Yuku have no HTML parser, and Biome's builds a
+lossless syntax tree for its formatter and isn't published as a crate.
 
 - **Yuku** is a JavaScript and TypeScript compiler written in Zig. Its idea of a tree as flat
   arrays of fixed-size nodes linked by index, instead of a tree of heap objects, is the idea
@@ -303,6 +379,7 @@ hold:
 | Path | What it is |
 | --- | --- |
 | `crates/tarnish` | The library: `model/`, `transform/`, `dom/`, `chunk/` (the document format), `json/` and `js/` (JSON and JavaScript's semantics for it), `api` (what the bindings call) |
+| `crates/tarnish-html` | An HTML DOM for `DomParser` and `DomSerializer`: html5ever's parser, jsdom's serialization |
 | `elixir/`, `crates/tarnish_elixir` | The Elixir package and the Rustler NIF behind it |
 | `crates/tarnish-c` | The C library and its generated header |
 | `crates/tarnish-node` | The Node bridge that runs ProseMirror's suites against tarnish. Internal, not published |

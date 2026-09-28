@@ -1,0 +1,15 @@
+[package]
+name = "tarnish-html"
+version = "0.1.0"
+description = "An HTML DOM for tarnish's DomParser and DomSerializer: parse and write HTML as jsdom does"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+cssparser = "0.37"
+html5ever = "0.40"
+precomputed-hash = "0.1"
+selectors = "0.40"
+tarnish = { path = "../tarnish", version = "0.1.0" }
