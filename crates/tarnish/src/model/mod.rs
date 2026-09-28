@@ -17,7 +17,7 @@ mod schema;
 mod schema_json;
 mod view;
 
-pub use attrs::{AttributeSpec, Attrs, Validate, ValidateHook};
+pub use attrs::{AttributeDefault, AttributeSpec, Attrs, Validate, ValidateHook};
 pub use compare_deep::{compare_deep, objects_equal};
 pub use content::{ContentExpr, ContentMatch};
 pub use fields::{Field, Fields};

@@ -139,9 +139,7 @@ impl Node<'_> {
     /// The node written again, all of it, into one chunk of its own: a document that shares
     /// nothing with others any more, and holds nothing it doesn't use.
     pub fn compact(&self) -> Node<'static> {
-        let mut copier = Copier::new(self.schema(), &[]);
-        let id = copier.copy(self.view());
-        Node::at(copier.builder.seal(), id)
+        write_again(self.view(), &[])
     }
 }
 
@@ -150,8 +148,12 @@ impl<'a> Node<'a> {
     /// in the chunks `kept`, to which it refers for the rest. A step's changes, made in many
     /// small chunks, go into one this way.
     pub fn flatten(&self, kept: &[Arc<Chunk<'a>>]) -> Node<'a> {
-        let mut copier = Copier::new(self.schema(), kept);
-        let id = copier.copy(self.view());
-        Node::at(copier.builder.seal(), id)
+        write_again(self.view(), kept)
     }
+}
+
+fn write_again<'a>(node: NodeRef, kept: &[Arc<Chunk<'a>>]) -> Node<'a> {
+    let mut copier = Copier::new(node.chunk.schema(), kept);
+    let id = copier.copy(node);
+    Node::at(copier.builder.seal(), id)
 }

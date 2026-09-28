@@ -16,11 +16,20 @@ pub type ValidateHook = Arc<dyn Fn(Option<&Value>) -> Result<()> + Send + Sync>;
 
 #[derive(Clone, Default)]
 pub struct AttributeSpec {
-    /// The default, when the spec has one. `Some(None)` is a default of `undefined`, which a
-    /// node or mark can't hold: it leaves the attribute out, where ProseMirror keeps the name
-    /// with no value, so its `toJSON` writes `"attrs": {}` and `hasMarkup` sees the name.
-    pub default: Option<Option<Value>>,
+    pub default: AttributeDefault,
     pub validate: Option<Validate>,
+}
+
+#[derive(Clone, Default)]
+pub enum AttributeDefault {
+    /// No default: nodes and marks must be given the attribute.
+    #[default]
+    Required,
+    /// `undefined`, which a node or mark can't hold: it leaves the attribute out, where
+    /// ProseMirror keeps the name with no value, so its `toJSON` writes `"attrs": {}` and
+    /// `hasMarkup` sees the name.
+    Undefined,
+    Value(Value),
 }
 
 #[derive(Clone)]
@@ -42,7 +51,7 @@ fn bit(type_of: TypeOf) -> u8 {
 }
 
 struct Attribute {
-    default: Option<Option<Value>>,
+    default: AttributeDefault,
     check: Option<Check>,
 }
 
@@ -184,9 +193,9 @@ impl AttrSet {
         let mut built = Vec::with_capacity(self.attrs.len());
         for (name, attr) in &self.attrs {
             let value = match (given.get(name), &attr.default) {
-                (Some(value), _) => Some(value),
-                (None, Some(default)) => default.as_ref(),
-                (None, None) => {
+                (Some(value), _) | (None, AttributeDefault::Value(value)) => Some(value),
+                (None, AttributeDefault::Undefined) => None,
+                (None, AttributeDefault::Required) => {
                     return Err(Error::Range(format!(
                         "No value supplied for attribute {name}"
                     )));
@@ -337,8 +346,10 @@ fn wrong_type(expected: &str, type_of: TypeOf) -> Error {
 fn defaults(attrs: &[(Key, Attribute)]) -> Option<Map> {
     let mut defaults = Map::with_capacity(attrs.len());
     for (name, attr) in attrs {
-        if let Some(value) = attr.default.clone()? {
-            defaults.push(name.clone(), value);
+        match &attr.default {
+            AttributeDefault::Required => return None,
+            AttributeDefault::Undefined => {}
+            AttributeDefault::Value(value) => defaults.push(name.clone(), value.clone()),
         }
     }
     Some(defaults)

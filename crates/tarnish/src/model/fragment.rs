@@ -622,7 +622,7 @@ impl<'a> Fragment<'a> {
         if self.count == 0 {
             return Value::Null;
         }
-        Value::Array(self.refs().map(super::fields::node_value).collect())
+        Value::Array(self.refs().map(super::fields::to_value).collect())
     }
 
     pub fn from_json<'j>(schema: &Schema, json: impl Json<'j>) -> Result<Fragment<'static>> {

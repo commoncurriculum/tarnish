@@ -66,13 +66,7 @@ impl<'c> NodeRef<'c> {
 
     #[inline]
     pub fn node_size(self) -> usize {
-        if self.is_text() {
-            self.record.size as usize
-        } else if self.node_type().is_leaf() {
-            1
-        } else {
-            2 + self.record.size as usize
-        }
+        self.record.node_size(self.chunk.schema())
     }
 
     /// The chunk that holds the list of the node's kids, where it starts, and the bound of the

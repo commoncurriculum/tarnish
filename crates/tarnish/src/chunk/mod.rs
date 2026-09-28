@@ -256,6 +256,19 @@ impl Record {
             size: word(20),
         }
     }
+
+    /// The positions the node takes: a text's length, 1 for another leaf, and anything else's
+    /// content with its start and end tokens.
+    #[inline]
+    pub fn node_size(self, schema: &Schema) -> usize {
+        if self.flags & TEXT_NODE != 0 {
+            self.size as usize
+        } else if schema.node_data(usize::from(self.ty)).is_leaf() {
+            1
+        } else {
+            2 + self.size as usize
+        }
+    }
 }
 
 /// An immutable chunk of a document, and the chunks it imports.

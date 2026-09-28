@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use super::attrs::Computed;
+use super::fields::field_count;
 use super::schema::Schema;
 use crate::chunk::{
     ASCII, BINDING, Builder, Chunk, EMPTY_OBJECT, EMPTY_SET, HELD_AS_UNITS, Kid, Record, TEXT_NODE,
@@ -75,7 +76,7 @@ impl<'s, 'a> Reader<'s, 'a> {
             let index = self.builder.text(self.text_type, marks, &text);
             let read = ReadNode {
                 index,
-                fields: 2 + usize::from(marks != EMPTY_SET),
+                fields: field_count(false, false, marks != EMPTY_SET, true),
                 children: 0,
                 marks: mark_count,
                 attrs: AttrKeys(Keys::Map(&EMPTY)),
@@ -118,10 +119,7 @@ impl<'s, 'a> Reader<'s, 'a> {
         );
         let read = ReadNode {
             index,
-            fields: 1
-                + usize::from(attrs != EMPTY_OBJECT)
-                + usize::from(size > 0)
-                + usize::from(marks != EMPTY_SET),
+            fields: field_count(attrs != EMPTY_OBJECT, size > 0, marks != EMPTY_SET, false),
             children: kids,
             marks: mark_count,
             attrs: attr_set.keys(&computed),
@@ -165,13 +163,7 @@ impl<'s, 'a> Reader<'s, 'a> {
     /// it when they have the same marks, as `Fragment.fromArray` joins them. Its size.
     fn push_child(&mut self, start: usize, node: u32) -> u64 {
         let record = self.builder.record(node);
-        let size = if record.flags & TEXT_NODE != 0 {
-            u64::from(record.size)
-        } else if self.schema.node_data(usize::from(record.ty)).is_leaf() {
-            1
-        } else {
-            2 + u64::from(record.size)
-        };
+        let size = record.node_size(self.schema) as u64;
         if self.children.len() > start
             && record.flags & TEXT_NODE != 0
             && let Some(&last) = self.children.last()
@@ -252,7 +244,7 @@ impl<'s, 'a> Reader<'s, 'a> {
         };
         json.read_mark(&ReadMark {
             rank,
-            fields: 1 + usize::from(attrs),
+            fields: field_count(attrs, false, false, false),
             attrs: attr_set.keys(&computed),
         });
         Ok((rank as u32, mark))

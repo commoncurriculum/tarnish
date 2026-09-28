@@ -60,10 +60,12 @@ impl<'c> Fields<'c> for NodeRef<'c> {
     }
 
     fn field_count(self) -> usize {
-        1 + usize::from(!self.attrs().is_empty())
-            + usize::from(self.content_size() > 0)
-            + usize::from(!self.marks().is_empty())
-            + usize::from(self.is_text())
+        field_count(
+            !self.attrs().is_empty(),
+            self.content_size() > 0,
+            !self.marks().is_empty(),
+            self.is_text(),
+        )
     }
 }
 
@@ -78,13 +80,18 @@ impl<'c> Fields<'c> for MarkRef<'c> {
     }
 
     fn field_count(self) -> usize {
-        1 + usize::from(!self.attrs().is_empty())
+        field_count(!self.attrs().is_empty(), false, false, false)
     }
+}
+
+/// How many fields `toJSON` writes: the type, and each other field that has something in it.
+pub(crate) fn field_count(attrs: bool, content: bool, marks: bool, text: bool) -> usize {
+    1 + usize::from(attrs) + usize::from(content) + usize::from(marks) + usize::from(text)
 }
 
 impl Node<'_> {
     pub fn to_json(&self) -> Value {
-        node_value(self.view())
+        to_value(self.view())
     }
 
     /// `JSON.stringify(node.toJSON())`. Text keeps a lone surrogate, which a JSON value can't.
@@ -101,11 +108,7 @@ impl Mark<'_> {
     }
 }
 
-pub(crate) fn node_value(node: NodeRef) -> Value {
-    to_value(node)
-}
-
-fn to_value<'c>(fields: impl Fields<'c>) -> Value {
+pub(crate) fn to_value<'c>(fields: impl Fields<'c>) -> Value {
     let mut object = Map::with_capacity(fields.field_count());
     fields.fields(|field| object.push(field.key().into(), field_value(field)));
     Value::Object(object)
