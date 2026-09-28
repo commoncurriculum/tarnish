@@ -21,7 +21,7 @@ pub struct TarnishSchema(Schema);
 /// A document, or any node, read once from its JSON.
 #[derive_ReprC]
 #[repr(opaque)]
-pub struct TarnishNode(Node);
+pub struct TarnishNode(Node<'static>);
 
 /// Where a function that can fail puts its error: "Class: message", the class naming the error
 /// ProseMirror throws (RangeError, SyntaxError, ReplaceError, TransformError, TypeError or
