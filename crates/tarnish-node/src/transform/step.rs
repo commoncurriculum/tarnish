@@ -73,6 +73,10 @@ pub fn wrap<'env>(env: &'env Env, step: &Step<'static>) -> Result<Unknown<'env>>
             let value = js::optional_to_js(env, value.as_ref())?;
             js::call_registered(env, make, FnArgs::from((id, attr.as_str(), value)))
         }
+        // The bridge registers no step types of its own, so `Step::from_json` never makes one.
+        Step::Custom(_) => Err(napi::Error::from_reason(format!(
+            "The bridge has no class for step type {id}"
+        ))),
     }
 }
 

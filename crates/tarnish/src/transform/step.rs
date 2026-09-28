@@ -1,11 +1,67 @@
 //! Steps: the atomic changes a transform is made of.
 
+use std::any::Any;
+use std::collections::HashMap;
+use std::fmt;
+use std::sync::{Arc, LazyLock, RwLock};
+
 use super::map::{Mappable, StepMap};
 use crate::error::{Error, Result};
 use crate::js;
 use crate::json::{Map, NULL, Value};
 use crate::model::{Fragment, Mark, Node, Schema, Slice};
 use crate::stack;
+
+/// A step type of an application's own, as a subclass of ProseMirror's `Step` is. Register it
+/// with [`register_step`] so that [`Step::from_json`] reads it. It outlives any one document,
+/// so content it holds is owned, as [`Node::compact`] makes it.
+pub trait CustomStep: Any + fmt::Debug + Send + Sync {
+    /// The `stepType` it is registered under.
+    fn json_id(&self) -> &str;
+
+    fn apply<'a>(&self, doc: Node<'a>) -> Result<StepResult<'a>>;
+
+    fn get_map(&self) -> StepMap {
+        StepMap::empty()
+    }
+
+    fn invert<'a>(&self, doc: &Node<'a>) -> Result<Step<'a>>;
+
+    fn map<'a>(&self, mapping: &dyn Mappable) -> Option<Step<'a>>;
+
+    fn merge<'a>(&self, _other: &Step<'a>) -> Option<Step<'a>> {
+        None
+    }
+
+    /// Its JSON, with its `stepType`.
+    fn to_json(&self) -> Value;
+}
+
+/// A registered step type's `fromJSON`.
+pub type StepFromJson = fn(&Schema, &Value) -> Result<Arc<dyn CustomStep>>;
+
+static CUSTOM_STEPS: LazyLock<RwLock<HashMap<String, StepFromJson>>> =
+    LazyLock::new(Default::default);
+
+/// `Step.jsonID`: read JSON whose `stepType` is `id` with `from_json`. Each identifier can be
+/// registered once, and ProseMirror's own steps hold theirs.
+pub fn register_step(id: &str, from_json: StepFromJson) -> Result<()> {
+    let mut steps = CUSTOM_STEPS
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if STEP_TYPES.iter().any(|(own, ..)| *own == id) || steps.contains_key(id) {
+        return Err(Error::Range(format!("Duplicate use of step JSON ID {id}")));
+    }
+    steps.insert(id.to_owned(), from_json);
+    Ok(())
+}
+
+fn custom_step(id: &str) -> Option<StepFromJson> {
+    let steps = CUSTOM_STEPS
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    steps.get(id).copied()
+}
 
 /// A step's outcome: the changed document, or why the step can't apply to the document.
 #[derive(Clone, Debug)]
@@ -98,6 +154,8 @@ pub enum Step<'a> {
     },
     /// Set an attribute of the document's top node.
     DocAttr { attr: String, value: Option<Value> },
+    /// A step of a type [`register_step`] registered.
+    Custom(Arc<dyn CustomStep>),
 }
 
 /// The kinds of step JSON can hold.
@@ -198,6 +256,14 @@ fn attrs_with(attrs: Map, attr: &str, value: &Option<Value>) -> Map {
 }
 
 impl<'a> Step<'a> {
+    /// The step as a `T`, when it is one: JavaScript's `step instanceof T`.
+    pub fn custom<T: CustomStep>(&self) -> Option<&T> {
+        match self {
+            Step::Custom(step) => (step.as_ref() as &dyn Any).downcast_ref(),
+            _ => None,
+        }
+    }
+
     /// Apply the step to a document. A caller that keeps the document passes a clone of it; one
     /// that gives it up lets a replace change it in place.
     pub fn apply(&self, doc: Node<'a>) -> Result<StepResult<'a>> {
@@ -314,6 +380,7 @@ impl<'a> Step<'a> {
                 )?;
                 Ok(StepResult::Ok(updated))
             }
+            Step::Custom(step) => step.apply(doc),
         }
     }
 
@@ -345,6 +412,7 @@ impl<'a> Step<'a> {
                 ],
                 false,
             ),
+            Step::Custom(step) => step.get_map(),
             _ => StepMap::empty(),
         }
     }
@@ -435,6 +503,7 @@ impl<'a> Step<'a> {
                 attr: attr.clone(),
                 value: doc.attrs_view().get(attr).map(|value| value.to_value()),
             },
+            Step::Custom(step) => step.invert(doc)?,
         })
     }
 
@@ -528,6 +597,7 @@ impl<'a> Step<'a> {
                 })
             }
             Step::DocAttr { .. } => Some(self.clone()),
+            Step::Custom(step) => step.map(mapping),
         }
     }
 
@@ -597,12 +667,13 @@ impl<'a> Step<'a> {
                     mark: mark.clone(),
                 })
             }
+            (Step::Custom(step), other) => step.merge(other),
             _ => None,
         }
     }
 
     /// The step's JSON identifier, its `stepType`.
-    pub fn json_id(&self) -> &'static str {
+    pub fn json_id(&self) -> &str {
         match self {
             Step::Replace { .. } => "replace",
             Step::ReplaceAround { .. } => "replaceAround",
@@ -620,6 +691,7 @@ impl<'a> Step<'a> {
             } => "removeNodeMark",
             Step::Attr { .. } => "attr",
             Step::DocAttr { .. } => "docAttr",
+            Step::Custom(step) => step.json_id(),
         }
     }
 
@@ -684,6 +756,7 @@ impl<'a> Step<'a> {
                 push_attr(&mut json, attr, value);
             }
             Step::DocAttr { attr, value } => push_attr(&mut json, attr, value),
+            Step::Custom(step) => return step.to_json(),
         }
         Value::Object(json)
     }
@@ -694,7 +767,10 @@ impl<'a> Step<'a> {
         }
         let step_type = js::string(json.get("stepType"));
         let Some(&(_, class, kind)) = STEP_TYPES.iter().find(|(id, ..)| *id == step_type) else {
-            return Err(Error::Range(format!("No step type {step_type} defined")));
+            return match custom_step(&step_type) {
+                Some(from_json) => Ok(Step::Custom(from_json(schema, json)?)),
+                None => Err(Error::Range(format!("No step type {step_type} defined"))),
+            };
         };
         let invalid = || Error::Range(format!("Invalid input for {class}.fromJSON"));
         // JavaScript only checks that a position is a number: one that is negative, fractional

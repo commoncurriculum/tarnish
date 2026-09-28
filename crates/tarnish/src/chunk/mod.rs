@@ -14,7 +14,7 @@
 //! | section  | element                                            | bytes |
 //! |----------|----------------------------------------------------|-------|
 //! | externs  | an import's slot, and an index in it               | 8     |
-//! | nodes    | [`Record`]                                         | 24    |
+//! | nodes    | a `Record`                                         | 24    |
 //! | kids     | a node: an import's slot, or all ones for this chunk, its index, and its size | 12 |
 //! | sets     | a set's first member, and its size                 | 8     |
 //! | members  | a mark ref                                         | 4     |

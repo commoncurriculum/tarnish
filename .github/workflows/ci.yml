@@ -47,8 +47,8 @@ jobs:
               "$(node -p "require('$package/package.json').version")"
           done
       - run: npm run test:${{ matrix.target }}
-      # The run against the real packages records fixtures/transform.json again. The Elixir and
-      # C tests expect what it records, so it must be exactly what JavaScript writes today.
+      # The run against the real packages records the fixtures again. The Rust, Elixir and C
+      # tests expect what it records, so it must be exactly what JavaScript writes today.
       - run: git diff --exit-code fixtures
         if: matrix.target == 'js'
 
