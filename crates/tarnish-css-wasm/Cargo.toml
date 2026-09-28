@@ -1,0 +1,16 @@
+[package]
+name = "tarnish-css-wasm"
+version = "0.1.0"
+description = "tarnish-css as WebAssembly, for the linkedom fork's element.style"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+tarnish-css = { path = "../tarnish-css", version = "0.1.0" }
+wasm-bindgen = "=0.2.129"

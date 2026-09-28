@@ -52,7 +52,11 @@ This example is the crate's doctest, so it compiles and runs in CI.
 ### HTML, in Rust
 
 `tarnish-html` is a DOM for `DomParser` and `DomSerializer` to read and write HTML with. It
-parses HTML with html5ever, as jsdom's parse5 does, and writes it as jsdom's `innerHTML` does.
+parses HTML with html5ever and writes it as the standard's `innerHTML` does. Inline styles are
+`tarnish-css`: stylo, Servo's CSS engine, which parses, changes and writes declarations as
+Firefox does. JavaScript gets the same DOM from
+[our linkedom fork](https://github.com/commoncurriculum/linkedom), whose `element.style` is
+`tarnish-css` compiled to WebAssembly.
 
 ```toml
 [dependencies]
@@ -108,16 +112,15 @@ This example is `tarnish-html`'s doctest.
   attributes and inline style. `parseDOM` and `toDOM` aren't read from a spec's JSON.
 - **Fragments and documents.** `parse_html` parses HTML as a `<template>`'s content holds it.
   `HtmlDom::parse_document` parses a whole document, whose `body()` a parser can read.
-- **Proven against jsdom.** `npm run test:js` records to `fixtures/dom.json` what ProseMirror
-  does in jsdom with prosemirror-schema-basic and prosemirror-schema-list: 297 parses of 287
-  HTML inputs, as a template's content and as a document, 450 documents written as HTML, 85
-  inline styles and 40 DOM output specs. The crate's tests write those schemas' rules and
-  `toDOM`s in Rust, and must build the same trees, documents and HTML.
-- **Where the trees differ.** The tests print both trees for four inputs, where html5ever
-  follows the HTML standard and jsdom doesn't, but for `<isindex>`:
-  - text moved out of a table, which jsdom puts after the table instead of before it;
-  - elements in a `<select>`, which html5ever keeps, as the standard now does, and jsdom's
-    parse5 drops;
+- **Proven against the linkedom fork.** `npm run test:js` records to `fixtures/dom.json` what
+  ProseMirror does in the fork with prosemirror-schema-basic and prosemirror-schema-list: 297
+  parses of 287 HTML inputs, as a template's content and as a document, 450 documents written
+  as HTML, 85 inline styles and 40 DOM output specs. The crate's tests write those schemas'
+  rules and `toDOM`s in Rust, and must build the same trees, documents and HTML.
+- **Where the trees differ.** The tests print both trees for three inputs, where html5ever
+  follows the HTML standard and parse5 8 doesn't, but for `<isindex>`:
+  - elements in a `<select>`, which html5ever keeps, as the standard now does, and parse5
+    drops;
   - a CDATA section in MathML's `<mi>`, text to html5ever and a comment to parse5;
   - an end tag past an `<isindex>`, which html5ever still treats as special, as the standard
     did before it dropped `<isindex>`.
@@ -239,8 +242,8 @@ change them.
 - Change documents on the server with every `Transform` operation, from Rust, and from Elixir and
   C as ops.
 - Parse and serialize with `DOMParser` and `DOMSerializer`, over the DOM you plug in, as
-  ProseMirror takes the browser's or jsdom's. `tarnish-html` is one, which builds the trees jsdom
-  does; the test bridge plugs in jsdom itself.
+  ProseMirror takes the browser's or jsdom's. `tarnish-html` is one, which builds the trees our
+  linkedom fork does; the test bridge plugs in the fork itself.
 
 The editor is not part of it: `prosemirror-state` (editor state, selections, plugins),
 `prosemirror-view`, commands, keymaps, input rules and history run in the browser.
@@ -342,7 +345,7 @@ tarnish reads two things:
   ProseMirror has.
 
 HTML comes in through the `Dom` trait. `tarnish-html` parses it with html5ever, which follows the
-HTML standard as jsdom's parse5 does. oxc and Yuku have no HTML parser, and Biome's builds a
+HTML standard as parse5 does, and holds inline styles in stylo, Servo's CSS engine. oxc and Yuku have no HTML parser, and Biome's builds a
 lossless syntax tree for its formatter and isn't published as a crate.
 
 - **Yuku** is a JavaScript and TypeScript compiler written in Zig. Its idea of a tree as flat
@@ -379,7 +382,8 @@ hold:
 | Path | What it is |
 | --- | --- |
 | `crates/tarnish` | The library: `model/`, `transform/`, `dom/`, `chunk/` (the document format), `json/` and `js/` (JSON and JavaScript's semantics for it), `api` (what the bindings call) |
-| `crates/tarnish-html` | An HTML DOM for `DomParser` and `DomSerializer`: html5ever's parser, jsdom's serialization |
+| `crates/tarnish-html` | An HTML DOM for `DomParser` and `DomSerializer`: html5ever's parser, the standard's serialization |
+| `crates/tarnish-css`, `crates/tarnish-css-wasm` | Inline styles on stylo, natively and as the WebAssembly the linkedom fork's `element.style` runs; `harness/css-wasm.mjs` writes it into the fork |
 | `elixir/`, `crates/tarnish_elixir` | The Elixir package and the Rustler NIF behind it |
 | `crates/tarnish-c` | The C library and its generated header |
 | `crates/tarnish-node` | The Node bridge that runs ProseMirror's suites against tarnish. Internal, not published |
@@ -402,6 +406,11 @@ cargo test
 cargo fmt --all --check && cargo clippy --all-targets -- -D warnings
 ```
 
+Building `tarnish-css` needs Python 3, which stylo's build script runs. Writing it into the
+linkedom fork (`node harness/css-wasm.mjs <checkout>`) also needs the `wasm32-unknown-unknown`
+target and the `wasm-bindgen-cli` version `tarnish-css-wasm` pins.
+
 ## License
 
-MIT. tarnish ports ProseMirror, whose MIT notice [`LICENSE`](LICENSE) keeps.
+MIT. tarnish ports ProseMirror, whose MIT notice [`LICENSE`](LICENSE) keeps. `tarnish-css`
+builds on stylo, which is MPL-2.0.

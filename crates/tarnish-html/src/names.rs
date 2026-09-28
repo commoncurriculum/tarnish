@@ -1,42 +1,45 @@
 //! Checking element and attribute names as the DOM does before it creates them, and the
-//! interfaces jsdom gives elements, which `String(element)` names.
+//! interfaces the standard gives elements, which `String(element)` names.
 
 use html5ever::{Namespace, Prefix, QualName, ns};
 use tarnish::{Error, Result};
 
-fn is_name_start(character: char) -> bool {
-    matches!(character,
-        'A'..='Z' | '_' | 'a'..='z' | '\u{c0}'..='\u{d6}' | '\u{d8}'..='\u{f6}'
-        | '\u{f8}'..='\u{2ff}' | '\u{370}'..='\u{37d}' | '\u{37f}'..='\u{1fff}'
-        | '\u{200c}'..='\u{200d}' | '\u{2070}'..='\u{218f}' | '\u{2c00}'..='\u{2fef}'
-        | '\u{3001}'..='\u{d7ff}' | '\u{f900}'..='\u{fdcf}' | '\u{fdf0}'..='\u{fffd}'
-        | '\u{10000}'..='\u{effff}')
-}
-
-fn is_name_char(character: char) -> bool {
-    is_name_start(character)
-        || matches!(character,
-            '-' | '.' | '0'..='9' | '\u{b7}' | '\u{300}'..='\u{36f}' | '\u{203f}'..='\u{2040}')
-}
-
-/// XML's `NCName`: a name without a colon.
-fn is_nc_name(name: &str) -> bool {
+/// The standard's valid element local name: an ASCII letter and then anything but whitespace,
+/// `/`, `>` and NUL, or else a `:`, `_` or non-ASCII character and then only those, ASCII
+/// alphanumerics, `-` and `.`.
+fn is_element_local_name(name: &str) -> bool {
     let mut characters = name.chars();
-    characters.next().is_some_and(is_name_start) && characters.all(is_name_char)
+    match characters.next() {
+        Some(first) if first.is_ascii_alphabetic() => characters.all(|character| {
+            !matches!(
+                character,
+                '\0' | '\t' | '\n' | '\x0c' | '\r' | ' ' | '/' | '>'
+            )
+        }),
+        Some(first) if matches!(first, ':' | '_') || !first.is_ascii() => {
+            characters.all(|character| {
+                character.is_ascii_alphanumeric()
+                    || matches!(character, '-' | '.' | ':' | '_')
+                    || !character.is_ascii()
+            })
+        }
+        _ => false,
+    }
 }
 
-/// XML's `Name` production.
-fn is_name(name: &str) -> bool {
-    let mut characters = name.chars();
-    characters
-        .next()
-        .is_some_and(|first| first == ':' || is_name_start(first))
-        && characters.all(|character| character == ':' || is_name_char(character))
+/// The standard's valid attribute local name: not empty, and no whitespace, `/`, `=`, `>` or NUL.
+fn is_attribute_local_name(name: &str) -> bool {
+    !name.is_empty() && !name.contains(['\0', '\t', '\n', '\x0c', '\r', ' ', '/', '=', '>'])
 }
 
-fn invalid_character(name: &str, production: &str) -> Error {
+/// The standard's valid namespace prefix: not empty, and no whitespace, `/`, `>` or NUL.
+fn is_namespace_prefix(prefix: &str) -> bool {
+    !prefix.is_empty() && !prefix.contains(['\0', '\t', '\n', '\x0c', '\r', ' ', '/', '>'])
+}
+
+fn invalid_character(name: &str, kind: &str) -> Error {
     Error::Other(format!(
-        "InvalidCharacterError: \"{name}\" did not match the {production} production"
+        "InvalidCharacterError: \"{name}\" is not a valid {kind}"
     ))
 }
 
@@ -44,34 +47,46 @@ fn namespace_error(message: &str) -> Error {
     Error::Other(format!("NamespaceError: {message}"))
 }
 
-/// Refuse a name that isn't XML's `Name`, as `createElement` and `setAttribute` do.
-pub(crate) fn validate(name: &str) -> Result<()> {
-    match is_name(name) {
+/// Refuse a name `createElement` refuses.
+pub(crate) fn validate_element(name: &str) -> Result<()> {
+    match is_element_local_name(name) {
         true => Ok(()),
-        false => Err(invalid_character(name, "Name")),
+        false => Err(invalid_character(name, "element local name")),
+    }
+}
+
+/// Refuse a name `setAttribute` refuses.
+pub(crate) fn validate_attribute(name: &str) -> Result<()> {
+    match is_attribute_local_name(name) {
+        true => Ok(()),
+        false => Err(invalid_character(name, "attribute local name")),
     }
 }
 
 /// The DOM's "validate and extract": the qualified name's namespace, prefix and local name, as
 /// `createElementNS` and `setAttributeNS` take them.
-pub(crate) fn validate_and_extract(namespace: Option<&str>, qualified: &str) -> Result<QualName> {
+pub(crate) fn validate_and_extract(
+    namespace: Option<&str>,
+    qualified: &str,
+    is_element: bool,
+) -> Result<QualName> {
     let namespace = namespace.filter(|namespace| !namespace.is_empty());
-    let is_qname = match qualified.split_once(':') {
-        Some((prefix, local)) => is_nc_name(prefix) && is_nc_name(local),
-        None => is_nc_name(qualified),
-    };
-    if !is_qname {
-        return Err(invalid_character(qualified, "QName"));
-    }
     let (prefix, local) = match qualified.split_once(':') {
         Some((prefix, local)) => (Some(prefix), local),
         None => (None, qualified),
     };
+    if let Some(prefix) = prefix.filter(|prefix| !is_namespace_prefix(prefix)) {
+        return Err(invalid_character(prefix, "namespace prefix"));
+    }
+    match is_element {
+        true => validate_element(local)?,
+        false => validate_attribute(local)?,
+    }
     const XML: &str = "http://www.w3.org/XML/1998/namespace";
     const XMLNS: &str = "http://www.w3.org/2000/xmlns/";
     if prefix.is_some() && namespace.is_none() {
         return Err(namespace_error(
-            "A namespace was given but a prefix was also extracted from the qualifiedName",
+            "A prefix was given but no namespace was provided",
         ));
     }
     if prefix == Some("xml") && namespace != Some(XML) {
@@ -96,14 +111,13 @@ pub(crate) fn validate_and_extract(namespace: Option<&str>, qualified: &str) -> 
     ))
 }
 
-/// The interface jsdom 20 makes an element of this namespace and local name.
+/// The interface an element of this namespace and local name has.
 pub(crate) fn interface(namespace: &Namespace, local: &str) -> &'static str {
     if *namespace == ns!(svg) {
-        return match local {
-            "svg" => "SVGSVGElement",
-            "title" => "SVGTitleElement",
-            _ => "SVGElement",
-        };
+        return "SVGElement";
+    }
+    if *namespace == ns!(mathml) {
+        return "MathMLElement";
     }
     if *namespace != ns!(html) {
         return "Element";
@@ -114,8 +128,8 @@ pub(crate) fn interface(namespace: &Namespace, local: &str) -> &'static str {
         "abbr" | "address" | "article" | "aside" | "b" | "bdi" | "bdo" | "cite" | "code" | "dd"
         | "dfn" | "dt" | "em" | "figcaption" | "figure" | "footer" | "header" | "hgroup" | "i"
         | "kbd" | "main" | "mark" | "nav" | "noscript" | "rp" | "rt" | "ruby" | "s" | "samp"
-        | "section" | "small" | "strong" | "sub" | "summary" | "sup" | "u" | "var" | "wbr"
-        | "acronym" | "basefont" | "big" | "center" | "nobr" | "noembed" | "noframes"
+        | "search" | "section" | "small" | "strong" | "sub" | "summary" | "sup" | "u" | "var"
+        | "wbr" | "acronym" | "basefont" | "big" | "center" | "nobr" | "noembed" | "noframes"
         | "plaintext" | "rb" | "rtc" | "strike" | "tt" => "HTMLElement",
         "a" => "HTMLAnchorElement",
         "area" => "HTMLAreaElement",

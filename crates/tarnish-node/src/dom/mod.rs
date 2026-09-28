@@ -1,4 +1,4 @@
-//! The DOM parser and serializer, over the host's DOM: jsdom in the tests.
+//! The DOM parser and serializer, over the host's DOM: the linkedom fork in the tests.
 
 mod parse;
 mod serialize;
@@ -66,6 +66,25 @@ fn dom_node(value: Unknown) -> Result<Option<JsNode>> {
         return Ok(None);
     }
     JsNode::new(value).map(Some)
+}
+
+/// What an attribute set to the value holds. The DOM converts a node, as `String(node)` may
+/// give its HTML where WebIDL gives `[object HTMLSpanElement]`.
+fn attribute_value(value: Unknown) -> Result<String> {
+    if value.get_type()? != ValueType::Object {
+        return js::coerce_to_string(&value);
+    }
+    let object = Object::from_unknown(value)?;
+    let owner = js::get(&object, "ownerDocument")?;
+    let document = match owner.get_type()? {
+        ValueType::Object => Object::from_unknown(owner)?,
+        _ if !js::is_nullish(&js::get(&object, "nodeType")?)? => object,
+        _ => return js::coerce_to_string(&value),
+    };
+    let attribute = js::call_method(&document, "createAttribute", "value")?;
+    let mut attribute = Object::from_unknown(attribute)?;
+    attribute.set("value", value)?;
+    js::coerce_to_string(&js::get(&attribute, "value")?)
 }
 
 /// The host's DOM, with the document that makes its new nodes, if there is one.
@@ -259,6 +278,6 @@ impl Dom for JsDom<'_> {
     }
 
     fn stringify(&self, node: &JsNode) -> tarnish::Result<String> {
-        js::host(|env| js::coerce_to_string(&node.value(env)?))
+        js::host(|env| attribute_value(node.value(env)?))
     }
 }

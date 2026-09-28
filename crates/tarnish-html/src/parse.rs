@@ -1,5 +1,5 @@
-//! Parsing HTML into the arena with html5ever, as jsdom parses it with parse5, keeping a byte
-//! order mark as text.
+//! Parsing HTML into the arena with html5ever, as the linkedom fork parses it with parse5,
+//! keeping a byte order mark as text.
 
 use std::borrow::Cow;
 use std::cell::{Cell, Ref, RefCell};
@@ -12,35 +12,35 @@ use html5ever::{Attribute, QualName, local_name, ns};
 
 use crate::tree::{Attr, Data, Element, NodeId, Tree};
 
-/// With scripting, a `<noscript>` holds its content as text.
-fn options(scripting: bool) -> ParseOpts {
+/// Without scripting, as a document with no browsing context parses: a `<noscript>` holds
+/// elements, not text.
+fn options() -> ParseOpts {
     ParseOpts {
         tokenizer: TokenizerOpts {
             discard_bom: false,
             ..TokenizerOpts::default()
         },
         tree_builder: TreeBuilderOpts {
-            scripting_enabled: scripting,
+            scripting_enabled: false,
             ..TreeBuilderOpts::default()
         },
     }
 }
 
-/// Parse a document into a new document node, without scripting, as jsdom's `DOMParser` does.
+/// Parse a document into a new document node.
 pub(crate) fn document(tree: &mut Tree, html: &str) -> NodeId {
     let document = tree.push(Data::Document);
     let sink = Sink::new(tree, document);
-    tree.quirks = driver::parse_document(sink, options(false)).one(html);
+    tree.quirks = driver::parse_document(sink, options()).one(html);
     document
 }
 
-/// Parse a fragment as a `<template>`'s content holds it, into a new document fragment. jsdom
-/// parses it for the template's inert document, which has scripting.
+/// Parse a fragment as a `<template>`'s content holds it, into a new document fragment.
 pub(crate) fn fragment(tree: &mut Tree, html: &str) -> NodeId {
     let document = tree.push(Data::Document);
     let context = QualName::new(None, ns!(html), local_name!("template"));
     let sink = Sink::new(tree, document);
-    driver::parse_fragment(sink, options(true), context, Vec::new(), false).one(html);
+    driver::parse_fragment(sink, options(), context, Vec::new(), false).one(html);
     let fragment = tree.push(Data::Fragment);
     // The fragment's nodes are the children of the one element the parser made the root.
     if let Some(root) = tree.node(document).first {

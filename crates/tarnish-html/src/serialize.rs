@@ -1,9 +1,38 @@
-//! Writing HTML as jsdom 20's `innerHTML` and `outerHTML` do, with parse5 7's serializer and
-//! scripting off.
+//! Writing HTML as the standard's fragment serialization does, with scripting off: as
+//! linkedom's `innerHTML` and `outerHTML` do.
 
-use html5ever::ns;
+use html5ever::{QualName, ns};
 
 use crate::tree::{Data, Element, NodeId, Tree, qualified};
+
+/// An element's tag: its local name in HTML's, SVG's and MathML's namespaces, else its
+/// qualified name.
+fn tag_name(element: &Element) -> String {
+    let namespace = &element.name.ns;
+    match *namespace == ns!(html) || *namespace == ns!(svg) || *namespace == ns!(mathml) {
+        true => element.name.local.to_string(),
+        false => element.qualified_name(),
+    }
+}
+
+/// An attribute's name as HTML writes it: its namespace's usual prefix and its local name.
+fn attribute_name(name: &QualName) -> String {
+    let local = &name.local;
+    if name.ns == ns!() {
+        local.to_string()
+    } else if name.ns == ns!(xml) {
+        format!("xml:{local}")
+    } else if name.ns == ns!(xmlns) {
+        match &**local {
+            "xmlns" => local.to_string(),
+            _ => format!("xmlns:{local}"),
+        }
+    } else if name.ns == ns!(xlink) {
+        format!("xlink:{local}")
+    } else {
+        qualified(name)
+    }
+}
 
 const VOID: [&str; 18] = [
     "area", "base", "basefont", "bgsound", "br", "col", "embed", "frame", "hr", "img", "input",
@@ -67,7 +96,7 @@ fn write(tree: &Tree, node: NodeId, out: &mut String) {
             Step::Close(node) => {
                 let element = tree.element(node).expect("an element");
                 out.push_str("</");
-                out.push_str(&element.qualified_name());
+                out.push_str(&tag_name(element));
                 out.push('>');
                 continue;
             }
@@ -75,10 +104,10 @@ fn write(tree: &Tree, node: NodeId, out: &mut String) {
         match &tree.node(node).data {
             Data::Element(element) => {
                 out.push('<');
-                out.push_str(&element.qualified_name());
+                out.push_str(&tag_name(element));
                 for attr in &element.attrs {
                     out.push(' ');
-                    out.push_str(&qualified(&attr.name));
+                    out.push_str(&attribute_name(&attr.name));
                     out.push_str("=\"");
                     escape(&attr.value, true, out);
                     out.push('"');

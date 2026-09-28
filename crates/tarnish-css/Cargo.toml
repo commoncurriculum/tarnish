@@ -1,0 +1,14 @@
+[package]
+name = "tarnish-css"
+version = "0.1.0"
+description = "A CSS declaration block, as element.style holds one, on Servo's CSS engine"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+stylo = "0.21"
+stylo_static_prefs = "0.21"
+stylo_traits = "0.21"
+url = "2"

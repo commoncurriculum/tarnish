@@ -1,4 +1,4 @@
-//! What ProseMirror's `DOMParser` and `DOMSerializer` do in jsdom, recorded by
+//! What ProseMirror's `DOMParser` and `DOMSerializer` do in the linkedom fork, recorded by
 //! `harness/record-dom.mjs`: over this crate's DOM, tarnish's must build the same trees, parse
 //! the same documents and write the same HTML.
 
@@ -9,19 +9,13 @@ use tarnish::json::{self, Value};
 use tarnish::{Node, Result, Schema, api};
 use tarnish_html::{HtmlDom, HtmlNode, parse_html, parse_html_slice, to_html};
 
-/// Inputs html5ever builds another tree from than jsdom 20 does, and why. The test prints both
-/// trees, and fails when they come to match.
+/// Inputs html5ever builds another tree from than the fork's parse5 8 does, and why. The test
+/// prints both trees, and fails when they come to match.
 const DIFFERENT_TREES: &[(&str, &str)] = &[
-    (
-        "<table>foster<tr><td>x</td></tr></table>",
-        "Text the standard moves out of a table goes before it. jsdom's parse5 adapter appends it \
-         to the table's parent instead: its insertTextBefore calls _append, which drops the \
-         node to insert before.",
-    ),
     (
         "<select><option>a<b>x</b></option></select>",
         "html5ever 0.40 parses <select> as the standard now does, keeping the elements inside \
-         it. parse5 7 predates that, and drops their tags.",
+         it. parse5 8 predates that, and drops their tags.",
     ),
     (
         "<p><span>a<isindex>b</span>c</p>",

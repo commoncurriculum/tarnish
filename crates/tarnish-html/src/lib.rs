@@ -1,10 +1,11 @@
 //! An HTML DOM for tarnish's [`DomParser`] and [`DomSerializer`]: parse HTML into ProseMirror
-//! documents, and write documents as HTML, as ProseMirror does in jsdom.
+//! documents, and write documents as HTML, as ProseMirror does in a DOM that follows the
+//! standards.
 //!
-//! [`HtmlDom`] parses HTML with html5ever, which follows the HTML standard's parsing algorithm
-//! as jsdom's parse5 does, and writes it as jsdom's `innerHTML` and `outerHTML` do. Elements
-//! match CSS selectors with servo's `selectors`, and read their inline style as jsdom's
-//! cssstyle does.
+//! [`HtmlDom`] parses HTML with html5ever, which follows the HTML standard's parsing algorithm,
+//! and writes it as the standard's `innerHTML` and `outerHTML` do. Elements match CSS
+//! selectors with servo's `selectors`, and hold their inline style in tarnish-css, Servo's CSS
+//! engine, as the linkedom fork's `element.style` does.
 //!
 //! [`parse_html`] and [`to_html`] parse and write with a DOM of their own. To parse a whole
 //! document, or hand a parser a node, make the DOM with [`HtmlDom::parse_document`] or
@@ -60,7 +61,6 @@ mod names;
 mod parse;
 mod select;
 mod serialize;
-mod style;
 mod tree;
 
 pub use dom::{HtmlDom, HtmlNode};
