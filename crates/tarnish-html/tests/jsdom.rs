@@ -7,7 +7,7 @@ mod basic;
 use tarnish::dom::{Dom, DomParser, DomSpec, ParseOptions, PreserveWhitespace, render_spec};
 use tarnish::json::{self, Value};
 use tarnish::{Node, Result, Schema, api};
-use tarnish_html::{HtmlDom, HtmlNode, to_html};
+use tarnish_html::{HtmlDom, HtmlNode, parse_html, parse_html_slice, to_html};
 
 /// Inputs html5ever builds another tree from than jsdom 20 does, and why. The test prints both
 /// trees, and fails when they come to match.
@@ -149,13 +149,10 @@ fn parses_are_jsdoms() {
         let dom = HtmlDom::new();
         let tree = dom.parse_fragment(html).inner_html();
         if check.tree("The template's tree", tree, &template["tree"]) {
-            // Each parse starts from the HTML again, as parsing can move nested lists.
-            let fragment = dom.parse_fragment(html);
-            let doc = parser.parse(&dom, &fragment, options(record));
+            let doc = parse_html(&parser, html, options(record));
             let doc = outcome(doc.map(|doc| doc.to_json()));
             check.equal("The template's document", &doc, &template["doc"]);
-            let fragment = dom.parse_fragment(html);
-            let slice = parser.parse_slice(&dom, &fragment, options(record));
+            let slice = parse_html_slice(&parser, html, options(record));
             let slice = outcome(slice.map(|slice| slice.to_json()));
             check.equal("The template's slice", &slice, &template["slice"]);
         }
