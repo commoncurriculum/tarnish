@@ -19,20 +19,57 @@ const LINEAR_KEYS: usize = 32;
 
 /// `JSON.parse(text)`, as the value JavaScript holds: every number is a double, so an integral
 /// one is an integer and the rest are floats; a repeated key keeps its first place and its last
-/// value; and keys that are array indices come first, in ascending order.
+/// value; and keys that are array indices come first, in ascending order. A lone surrogate,
+/// which a Rust string can't hold, is U+FFFD.
 pub fn from_str(text: &str) -> Result<Value, SyntaxError> {
     // The parser skips a byte order mark, which `JSON.parse` doesn't take.
     if text.starts_with('\u{FEFF}') {
         return Err(SyntaxError);
     }
     // serde_json reads JSON far faster, and takes no text `JSON.parse` refuses. Text that ends
-    // early is no JSON to either; what else serde_json refuses, nesting past its limit, a number
-    // past a double or a lone surrogate, the event parser decides.
+    // early is no JSON to either; what else serde_json refuses, nesting past its limit or a
+    // number past a double, the event parser decides. Both refuse a lone surrogate.
     match read_with_serde(text) {
         Ok(value) => Ok(value),
         Err(error) if error.is_eof() => Err(SyntaxError),
-        Err(_) => read_events(text),
+        Err(_) => read_events(text).or_else(|error| match lone_surrogates_replaced(text) {
+            Some(text) => from_str(&text),
+            None => Err(error),
+        }),
     }
+}
+
+/// The text with each escape of a lone surrogate made an escape of U+FFFD, or `None` when it has
+/// none.
+fn lone_surrogates_replaced(text: &str) -> Option<String> {
+    let unit_at = |at: usize| match text.get(at..at + 2) {
+        Some("\\u") => u16::from_str_radix(text.get(at + 2..at + 6)?, 16).ok(),
+        _ => None,
+    };
+    let surrogate = |unit: u16| (0xD800..0xE000).contains(&unit);
+    let high = |unit: u16| (0xD800..0xDC00).contains(&unit);
+    let mut replaced = String::new();
+    let (mut copied, mut at) = (0, 0);
+    while let Some(found) = text[at..].find('\\') {
+        at += found;
+        match unit_at(at) {
+            Some(unit)
+                if high(unit)
+                    && unit_at(at + 6).is_some_and(|next| surrogate(next) && !high(next)) =>
+            {
+                at += 12
+            }
+            Some(unit) if surrogate(unit) => {
+                replaced.push_str(&text[copied..at]);
+                replaced.push_str("\\ufffd");
+                at += 6;
+                copied = at;
+            }
+            Some(_) => at += 6,
+            None => at += 1 + text[at + 1..].chars().next().map_or(0, char::len_utf8),
+        }
+    }
+    (copied > 0).then(|| replaced + &text[copied..])
 }
 
 fn read_with_serde(text: &str) -> Result<Value, serde_json::Error> {
@@ -428,6 +465,24 @@ mod tests {
             }
         }
         assert!(read > 100_000, "serde_json read {read}");
+    }
+
+    #[test]
+    fn reads_a_lone_surrogate_as_u_fffd() {
+        for (text, expected) in [
+            (r#""\ud83d""#, "\u{FFFD}"),
+            (r#""a\udc00b""#, "a\u{FFFD}b"),
+            (r#""\ud83d😀""#, "\u{FFFD}😀"),
+            (r#""\ude00\ud83d""#, "\u{FFFD}\u{FFFD}"),
+            (r#""é\\\ud800\\ud800""#, "é\\\u{FFFD}\\ud800"),
+        ] {
+            assert_eq!(from_str(text).expect(text), expected, "{text}");
+        }
+        let object = from_str(r#"{"\udfff":[1]}"#).expect("an object");
+        assert_eq!(stringify(&object), "{\"\u{FFFD}\":[1]}");
+        for text in [r#""\ud800"#, r#"\ud800"#, "\"\\\u{e9}\\ud800\""] {
+            assert!(from_str(text).is_err(), "{text}");
+        }
     }
 
     #[test]
