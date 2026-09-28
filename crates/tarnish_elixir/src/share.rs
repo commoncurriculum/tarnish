@@ -70,7 +70,7 @@ impl<'a> Sharer<'a> {
                     && read.child_count() > 0
                     && node.child_count() > 0 =>
             {
-                self.rebuild(node, read, map)
+                stack::grow(|| self.rebuild(node, read, map))
             }
             _ => self.written(etf::write_node(node, self.left)),
         }
@@ -147,7 +147,7 @@ impl<'a> Sharer<'a> {
             let pair = index
                 .zip(read_items)
                 .map(|(index, items)| (read_children[index], items[index]));
-            terms.push(stack::grow(|| self.node(child, pair))?);
+            terms.push(self.node(child, pair)?);
         }
         Ok(terms.encode(self.env))
     }

@@ -81,7 +81,7 @@ impl<'s, 'a> Reader<'s, 'a> {
             return Ok(self.read(json, read));
         }
         let (kids_start, kids, size) = match content {
-            Some(content) => self.fragment(content)?,
+            Some(content) => stack::grow(|| self.fragment(content))?,
             None => (self.children.len(), 0, 0),
         };
         let node_type = match self.schema.expect_node_type(&name) {
@@ -135,7 +135,7 @@ impl<'s, 'a> Reader<'s, 'a> {
             .ok_or_else(|| Error::Range("Invalid input for Fragment.fromJSON".into()))?;
         let mut size: u64 = 0;
         for item in items {
-            match stack::grow(|| self.node(item)) {
+            match self.node(item) {
                 Ok(node) => size += self.push_child(start, node),
                 Err(failed) => {
                     self.children.truncate(start);
