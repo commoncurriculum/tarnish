@@ -15,4 +15,13 @@ defmodule Tarnish.Native do
   def invert_steps_dirty(_doc, _steps), do: :erlang.nif_error(:nif_not_loaded)
   def map_position(_schema, _steps, _pos, _assoc), do: :erlang.nif_error(:nif_not_loaded)
   def map_position_dirty(_schema, _steps, _pos, _assoc), do: :erlang.nif_error(:nif_not_loaded)
+  def transform(_doc, _ops), do: :erlang.nif_error(:nif_not_loaded)
+  def transform_dirty(_doc, _ops), do: :erlang.nif_error(:nif_not_loaded)
+  def text_between(_doc, _from, _to, _separator, _leaf), do: :erlang.nif_error(:nif_not_loaded)
+
+  def text_between_dirty(_doc, _from, _to, _separator, _leaf),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def text_content(_doc), do: :erlang.nif_error(:nif_not_loaded)
+  def text_content_dirty(_doc), do: :erlang.nif_error(:nif_not_loaded)
 end

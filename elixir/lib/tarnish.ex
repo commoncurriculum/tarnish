@@ -118,4 +118,62 @@ defmodule Tarnish do
     with :dirty <- Native.map_position(schema, steps, pos, assoc),
          do: Native.map_position_dirty(schema, steps, pos, assoc)
   end
+
+  @doc """
+  Makes changes on the server: applies `ops` in order to one ProseMirror `Transform` of `doc`,
+  and gives the changed document and the steps the transform made, which editors can apply.
+
+  An op is a map naming a `Transform` method in `"op"`, with the method's arguments by the
+  names ProseMirror gives them. Nodes, fragments, slices, marks and steps are their JSON, and
+  node and mark types their names:
+
+      Tarnish.transform(doc, [
+        %{"op" => "addMark", "from" => 1, "to" => 6, "mark" => %{"type" => "em"}},
+        %{"op" => "setBlockType", "from" => 1, "type" => "heading", "attrs" => %{"level" => 2}}
+      ])
+
+  The methods are `replace`, `replaceWith`, `delete`, `insert`, `replaceRange`,
+  `replaceRangeWith`, `deleteRange`, `addMark`, `removeMark`, `addNodeMark`, `removeNodeMark`,
+  `setNodeMarkup`, `setNodeAttribute`, `setDocAttribute`, `setBlockType`, `lift`, `wrap`,
+  `join`, `split`, `clearIncompatible`, `step` and `maybeStep`.
+
+    * `removeMark` and `removeNodeMark` take a mark's JSON or a mark type's name.
+    * `lift` and `wrap` take `"from"`, `"to"` and an optional `"depth"` for their range, which
+      is `$from.blockRange($to)` without a depth. Without a `"target"`, `lift` lifts to
+      `liftTarget`'s. Without `"wrappers"`, `wrap` wraps in `"nodeType"` with `"attrs"`, as
+      `findWrapping` finds.
+    * Positions are whole numbers, and a range's `"to"` can't come before its `"from"`.
+
+  An op that fails fails the whole call, with the error ProseMirror throws.
+  """
+  @spec transform(doc(), [json()]) :: {:ok, doc(), [json()]} | error()
+  def transform(%Doc{ref: ref} = doc, ops) do
+    transformed = with :dirty <- Native.transform(ref, ops), do: Native.transform_dirty(ref, ops)
+    with {:ok, ref, steps} <- transformed, do: {:ok, %{doc | ref: ref}, steps}
+  end
+
+  @doc """
+  The text between two positions, as `textBetween` gives it: `block_separator` goes between
+  blocks, and `leaf_text` stands for each leaf node that isn't text.
+
+  A lone surrogate, where a position splits a pair, is U+FFFD.
+  """
+  @spec text_between(
+          doc(),
+          non_neg_integer(),
+          non_neg_integer(),
+          String.t() | nil,
+          String.t() | nil
+        ) :: {:ok, String.t()} | error()
+  def text_between(%Doc{ref: ref}, from, to, block_separator \\ nil, leaf_text \\ nil) do
+    with :dirty <- Native.text_between(ref, from, to, block_separator, leaf_text),
+         do: Native.text_between_dirty(ref, from, to, block_separator, leaf_text)
+  end
+
+  @doc "All the text in the document, as `textContent` gives it."
+  @spec text_content(doc()) :: String.t()
+  def text_content(%Doc{ref: ref}) do
+    {:ok, text} = with :dirty <- Native.text_content(ref), do: Native.text_content_dirty(ref)
+    text
+  end
 end
