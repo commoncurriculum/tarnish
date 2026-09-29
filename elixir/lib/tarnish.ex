@@ -222,13 +222,16 @@ defmodule Tarnish do
   The NIF spreads a batch over its threads, as `Tarnish.Bridge` spreads one over its workers,
   and reads maps, lists, strings, numbers and atoms itself. A request holding any other term,
   such as a struct, is encoded with Jason and decoded back first, as a worker would read it, so a
-  term Jason can't encode raises as Jason raises. `opts` are `Tarnish.Bridge.convert/2`'s.
+  term Jason can't encode raises as Jason raises.
+
+  `opts` are for the bridge, which the NIF doesn't need: `timeout:` in milliseconds (30,000 by
+  default), and `pool:` and `size:` for a bridge other than the one in your supervision tree.
   """
   @spec convert([request()], keyword()) :: [converted()]
   def convert(requests, opts \\ []) do
     case conversions() do
       :nif -> convert_in_nif(requests)
-      :bridge -> Tarnish.Bridge.convert(requests, opts)
+      :bridge -> Tarnish.Bridge.call(requests, opts)
     end
   end
 

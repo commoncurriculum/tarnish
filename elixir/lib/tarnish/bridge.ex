@@ -1,13 +1,14 @@
 defmodule Tarnish.Bridge do
   @moduledoc """
-  Makes `Tarnish`'s conversions in worker processes, a pool of them with a port each, when
-  `config :tarnish, conversions: :bridge`. Add it to your supervision tree; it starts no pool
+  The connection to worker processes that make `Tarnish`'s conversions: a pool of them, each on
+  a port. `Tarnish`'s conversion functions send their requests over it when
+  `config :tarnish, conversions: :bridge`. Put it in your supervision tree; it starts no workers
   when the conversions run in your NIF.
 
       config :tarnish, conversions: :bridge
       config :tarnish, Tarnish.Bridge, command: ["node", "worker.mjs"], size: 2
 
-  A worker writes `{"ready":true}` once it can convert, then answers each line holding
+  A worker writes `{"ready":true}` once it can answer, then answers each line holding
   `{"id", "operation", "input", "options"}` with a line holding `{"id", "result"}` or
   `{"id", "error"}`, in the order the requests came.
   """
@@ -42,28 +43,26 @@ defmodule Tarnish.Bridge do
     end
   end
 
-  @doc """
-  Makes the conversions in order, spread over the pool's workers. `opts` takes `timeout:` in
-  milliseconds (30,000 by default), and `pool:` and `size:` for a pool other than this one.
-  """
-  @spec convert([Tarnish.request()], keyword()) :: [Tarnish.converted()]
-  def convert(requests, opts \\ []) do
+  # Sends the requests to the workers, a share to each, and gives their answers in order.
+  @doc false
+  @spec call([Tarnish.request()], keyword()) :: [Tarnish.converted()]
+  def call(requests, opts) do
     size = Keyword.get(opts, :size, configured(:size, @default_size))
     per_worker = max(ceil(length(requests) / size), 1)
 
     requests
     |> Enum.chunk_every(per_worker)
-    |> Task.async_stream(&convert_batch(&1, opts),
+    |> Task.async_stream(&call_worker(&1, opts),
       max_concurrency: size,
       ordered: true,
       timeout: :infinity
     )
-    |> Enum.flat_map(fn {:ok, results} -> results end)
+    |> Enum.flat_map(fn {:ok, answers} -> answers end)
   end
 
-  # A worker takes every frame of a batch before it answers any, which saves a round trip per
+  # A worker takes every frame of its share before it answers any, which saves a round trip per
   # request.
-  defp convert_batch(requests, opts) do
+  defp call_worker(requests, opts) do
     pool = Keyword.get(opts, :pool, __MODULE__)
     timeout = Keyword.get(opts, :timeout, @default_timeout)
 
