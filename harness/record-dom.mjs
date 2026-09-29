@@ -7,7 +7,8 @@
 // - Each document, from fixtures/transform.json, the parses and a few of its own, records the
 //   innerHTML of an element that DOMSerializer.serializeFragment fills.
 // - Each inline style records what an element's style holds with the style attribute set to it,
-//   and the attribute that setting style.cssText to it writes.
+//   and the attribute that setting style.cssText to it writes. The engine's engine() is recorded
+//   too, for the tests to check that they run the same tarnish-css natively.
 // - Each DOM output spec records the outerHTML of what DOMSerializer.renderSpec makes of it.
 // - Each node records what an attribute set to it holds, as renderSpec sets one to a
 //   {dom, contentDOM}: a link's href, resolved against its document's base URL, or else the name
@@ -537,6 +538,8 @@ const styles = css.map(text => {
     cssText: written.getAttribute("style"),
   }
 })
+// The same module instance as element.style's, which the styles above have started.
+const { engine } = await import(new URL("shared/css/engine.js", import.meta.resolve("linkedom")))
 
 const specs = [
   ["div", { class: "a", "data-X": "1", title: `a "b" & c${nbsp}<d>` }, "text & <more>", ["span", 0]],
@@ -629,10 +632,15 @@ const hrefs = [
   "https://user:pass@EXAMPLE.com:443/a/../b/./c",
   "https://例え.jp/パス?キー=値",
   "file:///C:/x",
+  "x?q#f",
+  "x#f",
+  " \t#f",
+  "x:y#f",
 ]
 const bases = [
   "<base href='https://example.com/a/b?c'>",
   "<base href='relative/'>",
+  "<base href='x#f'>",
   "<base href='https://ex ample.com/'>",
   "<base><base href='https://one.example/x/'><base href='https://two.example/'>",
   "<body><base href='https://body.example/'>",
@@ -640,7 +648,7 @@ const bases = [
 const strings = [
   ...tags.map(element => ({ element })),
   ...hrefs.flatMap(href => ["a", "area", "http://www.w3.org/1999/xhtml x:a"].map(element => ({ element, href }))),
-  ...bases.flatMap(html => ["c?d", "/docs", "#x", "//other.example/"].map(href => ({ document: html, element: "a", href }))),
+  ...bases.flatMap(html => ["c?d", "/docs", "#x", "y#f", "//other.example/"].map(href => ({ document: html, element: "a", href }))),
   ...["text", "comment", "fragment", "document", "doctype"].map(node => ({ node })),
 ].map(record => {
   const owner = record.document === undefined ? document : new window.DOMParser().parseFromString(record.document, "text/html")
@@ -672,7 +680,8 @@ const spec = { topNode: schema.topNodeType.name, nodes: schema.spec.nodes.toObje
 const oneEach = records => `[\n${records.map(record => `    ${JSON.stringify(record)}`).join(",\n")}\n  ]`
 writeFileSync(
   new URL("../fixtures/dom.json", import.meta.url),
-  `{\n  "schema": ${JSON.stringify(spec)},\n  "parses": ${oneEach(parses)},\n  "serializes": ${oneEach(serializes)},\n` +
+  `{\n  "engine": ${JSON.stringify(engine())},\n  "schema": ${JSON.stringify(spec)},\n  "parses": ${oneEach(parses)},\n` +
+    `  "serializes": ${oneEach(serializes)},\n` +
     `  "styleProperties": ${JSON.stringify(properties)},\n  "styles": ${oneEach(styles)},\n  "renders": ${oneEach(renders)},\n` +
     `  "strings": ${oneEach(strings)}\n}\n`,
 )

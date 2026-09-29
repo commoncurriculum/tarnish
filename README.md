@@ -118,13 +118,11 @@ This example is `tarnish-html`'s doctest.
 - **Proven against the linkedom fork.** `npm run test:js` records to `fixtures/dom.json` what
   ProseMirror does in the fork with prosemirror-schema-basic and prosemirror-schema-list: 297
   parses of 287 HTML inputs, as a template's content and as a document, 450 documents written
-  as HTML, 85 inline styles, 42 DOM output specs, and the strings 240 nodes give an attribute
+  as HTML, 85 inline styles, 42 DOM output specs, and the strings 262 nodes give an attribute
   set to them: a link its `href`, resolved against the document's `<base>`, any other node its
   interface. The crate's tests write those schemas' rules and `toDOM`s in Rust, and must build
-  the same trees, documents, HTML and strings.
-- **Where an interface differs.** An HTML element that `createElementNS` makes with an
-  upper-case local name, such as `A`, is an `HTMLUnknownElement`, as the standard has it. The
-  fork gives it the lower-case name's interface, and the tests print both.
+  the same trees, documents, HTML and strings. They also check that the fork's `element.style`
+  runs the `tarnish-css` they do, by the `engine()` it recorded.
 - **Where the trees differ.** The tests print both trees for three inputs, where html5ever
   follows the HTML standard and parse5 8 doesn't, but for `<isindex>`:
   - elements in a `<select>`, which html5ever keeps, as the standard now does, and parse5

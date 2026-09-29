@@ -222,6 +222,12 @@ fn inline_styles_match_the_fork() -> Result<()> {
 }
 
 #[test]
+fn the_forks_css_engine_is_this_one() {
+    let (_, fixtures) = fixtures();
+    assert_eq!(fixtures["engine"].as_str(), Some(tarnish_css::ENGINE));
+}
+
+#[test]
 fn rendered_specs_match_the_fork() {
     let (_, fixtures) = fixtures();
     let mut failures = Vec::new();
@@ -272,15 +278,6 @@ fn node_of(dom: &HtmlDom, record: &Value) -> Result<HtmlNode> {
     }
 }
 
-/// Elements the fork gives another interface than the standard does, which tarnish-html
-/// follows, and why. The test prints both strings, and fails when they come to match.
-const DIFFERENT_STRINGS: &[(&str, &str)] = &[(
-    "http://www.w3.org/1999/xhtml A",
-    "The fork registers each HTML element class under its upper-case name too, for its parser, \
-     so createElementNS gives an upper-case local name the lower-case name's class. The standard \
-     gives HTMLUnknownElement.",
-)];
-
 #[test]
 fn attribute_values_of_nodes_match_the_fork() -> Result<()> {
     let (_, fixtures) = fixtures();
@@ -291,17 +288,8 @@ fn attribute_values_of_nodes_match_the_fork() -> Result<()> {
             None => HtmlDom::new(),
         };
         let string = dom.attribute_value(&node_of(&dom, record)?)?;
-        let element = record.get("element").and_then(Value::as_str);
-        let known = DIFFERENT_STRINGS
-            .iter()
-            .any(|(name, _)| Some(*name) == element);
-        match (known, record["string"].as_str() == Some(&string)) {
-            (false, true) => {}
-            (true, false) => println!("  recorded: {record}\n  tarnish-html: {string:?}"),
-            (false, false) => {
-                failures.push(format!("  recorded: {record}\n  tarnish-html: {string:?}"))
-            }
-            (true, true) => failures.push(format!("{record} is no longer different")),
+        if record["string"].as_str() != Some(&string) {
+            failures.push(format!("  recorded: {record}\n  tarnish-html: {string:?}"));
         }
     }
     report(failures);
