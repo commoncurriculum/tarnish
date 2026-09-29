@@ -8,7 +8,7 @@ use json_event_parser::{JsonEvent, LowLevelJsonParser, LowLevelJsonParserResult}
 use serde::de::{DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 
 use super::{Key, Map, Value};
-use crate::js;
+use crate::number;
 
 /// The text isn't JSON, so `JSON.parse` throws.
 #[derive(Debug)]
@@ -125,15 +125,15 @@ impl<'de> Visitor<'de> for Seed {
     }
 
     fn visit_i64<E>(self, integer: i64) -> Result<Value, E> {
-        Ok(js::number(integer as f64))
+        Ok(number(integer as f64))
     }
 
     fn visit_u64<E>(self, integer: u64) -> Result<Value, E> {
-        Ok(js::number(integer as f64))
+        Ok(number(integer as f64))
     }
 
     fn visit_f64<E>(self, float: f64) -> Result<Value, E> {
-        Ok(js::number(float))
+        Ok(number(float))
     }
 
     fn visit_str<E>(self, text: &str) -> Result<Value, E> {
@@ -218,7 +218,7 @@ impl Builder {
             },
             JsonEvent::String(text) => Value::String(text.into_owned()),
             JsonEvent::Number(text) => {
-                js::number(text.parse().expect("the parser checks a number's syntax"))
+                number(text.parse().expect("the parser checks a number's syntax"))
             }
             JsonEvent::Boolean(boolean) => Value::Bool(boolean),
             JsonEvent::Null => Value::Null,
@@ -272,9 +272,9 @@ impl Object {
 #[cfg(test)]
 mod tests {
     use super::from_str;
-    use crate::js::json::stringify;
+    use crate::json::stringify;
 
-    /// `JSON.stringify(JSON.parse(text))` in Bun 1.4, or `None` where `JSON.parse` throws.
+    /// `JSON.stringify(JSON.parse(text))` in Node, or `None` where `JSON.parse` throws.
     const PARSED: &[(&str, Option<&str>)] = &[
         ("{}", Some("{}")),
         (" [1, 2 ] ", Some("[1,2]")),

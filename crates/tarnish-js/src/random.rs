@@ -1,6 +1,7 @@
 //! Random inputs for the tests that hold hand-written code to the regex or parser it stands in
 //! for. The generator is seeded, so a failure reproduces.
 
+#[cfg(feature = "regexp")]
 use crate::regexp::RegExp;
 use crate::utf16;
 
@@ -66,6 +67,7 @@ pub fn check_same<T: PartialEq + std::fmt::Debug>(
 
 /// Checks that the guard `may` says yes wherever `regex` matches, and that both the matches
 /// and its noes happen often enough for the check to mean something.
+#[cfg(feature = "regexp")]
 pub fn check_may(regex: &RegExp, may: fn(&[u16]) -> bool, alphabet: &[&str]) {
     let (mut matches, mut noes) = (0, 0);
     for src in strings(alphabet, 500_000) {

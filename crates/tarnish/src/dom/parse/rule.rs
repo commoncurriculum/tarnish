@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::error::Result;
+use crate::Result;
 use crate::json::Map;
 use crate::model::{Fragment, Mark, Schema};
 

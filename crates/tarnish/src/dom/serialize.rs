@@ -8,11 +8,11 @@ use std::sync::Arc;
 
 use super::{Dom, NodeKind};
 use crate::chunk::{Kind, ValueRef};
-use crate::error::{Error, Result};
 use crate::js;
+use crate::js::stack;
 use crate::json::{Map, Value};
 use crate::model::{Fragment, Mark, Node, TextRef};
-use crate::stack;
+use crate::{Error, Result};
 
 /// What a node's or mark's `toDOM` gives: ProseMirror's `DOMOutputSpec`.
 #[derive(Clone)]
@@ -125,10 +125,10 @@ impl AttrValue<'_> {
     }
 
     /// `String(value)`, as `setAttribute` stores it.
-    pub fn to_js_string(&self) -> Cow<'_, str> {
+    pub fn to_js_string(&self) -> Result<Cow<'_, str>> {
         match self {
             AttrValue::Json(value) => value.to_js_string(),
-            AttrValue::Text(text) => Cow::Borrowed(text),
+            AttrValue::Text(text) => Ok(Cow::Borrowed(text)),
         }
     }
 
@@ -353,12 +353,10 @@ impl<N: Clone> DomSerializer<N> {
 
     /// The node's spec from its type's `toDOM`.
     fn spec<'n>(&self, node: &'n Node<'static>) -> Result<DomSpec<'n, N>> {
-        let to_dom = self.nodes.get(node.node_type().name()).ok_or_else(|| {
-            js::not_a_function(
-                "this.nodes[node.type.name]",
-                "this.nodes[node.type.name](node)",
-            )
-        })?;
+        let to_dom = self
+            .nodes
+            .get(node.node_type().name())
+            .ok_or_else(|| js::value::not_a_function("this.nodes[node.type.name]"))?;
         to_dom(node)
     }
 

@@ -10,11 +10,11 @@ use super::html::{
 };
 use super::rule::{Content, ContentElement, ElementRule, PreserveWhitespace, Skip};
 use crate::dom::{Dom, NodeKind};
-use crate::error::{Error, Result};
-use crate::js::{self, Nullish};
+use crate::js::stack;
+use crate::js::text::{Text, is_blank, line_breaks, replace_line_breaks, split_lines};
+use crate::js::{self, value::Nullish};
 use crate::model::{Fragment, Mark, MarkType, Node, NodeType};
-use crate::stack;
-use crate::text::{Text, is_blank, line_breaks, replace_line_breaks, split_lines};
+use crate::{Error, Result};
 
 /// A text to add: a DOM text node's, or the newline a `<br>` stands for.
 struct TextSource<'n, N> {
@@ -424,7 +424,7 @@ impl<'p, D: Dom> ParseContext<'p, D> {
                         Some(start) if start > 0 && index == start => Nullish::Undefined,
                         _ => Nullish::Null,
                     };
-                    return Err(js::type_error(missing, "nodeType"));
+                    return Err(js::value::cannot_read(missing, "nodeType"));
                 }
                 break;
             };

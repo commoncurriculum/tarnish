@@ -7,7 +7,7 @@ use super::node::Node;
 use super::schema::Schema;
 use super::view::{NodeRef, SetRef};
 use crate::chunk::{Builder, Chunk, EMPTY_OBJECT, EMPTY_SET, Holder, Kid, Record, ValueRef};
-use crate::stack;
+use crate::js::stack;
 
 /// What a copy has written of what it copies: each value and set it copied, by where it was,
 /// so that what nodes share stays shared.

@@ -4,9 +4,9 @@
 
 use std::ops::{Deref, DerefMut};
 
-use tarnish::stack;
+use tarnish_js::stack;
 
-use tarnish::json::{Map, Value};
+use tarnish_js::json::{Map, Value};
 use tarnish_js::units::Units;
 
 #[derive(Clone, Debug, Default)]

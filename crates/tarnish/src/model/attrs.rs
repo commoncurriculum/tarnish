@@ -5,10 +5,11 @@ use std::fmt;
 use std::sync::Arc;
 
 use super::compare_deep::deep_equal;
+use super::read::{AttrKeys, Given, Keys};
 use crate::chunk::{Builder, Chunk, EMPTY_OBJECT, JsonView, ValueRef};
-use crate::error::{Error, Result};
-use crate::js::{AttrKeys, Given, Keys, TypeOf};
+use crate::js::TypeOf;
 use crate::json::{Key, Map, Value};
+use crate::{Error, Result};
 
 /// A function that raises an error for an attribute value it doesn't accept, `None` being
 /// `undefined`.

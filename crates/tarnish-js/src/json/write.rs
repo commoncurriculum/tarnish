@@ -2,7 +2,7 @@
 
 use std::fmt::{self, Write};
 
-use crate::json::{Event, Map, Number, Value, events};
+use super::{Event, Map, Number, Value, events};
 
 /// `JSON.stringify(value)`, however deeply it nests.
 pub fn stringify(value: &Value) -> String {
@@ -73,7 +73,7 @@ impl fmt::Debug for Value {
 
 // JavaScript holds every number as a double, so a parsed integer beyond 2^53 has already lost
 // its low digits by the time it is written back out.
-pub(crate) fn write_number(out: &mut String, number: &Number) {
+pub fn write_number(out: &mut String, number: &Number) {
     let double = number.as_f64().unwrap_or(f64::NAN);
     if double.is_finite() {
         out.push_str(ryu_js::Buffer::new().format_finite(double));
@@ -125,5 +125,66 @@ fn write_escape(out: &mut String, code: u32) {
         0x0D => out.push_str("\\r"),
         0x09 => out.push_str("\\t"),
         _ => write!(out, "\\u{code:04x}").expect("a string takes any write"),
+    }
+}
+
+/// `JSON.stringify` of an object holding `entries`.
+pub fn stringify_entries<'k, 'v>(entries: impl Iterator<Item = (&'k str, &'v Value)>) -> String {
+    // Most attribute trailers fit, where growing from one byte would reallocate several times.
+    let mut out = String::with_capacity(64);
+    out.push('{');
+    for (index, (key, value)) in entries.enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        write_string(&mut out, key);
+        out.push(':');
+        write_value(&mut out, value);
+    }
+    out.push('}');
+    out
+}
+
+/// `JSON.stringify(value, null, 2)`, however deeply it nests.
+pub fn stringify_pretty(value: &Value) -> String {
+    let mut out = String::new();
+    write_pretty(&mut out, value, 0);
+    out
+}
+
+fn write_pretty(out: &mut String, value: &Value, depth: usize) {
+    let indent = |out: &mut String, depth: usize| out.push_str(&"  ".repeat(depth));
+    match value {
+        Value::Array(items) if items.is_empty() => out.push_str("[]"),
+        Value::Object(entries) if entries.is_empty() => out.push_str("{}"),
+        Value::Array(items) => {
+            out.push_str("[\n");
+            for (index, item) in items.iter().enumerate() {
+                if index > 0 {
+                    out.push_str(",\n");
+                }
+                indent(out, depth + 1);
+                crate::stack::grow(|| write_pretty(out, item, depth + 1));
+            }
+            out.push('\n');
+            indent(out, depth);
+            out.push(']');
+        }
+        Value::Object(entries) => {
+            out.push_str("{\n");
+            for (index, (key, item)) in entries.iter().enumerate() {
+                if index > 0 {
+                    out.push_str(",\n");
+                }
+                indent(out, depth + 1);
+                write_string(out, key);
+                out.push_str(": ");
+                crate::stack::grow(|| write_pretty(out, item, depth + 1));
+            }
+            out.push('\n');
+            indent(out, depth);
+            out.push('}');
+        }
+        scalar => write_value(out, scalar),
     }
 }

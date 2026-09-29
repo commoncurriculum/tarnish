@@ -68,11 +68,6 @@ pub fn find(units: &[u16], unit: u16) -> Option<usize> {
     units.iter().position(|&each| each == unit)
 }
 
-/// `/\s/`: JavaScript's WhiteSpace and LineTerminator, which `trim` strips.
-pub fn is_whitespace(unit: u16) -> bool {
-    char::from_u32(unit.into()).is_some_and(crate::is_whitespace)
-}
-
 pub fn trim(units: &[u16]) -> &[u16] {
     trim_end(trim_start(units))
 }
@@ -80,7 +75,7 @@ pub fn trim(units: &[u16]) -> &[u16] {
 pub fn trim_start(units: &[u16]) -> &[u16] {
     let start = units
         .iter()
-        .position(|&unit| !is_whitespace(unit))
+        .position(|&unit| !crate::is_whitespace_unit(unit))
         .unwrap_or(units.len());
     &units[start..]
 }
@@ -88,7 +83,7 @@ pub fn trim_start(units: &[u16]) -> &[u16] {
 pub fn trim_end(units: &[u16]) -> &[u16] {
     let end = units
         .iter()
-        .rposition(|&unit| !is_whitespace(unit))
+        .rposition(|&unit| !crate::is_whitespace_unit(unit))
         .map_or(0, |index| index + 1);
     &units[..end]
 }

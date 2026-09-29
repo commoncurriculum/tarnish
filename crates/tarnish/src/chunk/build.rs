@@ -12,11 +12,11 @@ use super::{
     HELD_AS_UNITS, Holder, IMPORTS, KIDS, Kid, LOCAL, MAGIC, MARKS, MEMBERS, NODES, Record,
     SECTIONS, SETS, STRINGS, TEXT, TEXT_NODE, UNITS, VALUES, corrupt,
 };
+use crate::Text;
+use crate::js::stack;
 use crate::json::Map;
 use crate::model::compare_deep::deep_equal;
 use crate::model::{Schema, TextRef};
-use crate::stack;
-use crate::text::Text;
 
 pub(crate) struct Builder<'a> {
     schema: Schema,

@@ -1,9 +1,9 @@
 //! Rules' `context`: the nodes a rule may match inside, as `"a/b//c|d"`.
 
 use super::context::ParseContext;
+use crate::Result;
 use crate::dom::Dom;
-use crate::error::Result;
-use crate::text::is_js_space;
+use crate::js::is_whitespace_unit;
 
 impl<'p, D: Dom> ParseContext<'p, D> {
     /// Whether the context string matches the nodes being parsed into.
@@ -82,7 +82,7 @@ impl<'p, D: Dom> ParseContext<'p, D> {
 
 /// `context.split(/\s*\|\s*/)`: the space around each `|` goes with it.
 fn split_alternatives(context: &str) -> Vec<&str> {
-    let space = |c: char| c.len_utf16() == 1 && is_js_space(c as u16);
+    let space = |c: char| c.len_utf16() == 1 && is_whitespace_unit(c as u16);
     let parts: Vec<&str> = context.split('|').collect();
     let last = parts.len() - 1;
     parts

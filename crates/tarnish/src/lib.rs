@@ -39,17 +39,13 @@
 pub mod api;
 pub mod chunk;
 pub mod dom;
-pub mod error;
-pub mod js;
-pub mod json;
 pub mod model;
-#[cfg(test)]
-mod random;
-pub mod stack;
-pub mod text;
 pub mod transform;
 
-pub use error::{Error, Result};
+/// JavaScript's values and built-ins, as ProseMirror relies on them: the JSON values documents
+/// are made of, strings as UTF-16, JavaScript's conversions, and the errors it throws.
+pub use tarnish_js as js;
+
+pub use js::{Error, Result, Text, json};
 pub use json::{Key, Map, Value};
 pub use model::*;
-pub use text::Text;

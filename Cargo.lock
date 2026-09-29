@@ -1534,6 +1534,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
+name = "str_indices"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d08889ec5408683408db66ad89e0e1f93dff55c73a4ccc71c427d5b277ee47e6"
+
+[[package]]
 name = "string_cache"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1798,13 +1804,8 @@ dependencies = [
 name = "tarnish"
 version = "0.1.0"
 dependencies = [
- "compact_str",
- "json-event-parser",
  "mimalloc",
- "ryu-js",
- "serde",
- "serde_json",
- "stacker",
+ "tarnish-js",
 ]
 
 [[package]]
@@ -1852,9 +1853,15 @@ dependencies = [
 name = "tarnish-js"
 version = "0.1.0"
 dependencies = [
+ "compact_str",
  "icu_collator",
+ "json-event-parser",
  "regress",
- "tarnish",
+ "ryu-js",
+ "serde",
+ "serde_json",
+ "stacker",
+ "str_indices",
 ]
 
 [[package]]
@@ -1862,7 +1869,6 @@ name = "tarnish-markdown"
 version = "0.1.0"
 dependencies = [
  "regress",
- "tarnish",
  "tarnish-js",
 ]
 

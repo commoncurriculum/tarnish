@@ -5,9 +5,9 @@ use std::sync::Arc;
 
 use super::attrs::{AttributeDefault, AttributeSpec, Validate};
 use super::schema::{MarkSpec, NodeSpec, SchemaSpec, Whitespace};
-use crate::error::{Error, Result};
 use crate::js;
 use crate::json::{self, Map, Value};
+use crate::{Error, Result};
 
 fn invalid(what: &str) -> Error {
     Error::Range(format!("Invalid schema spec: {what}"))
@@ -15,14 +15,14 @@ fn invalid(what: &str) -> Error {
 
 /// JavaScript's `value == text`, for a `text` that as a number is `0` when empty and `NaN`
 /// otherwise.
-fn loosely_equals(value: &Value, text: &str) -> bool {
-    match value {
+fn loosely_equals(value: &Value, text: &str) -> Result<bool> {
+    Ok(match value {
         Value::Null => false,
         Value::Bool(value) => !value && text.is_empty(),
         Value::Number(number) => text.is_empty() && number.as_f64() == Some(0.0),
         Value::String(value) => value == text,
-        Value::Array(_) | Value::Object(_) => js::to_string(value) == text,
-    }
+        Value::Array(_) | Value::Object(_) => js::to_string(value)? == text,
+    })
 }
 
 /// A property that ProseMirror splits or parses as a string when it is truthy, and passes over
@@ -38,12 +38,17 @@ fn truthy_string(spec: &Map, key: &str) -> Result<Option<String>> {
 /// `marks`, which ProseMirror compares with `"_"`, then splits when truthy, and otherwise
 /// compares with `""`.
 fn marks(spec: &Map) -> Result<Option<String>> {
-    match spec.get("marks") {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(expr)) => Ok(Some(expr.clone())),
-        Some(value) if loosely_equals(value, "_") => Ok(Some("_".into())),
-        Some(value) if !js::truthy(Some(value)) => Ok(Some(String::new())),
-        Some(_) => Err(invalid("marks must be a string")),
+    let value = match spec.get("marks") {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::String(expr)) => return Ok(Some(expr.clone())),
+        Some(value) => value,
+    };
+    if loosely_equals(value, "_")? {
+        Ok(Some("_".into()))
+    } else if !js::truthy(Some(value)) {
+        Ok(Some(String::new()))
+    } else {
+        Err(invalid("marks must be a string"))
     }
 }
 
@@ -52,7 +57,7 @@ fn excludes(spec: &Map) -> Result<Option<String>> {
     match spec.get("excludes") {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(expr)) => Ok(Some(expr.clone())),
-        Some(value) if loosely_equals(value, "") => Ok(Some(String::new())),
+        Some(value) if loosely_equals(value, "")? => Ok(Some(String::new())),
         Some(_) => Err(invalid("excludes must be a string")),
     }
 }
@@ -143,7 +148,7 @@ fn node_spec(spec: &Map) -> Result<NodeSpec> {
         // `"pre"`.
         whitespace: match spec.get("whitespace") {
             value if !js::truthy(value) => None,
-            Some(value) if loosely_equals(value, "pre") => Some(Whitespace::Pre),
+            Some(value) if loosely_equals(value, "pre")? => Some(Whitespace::Pre),
             _ => Some(Whitespace::Normal),
         },
         defining_as_context: flag(spec, "definingAsContext"),
@@ -246,7 +251,8 @@ impl SchemaSpec {
             top_node: spec
                 .get("topNode")
                 .filter(|name| js::truthy(Some(name)))
-                .map(js::to_string),
+                .map(js::to_string)
+                .transpose()?,
         })
     }
 }

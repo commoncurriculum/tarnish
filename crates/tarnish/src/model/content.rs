@@ -14,9 +14,9 @@ use std::sync::{Arc, LazyLock, Mutex};
 use super::fragment::Fragment;
 use super::node::Node;
 use super::schema::{NodeType, NodeTypeData, Schema};
-use crate::error::{Error, Result};
 use crate::js;
-use crate::stack;
+use crate::js::stack;
+use crate::{Error, Result};
 
 /// The compiled form of one content expression.
 pub struct Automaton {
@@ -285,7 +285,7 @@ impl<'s> ContentMatch<'s> {
         let filled = self
             .node_type(node)
             .create_and_fill(None, Fragment::empty(), &[])?;
-        js::non_null(filled, "nodeSize")
+        js::value::non_null(filled, "nodeSize")
     }
 
     fn search_fill(

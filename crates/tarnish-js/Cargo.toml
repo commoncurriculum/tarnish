@@ -1,13 +1,26 @@
 [package]
 name = "tarnish-js"
 version = "0.1.0"
-description = "JavaScript's built-ins as ported JavaScript libraries use them: strings as UTF-16, regular expressions, arrays, numbers and JSON"
+description = "JavaScript's values and built-ins as V8 runs them, for Rust ports of JavaScript libraries: JSON values, strings as UTF-16, numbers, errors, and, as features, regular expressions and collation"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# `RegExp`, on regress, and the random inputs that check hand-written matchers against it.
+regexp = ["dep:regress"]
+# `String.prototype.localeCompare`, on ICU's collator.
+collation = ["dep:icu_collator"]
+
 [dependencies]
-icu_collator = "2"
-regress = { path = "../../vendor/regress", features = ["utf16", "prohibit-unsafe"] }
-tarnish = { path = "../tarnish", version = "0.1.0" }
+compact_str = "0.9"
+icu_collator = { version = "2", optional = true }
+json-event-parser = "0.2"
+regress = { path = "../../vendor/regress", features = ["utf16", "prohibit-unsafe"], optional = true }
+ryu-js = "1"
+serde = "1"
+str_indices = "0.4"
+# JSON.parse rounds every number correctly; serde_json does only with float_roundtrip.
+serde_json = { version = "1", features = ["float_roundtrip"] }
+stacker = "0.1"

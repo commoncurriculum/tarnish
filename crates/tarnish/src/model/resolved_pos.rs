@@ -4,7 +4,7 @@ use std::fmt;
 
 use super::mark::{Mark, Marks};
 use super::node::Node;
-use crate::error::{Error, Result};
+use crate::{Error, Result};
 
 /// What [`ResolvedPos::block_range`] asks whether a range may be in a node.
 pub type NodePredicate<'f, 'a> = dyn FnMut(&Node<'a>) -> Result<bool> + 'f;

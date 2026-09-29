@@ -12,9 +12,10 @@ use std::ops::Range;
 use rustler::types::atom;
 use rustler::types::map::MapIterator;
 use rustler::{BigInt, Binary, Encoder, Env, Term, TermType};
-use tarnish::js::{self, AttrKeys, Given, ReadMark, ReadNode, WrittenNumber};
+use tarnish::js::stack;
+use tarnish::js::{self, WrittenNumber};
 use tarnish::json::{self, Key, Map, Number, Value};
-use tarnish::stack;
+use tarnish::model::read::{self, AttrKeys, Given, ReadMark, ReadNode};
 
 use crate::term::Unread;
 
@@ -462,7 +463,7 @@ impl<'a, 'r> Iterator for Entries<'a, 'r> {
     }
 }
 
-impl<'a> js::Json<'a> for Json<'a, '_> {
+impl<'a> read::Json<'a> for Json<'a, '_> {
     fn truthy(self) -> bool {
         match self.kind() {
             Kind::Null => false,
@@ -488,10 +489,10 @@ impl<'a> js::Json<'a> for Json<'a, '_> {
         fields
     }
 
-    fn string(self) -> Cow<'a, str> {
+    fn string(self) -> tarnish::Result<Cow<'a, str>> {
         match self.kind_of_string() {
-            Kind::String(text) => text,
-            _ => Cow::Owned(js::to_string(&self.value())),
+            Kind::String(text) => Ok(text),
+            _ => js::to_string(&self.value()).map(Cow::Owned),
         }
     }
 
@@ -518,7 +519,7 @@ impl<'a> js::Json<'a> for Json<'a, '_> {
                 }
                 Given::Object(Cow::Owned(attrs))
             }
-            _ if js::Json::truthy(self) => Given::Object(Cow::Borrowed(&json::EMPTY)),
+            _ if read::Json::truthy(self) => Given::Object(Cow::Borrowed(&json::EMPTY)),
             _ => Given::Falsy(self.value()),
         }
     }

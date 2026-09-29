@@ -231,7 +231,7 @@ fn direct(spec: &DomSpec<'_, HtmlNode>) -> bool {
             plain(tag, attrs)
                 && children
                     .iter()
-                    .all(|child| tarnish::stack::grow(|| direct(child)))
+                    .all(|child| tarnish::js::stack::grow(|| direct(child)))
         }
         DomSpec::Node(_) | DomSpec::Rendered(_) | DomSpec::Array { .. } | DomSpec::Value(_) => {
             false
@@ -277,7 +277,7 @@ fn write_spec(
             return Ok(None);
         }
         DomSpec::Wrapping { tag, attrs } => {
-            write_start(out, tag, attrs);
+            write_start(out, tag, attrs)?;
             write_end(tails, tag);
             return Ok(Some(Content::of_html(tag)));
         }
@@ -288,7 +288,7 @@ fn write_spec(
         } => (*tag, attrs, children),
         _ => return Err(invalid()),
     };
-    write_start(out, tag, attrs);
+    write_start(out, tag, attrs)?;
     let inner = Content::of_html(tag);
     // The children of a void element or a template are built but not written, nor what follows
     // a hole in one of them.
@@ -312,7 +312,7 @@ fn write_spec(
             // Once a child holds the content, what follows it follows the content.
             Some(_) => {
                 let mut after = String::new();
-                let written = tarnish::stack::grow(|| {
+                let written = tarnish::js::stack::grow(|| {
                     write_spec(&mut after, &mut String::new(), child, inner, false)
                 })?;
                 if written.is_some() {
@@ -321,7 +321,8 @@ fn write_spec(
                 body_tails.push_str(&after);
             }
             None => {
-                hole = tarnish::stack::grow(|| write_spec(body, body_tails, child, inner, false))?
+                hole =
+                    tarnish::js::stack::grow(|| write_spec(body, body_tails, child, inner, false))?
             }
         }
     }
@@ -350,7 +351,7 @@ fn write_text(out: &mut String, text: &str, content: Content) {
 
 /// The start tag of an HTML element with the spec's attributes that aren't null, in order:
 /// `style` as the CSS engine keeps its declarations, as `style.cssText` sets it.
-fn write_start(out: &mut String, tag: &str, attrs: &SpecAttrs) {
+fn write_start(out: &mut String, tag: &str, attrs: &SpecAttrs) -> Result<()> {
     out.push('<');
     out.push_str(tag);
     for (name, value) in attrs.iter() {
@@ -360,7 +361,7 @@ fn write_start(out: &mut String, tag: &str, attrs: &SpecAttrs) {
         out.push(' ');
         out.push_str(name);
         out.push_str("=\"");
-        let value = value.to_js_string();
+        let value = value.to_js_string()?;
         match *name {
             "style" => escape_attribute(out, &Declarations::parse(&value).css_text()),
             _ => escape_attribute(out, &value),
@@ -368,6 +369,7 @@ fn write_start(out: &mut String, tag: &str, attrs: &SpecAttrs) {
         out.push('"');
     }
     out.push('>');
+    Ok(())
 }
 
 fn write_end(out: &mut String, tag: &str) {

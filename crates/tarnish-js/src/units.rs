@@ -1,5 +1,5 @@
 //! A JavaScript string's UTF-16 code units, shared with the string they were cut from as
-//! JavaScriptCore shares a substring's. A lexer that keeps slices of its input at every level
+//! V8 shares a substring's. A lexer that keeps slices of its input at every level
 //! of nesting then holds the input once, as JavaScript does, rather than once per level.
 
 use std::fmt;

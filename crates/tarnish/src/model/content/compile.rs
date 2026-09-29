@@ -5,10 +5,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use super::{Automaton, State};
-use crate::error::{Error, Result};
+use crate::js::is_whitespace_unit;
+use crate::js::stack;
 use crate::model::schema::NodeTypeData;
-use crate::stack;
-use crate::text::is_js_space;
+use crate::{Error, Result};
 
 impl Automaton {
     /// `ContentMatch.parse`: compile an expression over the node types of a schema.
@@ -97,7 +97,7 @@ fn split_tokens(string: &str) -> Vec<String> {
     while q < size {
         let spaces = units[q..]
             .iter()
-            .take_while(|&&unit| is_js_space(unit))
+            .take_while(|&&unit| is_whitespace_unit(unit))
             .count();
         let Some(end) = (q..=q + spaces).rev().find(|&end| ahead(end)) else {
             q += 1;

@@ -3,21 +3,18 @@
 
 use std::borrow::Cow;
 
-use crate::error::{Error, Result};
 use crate::js;
 use crate::json::{Map, NULL, Value};
 use crate::model::{Fragment, Mark, MarkType, Node, NodeRange, NodeType, Schema, Slice};
 use crate::transform::{
     BlockAttrs, MarkMatch, Step, Transform, Wrapper, find_wrapping, lift_target,
 };
-
-/// JavaScript's `Number.MAX_SAFE_INTEGER`: `record-ops.mjs` takes no position past it.
-const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
+use crate::{Error, Result};
 
 pub(super) fn apply<'a>(tr: &mut Transform<'a>, schema: &Schema, json: &Value) -> Result<()> {
     let op = Op {
         json,
-        name: js::string(json.get("op")),
+        name: js::string(json.get("op"))?,
         schema,
     };
     match op.name.as_ref() {
@@ -211,7 +208,7 @@ impl<'j, 's> Op<'j, 's> {
     fn whole(&self, key: &str) -> Result<usize> {
         self.get(key)
             .and_then(Value::as_f64)
-            .filter(|n| *n >= 0.0 && n.fract() == 0.0 && *n <= MAX_SAFE_INTEGER)
+            .filter(|n| *n >= 0.0 && n.fract() == 0.0 && *n <= js::MAX_SAFE_INTEGER)
             .map(|n| n as usize)
             .ok_or_else(|| self.invalid(key))
     }

@@ -1,9 +1,9 @@
 use super::fits_trivially;
-use crate::error::Result;
+use crate::Result;
 use crate::js;
+use crate::js::stack;
 use crate::json::Map;
 use crate::model::{ContentMatch, Fragment, Node, NodeType, ResolvedPos, Schema, Slice};
-use crate::stack;
 use crate::transform::step::Step;
 
 /// A step that fits `slice` in between `from` and `to`, or `None` when there's no meaningful
@@ -180,7 +180,7 @@ impl<'a> Fitter<'a> {
         let mut cur = self.unplaced.content().clone();
         let mut open_end = self.unplaced.open_end();
         for d in 0..start_depth {
-            let node = js::non_null(cur.first_child(), "type")?;
+            let node = js::value::non_null(cur.first_child(), "type")?;
             if cur.child_count() > 1 {
                 open_end = 0;
             }
@@ -200,7 +200,7 @@ impl<'a> Fitter<'a> {
             for slice_depth in (0..=top).rev() {
                 let (fragment, parent) = if slice_depth > 0 {
                     let above = content_at(self.unplaced.content(), slice_depth - 1)?;
-                    let parent = js::non_null(above.first_child(), "content")?;
+                    let parent = js::value::non_null(above.first_child(), "content")?;
                     (parent.content().clone(), Some(parent))
                 } else {
                     (self.unplaced.content().clone(), None)
@@ -341,7 +341,7 @@ impl<'a> Fitter<'a> {
         let (node_type, mut matched) = frontier_parts(&schema, self.frontier[frontier_depth]);
         if let Some(inject) = &inject {
             add.extend(inject.children());
-            matched = js::non_null(matched.match_fragment(inject), "matchType")?;
+            matched = js::value::non_null(matched.match_fragment(inject), "matchType")?;
         }
         // How many nodes are open at the end of the fragment: at 0, only its parent is;
         // below 0, none are.
@@ -390,7 +390,7 @@ impl<'a> Fitter<'a> {
         // Add frontier nodes for the nodes open at the end.
         let mut cur = fragment.clone();
         for _ in 0..open_end_count.max(0) {
-            let node = js::non_null(cur.last_child(), "type")?;
+            let node = js::value::non_null(cur.last_child(), "type")?;
             self.frontier.push(frontier_of(
                 &node.node_type(),
                 &node.content_match_at(node.child_count())?,
@@ -532,7 +532,7 @@ impl<'a> Fitter<'a> {
             .pop()
             .expect("a frontier node below the root, as every caller checks");
         let (_, matched) = frontier_parts(&self.schema, open);
-        let add = js::non_null(
+        let add = js::value::non_null(
             matched.fill_before(&Fragment::empty(), true, 0)?,
             "childCount",
         )?;
@@ -551,7 +551,7 @@ fn drop_from_fragment<'a>(
     if depth == 0 {
         return Ok(fragment.cut_by_index(count, fragment.child_count()));
     }
-    let first = js::non_null(fragment.first_child(), "copy")?;
+    let first = js::value::non_null(fragment.first_child(), "copy")?;
     let dropped = stack::grow(|| drop_from_fragment(first.content(), depth - 1, count))?;
     Ok(fragment.replace_child(0, first.copy(dropped)))
 }
@@ -564,7 +564,7 @@ fn add_to_fragment<'a>(
     if depth == 0 {
         return Ok(fragment.append(content));
     }
-    let last = js::non_null(fragment.last_child(), "copy")?;
+    let last = js::value::non_null(fragment.last_child(), "copy")?;
     let added = stack::grow(|| add_to_fragment(last.content(), depth - 1, content))?;
     Ok(fragment.replace_child(fragment.child_count() - 1, last.copy(added)))
 }
@@ -572,7 +572,7 @@ fn add_to_fragment<'a>(
 fn content_at<'a>(fragment: &Fragment<'a>, depth: usize) -> Result<Fragment<'a>> {
     let mut fragment = fragment.clone();
     for _ in 0..depth {
-        fragment = js::non_null(fragment.first_child(), "content")?
+        fragment = js::value::non_null(fragment.first_child(), "content")?
             .content()
             .clone();
     }
@@ -585,7 +585,7 @@ fn close_node_start<'a>(node: &Node<'a>, open_start: isize, open_end: isize) -> 
     }
     let mut fragment = node.content().clone();
     if open_start > 1 {
-        let first = js::non_null(fragment.first_child(), "content")?;
+        let first = js::value::non_null(fragment.first_child(), "content")?;
         let inner_end = if fragment.child_count() == 1 {
             open_end - 1
         } else {
@@ -598,10 +598,11 @@ fn close_node_start<'a>(node: &Node<'a>, open_start: isize, open_end: isize) -> 
     }
     let node_type = node.node_type();
     let start = node_type.content_match();
-    fragment = js::non_null(start.fill_before(&fragment, false, 0)?, "append")?.append(&fragment);
+    fragment =
+        js::value::non_null(start.fill_before(&fragment, false, 0)?, "append")?.append(&fragment);
     if open_end <= 0 {
-        let matched = js::non_null(start.match_fragment(&fragment), "fillBefore")?;
-        let end = js::non_null(matched.fill_before(&Fragment::empty(), true, 0)?, "size")?;
+        let matched = js::value::non_null(start.match_fragment(&fragment), "fillBefore")?;
+        let end = js::value::non_null(matched.fill_before(&Fragment::empty(), true, 0)?, "size")?;
         fragment = fragment.append(&end);
     }
     Ok(node.copy(fragment))

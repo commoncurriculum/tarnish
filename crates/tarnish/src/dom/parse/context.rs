@@ -3,8 +3,8 @@
 use super::DomParser;
 use super::node_context::{NodeContext, WsOptions};
 use super::{ParseOptions, PreserveWhitespace};
+use crate::Result;
 use crate::dom::Dom;
-use crate::error::Result;
 use crate::json::Map;
 use crate::model::{ContentMatch, Fragment, Mark, MarkType, Node, NodeType, Schema};
 

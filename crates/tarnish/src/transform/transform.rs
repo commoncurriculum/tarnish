@@ -4,9 +4,16 @@
 use super::map::{Mappable, Mapping, MappingSlice};
 use super::replace::replace_step;
 use super::step::{Step, StepResult};
-use crate::error::{Error, Result};
+use crate::js::Class;
 use crate::json::Value;
 use crate::model::{Fragment, Node, Slice};
+use crate::{Error, Result};
+
+/// What a step that fails to apply throws.
+pub static TRANSFORM_ERROR: Class = Class {
+    name: "TransformError",
+    message_alone: false,
+};
 
 /// A document and the steps that made it, from a starting document.
 #[derive(Clone, Debug)]
@@ -67,7 +74,7 @@ impl<'a> Transform<'a> {
     /// Apply a step, raising a `TransformError` when it fails.
     pub fn step(&mut self, step: Step<'a>) -> Result<&mut Self> {
         if let StepResult::Failed(message) = self.maybe_step(step)? {
-            return Err(Error::Transform(message));
+            return Err(Error::Of(&TRANSFORM_ERROR, message));
         }
         Ok(self)
     }

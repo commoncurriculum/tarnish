@@ -1,28 +1,62 @@
 //! What JavaScript does as it reads a JSON value: reading a property, calling an array method,
-//! iterating, keying a `Map`. Where the JS throws, these return JavaScriptCore's TypeError,
-//! which quotes the expression as the source writes it. `None` is `undefined`.
+//! iterating, keying a `Map`, and the `TypeError` V8 throws where it can't. `None` is
+//! `undefined`.
 
 use std::borrow::Cow;
 use std::hash::{Hash, Hasher};
 
-use super::JsError;
-use tarnish::json::Value;
+use crate::json::Value;
+use crate::{Error, Result, number_to_string};
 
-fn not_an_object(value: Option<&Value>, source: &str) -> JsError {
-    let value = if value.is_none() { "undefined" } else { "null" };
-    JsError::type_error(format!("{value} is not an object (evaluating '{source}')"))
+/// JavaScript's two values without properties.
+#[derive(Clone, Copy, Debug)]
+pub enum Nullish {
+    Null,
+    Undefined,
 }
 
-/// `object.key`, where `source` is how the JS writes it: the own property, as a JSON value
-/// inherits none of the names read here, or a TypeError for `null` and `undefined`.
-pub fn get<'a>(
-    object: Option<&'a Value>,
-    key: &str,
-    source: &str,
-) -> Result<Option<&'a Value>, JsError> {
-    match object {
-        None | Some(Value::Null) => Err(not_an_object(object, source)),
-        Some(value) => Ok(optional(Some(value), key)),
+impl Nullish {
+    fn of(value: Option<&Value>) -> Option<Nullish> {
+        match value {
+            None => Some(Nullish::Undefined),
+            Some(Value::Null) => Some(Nullish::Null),
+            Some(_) => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Nullish::Null => "null",
+            Nullish::Undefined => "undefined",
+        }
+    }
+}
+
+/// The `TypeError` of reading `property` of `value`.
+pub fn cannot_read(value: Nullish, property: &str) -> Error {
+    Error::Type(format!(
+        "Cannot read properties of {} (reading '{property}')",
+        value.name()
+    ))
+}
+
+/// A value whose `property` the JavaScript reads, which it has as `null` where it's missing.
+pub fn non_null<T>(value: Option<T>, property: &str) -> Result<T> {
+    value.ok_or_else(|| cannot_read(Nullish::Null, property))
+}
+
+/// A value whose `property` the JavaScript reads, which it has as `undefined` where it's
+/// missing.
+pub fn defined<T>(value: Option<T>, property: &str) -> Result<T> {
+    value.ok_or_else(|| cannot_read(Nullish::Undefined, property))
+}
+
+/// `object.key`: the own property, as a JSON value inherits none of the names read here, or a
+/// `TypeError` for `null` and `undefined`.
+pub fn get<'a>(object: Option<&'a Value>, key: &str) -> Result<Option<&'a Value>> {
+    match Nullish::of(object) {
+        Some(nullish) => Err(cannot_read(nullish, key)),
+        None => Ok(optional(object, key)),
     }
 }
 
@@ -35,58 +69,49 @@ pub fn optional<'a>(object: Option<&'a Value>, key: &str) -> Option<&'a Value> {
     }
 }
 
-/// The items of `value`, whose array method `callee` the JS calls in `call`: a TypeError when
-/// `value` isn't an array. No other JSON value inherits a method of the names called here, but
-/// an object may hold a key of that name, which the TypeError quotes.
-pub fn array_method<'a>(
-    value: Option<&'a Value>,
-    callee: &str,
-    call: &str,
-) -> Result<&'a [Value], JsError> {
+/// The items of `value`, whose array method `callee` the JavaScript calls: a `TypeError` when
+/// `value` isn't an array. No other JSON value inherits a method of the names called here.
+pub fn array_method<'a>(value: Option<&'a Value>, callee: &str) -> Result<&'a [Value]> {
     debug_assert!(!callee.ends_with(".includes") && !callee.ends_with(".indexOf"));
     match value {
         Some(Value::Array(items)) => Ok(items),
-        None | Some(Value::Null) => Err(not_an_object(value, callee)),
-        Some(_) => {
-            let method = callee.rsplit('.').next().unwrap_or(callee);
-            Err(not_a_function(callee, call, optional(value, method)))
-        }
+        _ => match Nullish::of(value) {
+            Some(nullish) => Err(cannot_read(
+                nullish,
+                callee.rsplit('.').next().unwrap_or(callee),
+            )),
+            None => Err(not_a_function(callee)),
+        },
     }
 }
 
-/// The TypeError for calling `callee` in `call`, where it reads `found`.
-pub fn not_a_function(callee: &str, call: &str, found: Option<&Value>) -> JsError {
-    JsError::type_error(format!(
-        "{callee} is not a function. (In '{call}', '{callee}' is {})",
-        describe(found)
-    ))
-}
-
-/// How JavaScriptCore's TypeErrors quote a value, as `errorDescriptionForValue` writes it.
-pub fn describe(value: Option<&Value>) -> String {
-    match value {
-        None => "undefined".into(),
-        Some(Value::Null) => "null".into(),
-        Some(Value::Bool(boolean)) => boolean.to_string(),
-        Some(Value::Number(number)) => super::number_to_string(number.as_f64().unwrap_or(f64::NAN)),
-        Some(Value::String(string)) => format!("\"{string}\""),
-        Some(Value::Array(_)) => "an instance of Array".into(),
-        Some(Value::Object(_)) => "an instance of Object".into(),
-    }
+/// The `TypeError` of calling `callee`, which isn't a function, as V8 prints the expression.
+pub fn not_a_function(callee: &str) -> Error {
+    Error::Type(format!("{callee} is not a function"))
 }
 
 /// `value || []`.
 pub fn or_empty_array(value: Option<&Value>) -> Option<&Value> {
-    Some(super::or(value, &super::EMPTY_ARRAY))
+    Some(crate::or(value, &crate::EMPTY_ARRAY))
 }
 
-/// What `for (… of value)` and `const [a, ...rest] = value` go through: an array's items, a
-/// string's code points, or JavaScriptCore's TypeError for a value that isn't iterable.
-///
-/// Once JavaScriptCore has optimized a function, the TypeError it throws for destructuring
-/// reads `undefined is not a function (near '...')` instead; a fresh worker's is this one.
-pub fn iterate<'a>(value: Option<&'a Value>, source: &str) -> Result<Cow<'a, [Value]>, JsError> {
-    let refused = match value {
+/// How the JavaScript iterates a value, which decides how V8 words the `TypeError` for one that
+/// isn't iterable.
+#[derive(Clone, Copy, Debug)]
+pub enum Iterating<'s> {
+    /// V8 prints the expression, as the source writes it, for `for (… of expression)` and
+    /// `[...expression]` over a variable, a property, or a parenthesized expression.
+    Expression(&'s str),
+    /// V8 describes the value for a destructuring of anything but a variable, for
+    /// `Array.from`, and for `for...of` over a logical expression.
+    Value,
+}
+
+/// What iterating `value` goes through: an array's items, a string's code points, or V8's
+/// `TypeError` for a value that isn't iterable.
+pub fn iterate<'a>(value: Option<&'a Value>, how: Iterating) -> Result<Cow<'a, [Value]>> {
+    // V8 describes a value by its type, and a primitive by its value too.
+    let described = match value {
         Some(Value::Array(items)) => return Ok(Cow::Borrowed(items)),
         Some(Value::String(string)) => {
             return Ok(Cow::Owned(
@@ -96,13 +121,21 @@ pub fn iterate<'a>(value: Option<&'a Value>, source: &str) -> Result<Cow<'a, [Va
                     .collect(),
             ));
         }
-        None | Some(Value::Null) => return Err(not_an_object(value, source)),
-        Some(Value::Object(_)) => "{}",
-        Some(Value::Number(_)) => "number",
-        Some(Value::Bool(true)) => "true",
-        Some(Value::Bool(false)) => "false",
+        None => "undefined".into(),
+        Some(Value::Null) => "object null".into(),
+        Some(Value::Bool(boolean)) => format!("boolean {boolean}"),
+        Some(Value::Number(number)) => format!(
+            "number {}",
+            number_to_string(number.as_f64().unwrap_or(f64::NAN))
+        ),
+        Some(Value::Object(_)) => "object".into(),
     };
-    Err(JsError::type_error(format!("{refused} is not iterable")))
+    Err(Error::Type(match how {
+        Iterating::Expression(source) => format!("{source} is not iterable"),
+        Iterating::Value => {
+            format!("{described} is not iterable (cannot read property Symbol(Symbol.iterator))")
+        }
+    }))
 }
 
 /// A value as a `Map` or `Set` key, which JavaScript compares with SameValueZero: primitives
@@ -139,14 +172,14 @@ impl<'a> SameValueKey<'a> {
     }
 
     /// `String(key)`.
-    pub fn to_js_string(self) -> Result<Cow<'a, str>, JsError> {
+    pub fn to_js_string(self) -> Result<Cow<'a, str>> {
         Ok(match self {
             SameValueKey::Undefined => Cow::Borrowed("undefined"),
             SameValueKey::Null => Cow::Borrowed("null"),
             SameValueKey::Bool(boolean) => Cow::Borrowed(if boolean { "true" } else { "false" }),
-            SameValueKey::Number(number) => Cow::Owned(super::number_to_string(number)),
+            SameValueKey::Number(number) => Cow::Owned(number_to_string(number)),
             SameValueKey::String(string) => Cow::Borrowed(string),
-            SameValueKey::Reference(value) => Cow::Owned(super::to_string(value)?),
+            SameValueKey::Reference(value) => Cow::Owned(crate::to_string(value)?),
         })
     }
 }
@@ -256,4 +289,73 @@ pub fn same_own_properties(a: &Value, b: &Value) -> bool {
                 .find(|(other_key, _)| other_key == key)
                 .is_some_and(|(_, other)| value.same_value(*other))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::json::{self, json};
+
+    fn message<T: std::fmt::Debug>(result: Result<T>) -> String {
+        result.unwrap_err().to_string()
+    }
+
+    // Each as Node throws it.
+    #[test]
+    fn throws_as_v8_does() {
+        let node = json!({"content": {}, "marks": 1.5, "n": null, "t": true});
+        assert_eq!(
+            message(get(None, "color")),
+            "TypeError: Cannot read properties of undefined (reading 'color')"
+        );
+        assert_eq!(
+            message(get(node.get("n"), "a")),
+            "TypeError: Cannot read properties of null (reading 'a')"
+        );
+        assert_eq!(
+            message(array_method(node.get("content"), "node.content.map")),
+            "TypeError: node.content.map is not a function"
+        );
+        assert_eq!(
+            message(array_method(node.get("attrs"), "node.attrs.map")),
+            "TypeError: Cannot read properties of undefined (reading 'map')"
+        );
+        assert_eq!(
+            message(iterate(
+                node.get("content"),
+                Iterating::Expression("node.content")
+            )),
+            "TypeError: node.content is not iterable"
+        );
+        let described = |key: &str| message(iterate(node.get(key), Iterating::Value));
+        assert_eq!(
+            described("content"),
+            "TypeError: object is not iterable (cannot read property Symbol(Symbol.iterator))"
+        );
+        assert_eq!(
+            described("marks"),
+            "TypeError: number 1.5 is not iterable (cannot read property Symbol(Symbol.iterator))"
+        );
+        assert_eq!(
+            described("n"),
+            "TypeError: object null is not iterable (cannot read property Symbol(Symbol.iterator))"
+        );
+        assert_eq!(
+            described("t"),
+            "TypeError: boolean true is not iterable (cannot read property Symbol(Symbol.iterator))"
+        );
+        assert_eq!(
+            described("attrs"),
+            "TypeError: undefined is not iterable (cannot read property Symbol(Symbol.iterator))"
+        );
+        let own = json::from_str(r#"[1, {"toString": 1}]"#).unwrap();
+        assert_eq!(
+            message(crate::to_string(&own)),
+            "TypeError: Cannot convert object to primitive value"
+        );
+        assert_eq!(
+            crate::to_string(&json!([1, null, [2, 3], {}])).unwrap(),
+            "1,,2,3,[object Object]"
+        );
+    }
 }

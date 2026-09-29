@@ -40,8 +40,8 @@ pub(crate) use build::Builder;
 pub(crate) use value::JsonView;
 pub use value::{Kind, ValueRef};
 
-use crate::error::{Error, Result};
 use crate::model::Schema;
+use crate::{Error, Result};
 
 const MAGIC: [u8; 4] = *b"TRN1";
 

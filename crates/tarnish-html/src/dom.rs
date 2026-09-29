@@ -494,7 +494,7 @@ impl Dom for HtmlDom {
         value: &Value,
     ) -> Result<()> {
         let id = self.element_of(element)?;
-        let value = js::to_string(value);
+        let value = js::to_string(value)?;
         let mut tree = self.tree();
         let element = tree.element_mut(id).expect("an element");
         match namespace {
@@ -533,7 +533,7 @@ impl Dom for HtmlDom {
             return Ok(false);
         }
         // The attribute gets the declarations kept, not the text given.
-        let style = Declarations::parse(&js::to_string(css));
+        let style = Declarations::parse(&js::to_string(css)?);
         let name = QualName::new(None, ns!(), local_name!("style"));
         element.set_attr_ns(name, style.css_text());
         element.style = Some(style);

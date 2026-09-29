@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-use tarnish::stack;
+use tarnish_js::stack;
 
 use super::Marked;
 use super::matchers;
@@ -11,7 +11,7 @@ use super::rules::{INLINE, OTHER};
 use super::{Token, TokenData, Tokens};
 use tarnish_js::deadline::Deadline;
 use tarnish_js::units::Units;
-use tarnish_js::{JsError, utf16};
+use tarnish_js::{Error, utf16};
 
 /// A reference definition, as `tokens.links` holds it.
 pub struct Link {
@@ -57,7 +57,7 @@ impl<'m> Lexer<'m> {
     }
 
     /// `lex(src)`.
-    pub fn lex(&mut self, src: &[u16]) -> Result<Vec<Token>, JsError> {
+    pub fn lex(&mut self, src: &[u16]) -> Result<Vec<Token>, Error> {
         let src = Units::from(if src.contains(&utf16::unit(b'\r')) {
             OTHER.carriage_return.replace(src, "\n")
         } else {
@@ -79,7 +79,7 @@ impl<'m> Lexer<'m> {
         src: &Units,
         tokens: &mut Vec<Token>,
         mut last_paragraph_clipped: bool,
-    ) -> Result<(), JsError> {
+    ) -> Result<(), Error> {
         let mut src = src.clone();
         while !src.is_empty() {
             self.deadline.turn(src.len())?;
@@ -202,7 +202,7 @@ impl<'m> Lexer<'m> {
                 continue;
             }
 
-            return Err(JsError::error(format!("Infinite loop on byte: {}", src[0])));
+            return Err(Error::Other(format!("Infinite loop on byte: {}", src[0])));
         }
         self.state.top = true;
         Ok(())
@@ -236,11 +236,11 @@ impl<'m> Lexer<'m> {
     }
 
     /// `inlineTokens(src)`, which the inline tokenizers call for what they hold.
-    pub fn inline_tokens(&mut self, src: &Units) -> Result<Vec<Token>, JsError> {
+    pub fn inline_tokens(&mut self, src: &Units) -> Result<Vec<Token>, Error> {
         stack::grow(|| self.lex_inline_tokens(src))
     }
 
-    fn lex_inline_tokens(&mut self, src: &Units) -> Result<Vec<Token>, JsError> {
+    fn lex_inline_tokens(&mut self, src: &Units) -> Result<Vec<Token>, Error> {
         let marked = self.marked;
         let mut tokens: Vec<Token> = Vec::new();
         let mut masked: Cow<[u16]> = Cow::Borrowed(src);
@@ -384,7 +384,7 @@ impl<'m> Lexer<'m> {
                 continue;
             }
 
-            return Err(JsError::error(format!("Infinite loop on byte: {}", src[0])));
+            return Err(Error::Other(format!("Infinite loop on byte: {}", src[0])));
         }
         Ok(tokens)
     }

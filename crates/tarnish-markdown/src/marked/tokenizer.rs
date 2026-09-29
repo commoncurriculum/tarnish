@@ -1,7 +1,7 @@
 //! `Tokenizer.ts`, with `this.lexer` the lexer these methods are on. The `list` tokenizer is
 //! whatever `marked.use` gave, such as `marked-more-lists`'s: marked's own is not ported.
 
-use tarnish::stack;
+use tarnish_js::stack;
 
 use super::delimiters::{self, Flank};
 use super::helpers::{find_closing_bracket, rtrim, split_cells};
@@ -9,7 +9,7 @@ use super::lexer::{Lexer, Link};
 use super::matchers;
 use super::rules::{BLOCK, INLINE, OTHER};
 use super::{Cell, Def, Destination, Table, Token, TokenData, Tokens};
-use tarnish_js::JsError;
+use tarnish_js::Error;
 use tarnish_js::units::Units;
 use tarnish_js::utf16;
 
@@ -21,7 +21,7 @@ fn output_link(
     href: Vec<u16>,
     title: Option<Vec<u16>>,
     raw: Units,
-) -> Result<Token, JsError> {
+) -> Result<Token, Error> {
     let text = OTHER.output_link_replace.replace_units(cap1, "$1");
     lexer.state.in_link = true;
     let tokens = lexer.inline_tokens(&text)?;
@@ -118,7 +118,7 @@ impl Lexer<'_> {
         Some(Token::new("hr", src.slice_of(rtrim(&src[..length], b'\n'))))
     }
 
-    pub(super) fn blockquote(&mut self, src: &Units) -> Result<Option<Token>, JsError> {
+    pub(super) fn blockquote(&mut self, src: &Units) -> Result<Option<Token>, Error> {
         let Some(cap) = BLOCK.blockquote.exec(src) else {
             return Ok(None);
         };
@@ -225,7 +225,7 @@ impl Lexer<'_> {
     }
 
     /// `this.list(src)`, the tokenizer `marked.use` put in place.
-    pub(super) fn list(&mut self, src: &Units) -> Result<Option<Token>, JsError> {
+    pub(super) fn list(&mut self, src: &Units) -> Result<Option<Token>, Error> {
         (self.marked.list)(self, src)
     }
 
@@ -381,7 +381,7 @@ impl Lexer<'_> {
         })
     }
 
-    pub(super) fn link(&mut self, src: &Units) -> Result<Option<Token>, JsError> {
+    pub(super) fn link(&mut self, src: &Units) -> Result<Option<Token>, Error> {
         let Some(cap) = INLINE.link.exec(src) else {
             return Ok(None);
         };
@@ -439,7 +439,7 @@ impl Lexer<'_> {
         output_link(self, cap0, &src.slice_of(cap1), href, Some(title), raw).map(Some)
     }
 
-    pub(super) fn reflink(&mut self, src: &Units) -> Result<Option<Token>, JsError> {
+    pub(super) fn reflink(&mut self, src: &Units) -> Result<Option<Token>, Error> {
         let Some(cap) = INLINE.reflink.exec(src).or_else(|| INLINE.nolink.exec(src)) else {
             return Ok(None);
         };
@@ -463,7 +463,7 @@ impl Lexer<'_> {
         src: &Units,
         masked_src: &[u16],
         prev_char: &[u16],
-    ) -> Result<Option<Token>, JsError> {
+    ) -> Result<Option<Token>, Error> {
         let Some(found) = INLINE.em_strong_l_delim.exec(src) else {
             return Ok(None);
         };
@@ -564,7 +564,7 @@ impl Lexer<'_> {
         src: &Units,
         masked_src: &[u16],
         prev_char: &[u16],
-    ) -> Result<Option<Token>, JsError> {
+    ) -> Result<Option<Token>, Error> {
         let Some(found) = INLINE.del_l_delim.exec(src) else {
             return Ok(None);
         };
