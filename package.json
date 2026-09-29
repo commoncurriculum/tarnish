@@ -12,6 +12,8 @@
   "devDependencies": {
     "ist": "1.1.7",
     "linkedom": "github:commoncurriculum/linkedom#345ef3f3298ae3e3703374f653f80790b0af324b",
+    "marked": "17.0.6",
+    "marked-more-lists": "1.0.1",
     "mocha": "10.8.2",
     "orderedmap": "2.1.1",
     "prosemirror-model": "1.25.11",

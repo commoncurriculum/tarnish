@@ -1,0 +1,32 @@
+[package]
+edition = "2024"
+name = "regress"
+version = "0.12.0"
+authors = ["ridiculousfish <corydoras@ridiculousfish.com>"]
+description = "A regular expression engine targeting EcmaScript syntax"
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ridiculousfish/regress"
+autobenches = false
+
+[features]
+alloc = ["dep:hashbrown", "memchr/alloc"]
+backend-pikevm = []
+default = ["backend-pikevm", "std"]
+index-positions = []
+pattern = []
+prohibit-unsafe = []
+std = ["memchr/std"]
+utf16 = []
+
+[lib]
+name = "regress"
+path = "src/lib.rs"
+
+[dependencies.hashbrown]
+version = ">=0.16, <0.18"
+optional = true
+
+[dependencies.memchr]
+version = "2.4.0"
+default-features = false

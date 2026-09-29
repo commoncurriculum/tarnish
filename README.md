@@ -412,6 +412,9 @@ hold:
 | `elixir/`, `crates/tarnish_elixir` | The Elixir package and the Rustler NIF behind it |
 | `crates/tarnish-nif` | The base of a NIF on tarnish: terms as JSON, budgets, a batch pool, and tarnish's functions |
 | `crates/tarnish-c` | The C library and its generated header |
+| `crates/tarnish-js` | JavaScript's built-ins as a library ported from JavaScript uses them: strings as UTF-16, `RegExp`, arrays, numbers and JSON |
+| `crates/tarnish-markdown` | marked 17.0.6's lexer and marked-more-lists 1.0.1's list tokenizer, on `tarnish-js`. `tools/marked_rules.ts` writes marked's rules into `src/marked/rules.rs` |
+| `vendor/regress` | regress 0.12.0, the `RegExp` engine of `tarnish-js`, with its patches marked in the source |
 | `crates/tarnish-node` | The Node bridge that runs ProseMirror's suites against tarnish. Internal, not published |
 | `upstream/` | ProseMirror's repositories, pinned as submodules, for their test suites |
 | `harness/` | The suite runner, the fixture recorders, and the bridge and C test builds |
