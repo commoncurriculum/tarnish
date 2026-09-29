@@ -53,6 +53,24 @@ jobs:
       - run: git diff --exit-code fixtures && test -z "$(git status --porcelain fixtures)"
         if: matrix.target == 'js'
 
+  # tarnish-markdown's rules.rs is generated from marked, so it must be what the installed marked
+  # builds.
+  marked-rules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: npm ci
+      - name: Check marked's rules are current
+        shell: bash
+        run: npx tsx crates/tarnish-markdown/tools/marked_rules.ts | rustfmt --edition 2024 | diff - crates/tarnish-markdown/src/marked/rules.rs
+
   elixir:
     runs-on: ubuntu-latest
     defaults:

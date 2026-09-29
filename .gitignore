@@ -1,3 +1,5 @@
 /target
 /node_modules
 *.node
+/vendor/regress/Cargo.lock
+/vendor/regress/target

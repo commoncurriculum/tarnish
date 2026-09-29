@@ -1,0 +1,13 @@
+[package]
+name = "tarnish-js"
+version = "0.1.0"
+description = "JavaScript's built-ins as ported JavaScript libraries use them: strings as UTF-16, regular expressions, arrays, numbers and JSON"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+icu_collator = "2"
+regress = { path = "../../vendor/regress", features = ["utf16", "prohibit-unsafe"] }
+tarnish = { path = "../tarnish", version = "0.1.0" }
