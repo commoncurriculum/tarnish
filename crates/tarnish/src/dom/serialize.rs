@@ -1,18 +1,22 @@
-//! Serializing documents to a DOM: `DOMSerializer`.
+//! Serializing documents: `DOMSerializer`. One walk over the document renders each node's and
+//! mark's spec to a [`Target`]: a DOM, or anything else that takes them in document order, such
+//! as HTML written as it goes.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::{Dom, NodeKind};
-use crate::chunk::ValueRef;
+use crate::chunk::{Kind, ValueRef};
 use crate::error::{Error, Result};
+use crate::js;
 use crate::json::{Map, Value};
-use crate::model::{Fragment, Mark, Node};
+use crate::model::{Fragment, Mark, Node, TextRef};
 use crate::stack;
 
 /// What a node's or mark's `toDOM` gives: ProseMirror's `DOMOutputSpec`.
 #[derive(Clone)]
-pub enum DomSpec<N> {
+pub enum DomSpec<'a, N> {
     /// A DOM element to use as it is.
     Node(N),
     /// An element, and the element in it to put the content in: `{dom, contentDOM}`.
@@ -22,15 +26,30 @@ pub enum DomSpec<N> {
     /// an array is refused when it starts with a string, as an attacker may have written it.
     /// Only this origin is checked.
     Array {
-        items: Vec<DomSpec<N>>,
+        items: Vec<DomSpec<'a, N>>,
         origin: Option<(usize, u32)>,
     },
     /// A string, the content hole `0` or an attributes object. An array is read as a
     /// [`DomSpec::Array`] with no origin.
     Value(Value),
+    /// `[tag, attrs, ...children]`, setting its attributes in order.
+    Element {
+        tag: &'a str,
+        attrs: SpecAttrs<'a>,
+        children: Vec<DomSpec<'a, N>>,
+    },
+    /// `[tag, attrs, 0]`: an element the content goes in.
+    Wrapping { tag: &'a str, attrs: SpecAttrs<'a> },
+    /// A string, which renders as text.
+    Text(Cow<'a, str>),
+    /// `0`, where the content goes.
+    Hole,
+    /// A value of the node's or mark's attributes, which JSON can make anything: text when it's
+    /// a string, and otherwise what `renderSpec` makes of it.
+    Attr(ValueRef<'a>),
 }
 
-impl<N> From<Value> for DomSpec<N> {
+impl<N> From<Value> for DomSpec<'_, N> {
     fn from(value: Value) -> Self {
         if !matches!(value, Value::Array(_)) {
             return DomSpec::Value(value);
@@ -46,6 +65,38 @@ impl<N> From<Value> for DomSpec<N> {
     }
 }
 
+impl<'a, N> DomSpec<'a, N> {
+    /// `[tag, attrs, ...children]`.
+    pub fn element(tag: &'a str, attrs: SpecAttrs<'a>, children: Vec<DomSpec<'a, N>>) -> Self {
+        DomSpec::Element {
+            tag,
+            attrs,
+            children,
+        }
+    }
+
+    /// `[tag, attrs, 0]`.
+    pub fn wrapping(tag: &'a str, attrs: SpecAttrs<'a>) -> Self {
+        DomSpec::Wrapping { tag, attrs }
+    }
+
+    /// A value from the attributes as `renderSpec` takes it: a string as text, an array as an
+    /// array spec with that value as its origin.
+    pub fn of_attr(value: ValueRef<'a>) -> Self {
+        match value.kind() {
+            Kind::String(text) => DomSpec::Text(Cow::Borrowed(text)),
+            Kind::Array(_) => DomSpec::Array {
+                items: value
+                    .items()
+                    .map(|item| stack::grow(|| DomSpec::of_attr(item)))
+                    .collect(),
+                origin: Some(value.id()),
+            },
+            _ => DomSpec::Value(value.to_value()),
+        }
+    }
+}
+
 /// A rendered spec: its element, and the element to put the content in, if it has a hole.
 #[derive(Clone)]
 pub struct Rendered<N> {
@@ -53,12 +104,172 @@ pub struct Rendered<N> {
     pub content_dom: Option<N>,
 }
 
-pub type NodeToDom<N> = Arc<dyn Fn(&Node<'static>) -> Result<DomSpec<N>> + Send + Sync>;
+/// The value of an attribute a spec sets: one of the node's or mark's attributes, or text.
+#[derive(Clone)]
+pub enum AttrValue<'a> {
+    Json(ValueRef<'a>),
+    Text(Cow<'a, str>),
+}
 
-/// A mark's `toDOM`, told whether the mark's content is inline.
-pub type MarkToDom<N> = Arc<dyn Fn(&Mark<'static>, bool) -> Result<DomSpec<N>> + Send + Sync>;
+impl AttrValue<'_> {
+    /// Whether it's `null`, which a spec's attributes leave unset.
+    pub fn is_null(&self) -> bool {
+        matches!(self, AttrValue::Json(value) if value.is_null())
+    }
 
-/// Serializes nodes and marks to a DOM with each type's `toDOM`.
+    pub fn truthy(&self) -> bool {
+        match self {
+            AttrValue::Json(value) => value.truthy(),
+            AttrValue::Text(text) => !text.is_empty(),
+        }
+    }
+
+    /// `String(value)`, as `setAttribute` stores it.
+    pub fn to_js_string(&self) -> Cow<'_, str> {
+        match self {
+            AttrValue::Json(value) => value.to_js_string(),
+            AttrValue::Text(text) => Cow::Borrowed(text),
+        }
+    }
+
+    /// The value, when it's a string.
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            AttrValue::Json(value) => value.as_str(),
+            AttrValue::Text(text) => Some(text),
+        }
+    }
+
+    fn to_value(&self) -> Value {
+        match self {
+            AttrValue::Json(value) => value.to_value(),
+            AttrValue::Text(text) => Value::String(text.as_ref().into()),
+        }
+    }
+}
+
+impl<'a> From<ValueRef<'a>> for AttrValue<'a> {
+    fn from(value: ValueRef<'a>) -> Self {
+        AttrValue::Json(value)
+    }
+}
+
+impl<'a> From<&'a str> for AttrValue<'a> {
+    fn from(text: &'a str) -> Self {
+        AttrValue::Text(Cow::Borrowed(text))
+    }
+}
+
+impl From<String> for AttrValue<'_> {
+    fn from(text: String) -> Self {
+        AttrValue::Text(Cow::Owned(text))
+    }
+}
+
+/// A spec's attributes, in the order they were first set.
+#[derive(Clone, Default)]
+pub struct SpecAttrs<'a>(Vec<(&'a str, AttrValue<'a>)>);
+
+impl<'a> SpecAttrs<'a> {
+    pub fn new() -> Self {
+        SpecAttrs(Vec::new())
+    }
+
+    pub fn get(&self, name: &str) -> Option<&AttrValue<'a>> {
+        self.0
+            .iter()
+            .find(|(set, _)| *set == name)
+            .map(|(_, value)| value)
+    }
+
+    pub fn get_mut(&mut self, name: &str) -> Option<&mut AttrValue<'a>> {
+        self.0
+            .iter_mut()
+            .find(|(set, _)| *set == name)
+            .map(|(_, value)| value)
+    }
+
+    /// `attrs[name] = value`.
+    pub fn set(&mut self, name: &'a str, value: impl Into<AttrValue<'a>>) {
+        let value = value.into();
+        match self.get_mut(name) {
+            Some(set) => *set = value,
+            None => self.0.push((name, value)),
+        }
+    }
+
+    /// Sets an attribute not yet set.
+    pub fn push(&mut self, name: &'a str, value: AttrValue<'a>) {
+        debug_assert!(self.get(name).is_none(), "{name} is set");
+        self.0.push((name, value));
+    }
+
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &(&'a str, AttrValue<'a>)> {
+        self.0.iter()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl<'a, const N: usize> From<[(&'a str, AttrValue<'a>); N]> for SpecAttrs<'a> {
+    fn from(entries: [(&'a str, AttrValue<'a>); N]) -> Self {
+        SpecAttrs(entries.into())
+    }
+}
+
+/// A node's `toDOM`, whose spec may borrow from the node.
+pub type NodeToDom<N> =
+    Arc<dyn for<'n> Fn(&'n Node<'static>) -> Result<DomSpec<'n, N>> + Send + Sync>;
+
+/// A mark's `toDOM`, told whether the mark's content is inline, whose spec may borrow from the
+/// mark.
+pub type MarkToDom<N> =
+    Arc<dyn for<'m> Fn(&'m Mark<'static>, bool) -> Result<DomSpec<'m, N>> + Send + Sync>;
+
+/// A node's `toDOM` of a function, which Rust can't infer from [`NodeToDom`] for a closure
+/// whose spec borrows from the node.
+pub fn node_to_dom<N, F>(to_dom: F) -> NodeToDom<N>
+where
+    F: for<'n> Fn(&'n Node<'static>) -> Result<DomSpec<'n, N>> + Send + Sync + 'static,
+{
+    Arc::new(to_dom)
+}
+
+/// A mark's `toDOM` of a function, as [`node_to_dom`] makes a node's.
+pub fn mark_to_dom<N, F>(to_dom: F) -> MarkToDom<N>
+where
+    F: for<'m> Fn(&'m Mark<'static>, bool) -> Result<DomSpec<'m, N>> + Send + Sync + 'static,
+{
+    Arc::new(to_dom)
+}
+
+/// Where a serializer puts what the specs render to, in document order.
+pub trait Target<N> {
+    /// Where the nodes after a mark go once the mark ends.
+    type Parent;
+
+    /// Renders a mark's spec where the next node goes, and makes its content where the nodes
+    /// after it go. `attrs` are the mark's attributes.
+    fn open_mark(&mut self, spec: DomSpec<'_, N>, attrs: ValueRef<'_>) -> Result<Self::Parent>;
+
+    /// Ends the mark opened last: the nodes after it go in `parent`.
+    fn close_mark(&mut self, parent: Self::Parent) -> Result<()>;
+
+    /// Renders a node's spec where the next node goes, `content` filling its hole if it has
+    /// one. `attrs` are the node's attributes.
+    fn node(
+        &mut self,
+        spec: DomSpec<'_, N>,
+        attrs: ValueRef<'_>,
+        content: impl FnOnce(&mut Self) -> Result<()>,
+    ) -> Result<()>;
+
+    fn text(&mut self, text: TextRef<'_>) -> Result<()>;
+}
+
+/// Serializes nodes and marks with each type's `toDOM`.
 pub struct DomSerializer<N> {
     nodes: HashMap<String, NodeToDom<N>>,
     marks: HashMap<String, MarkToDom<N>>,
@@ -82,68 +293,104 @@ impl<N: Clone> DomSerializer<N> {
             Some(target) => target,
             None => dom.create_fragment()?,
         };
-        let mut top = target.clone();
-        let mut active: Vec<(Mark<'static>, N)> = Vec::new();
+        let mut into = DomTarget {
+            dom,
+            top: target.clone(),
+        };
+        self.write_fragment(fragment, &mut into)?;
+        Ok(target)
+    }
+
+    /// `serializeFragment`'s walk, rendering to `target`.
+    pub fn write_fragment<T: Target<N>>(
+        &self,
+        fragment: &Fragment<'static>,
+        target: &mut T,
+    ) -> Result<()> {
+        let mut active: Vec<(Mark<'static>, T::Parent)> = Vec::new();
         for node in fragment.children() {
-            let marks = node.marks().to_vec();
+            let marks = node.marks();
             if !active.is_empty() || !marks.is_empty() {
                 let (mut keep, mut rendered) = (0, 0);
                 while keep < active.len() && rendered < marks.len() {
-                    let next = &marks[rendered];
+                    let next = marks.get(rendered).expect("a mark");
                     if !self.marks.contains_key(next.mark_type().name()) {
                         rendered += 1;
                         continue;
                     }
-                    if *next != active[keep].0 || next.mark_type().spec().spanning == Some(false) {
+                    if next != active[keep].0 || next.mark_type().spec().spanning == Some(false) {
                         break;
                     }
                     keep += 1;
                     rendered += 1;
                 }
                 while keep < active.len() {
-                    top = active.pop().expect("an active mark").1;
+                    let (_, parent) = active.pop().expect("an active mark");
+                    target.close_mark(parent)?;
                 }
                 while rendered < marks.len() {
-                    let add = &marks[rendered];
+                    let add = marks.get(rendered).expect("a mark");
                     rendered += 1;
-                    if let Some(mark_dom) = self.serialize_mark(dom, add, node.is_inline())? {
-                        active.push((add.clone(), top.clone()));
-                        dom.append_child(&top, &mark_dom.dom)?;
-                        top = mark_dom.content_dom.unwrap_or(mark_dom.dom);
+                    if let Some(to_dom) = self.marks.get(add.mark_type().name()) {
+                        let spec = to_dom(&add, node.is_inline())?;
+                        let parent = target.open_mark(spec, add.attrs_view())?;
+                        active.push((add, parent));
                     }
                 }
             }
-            let inner = self.serialize_node_inner(dom, &node)?;
-            dom.append_child(&top, &inner)?;
+            match node.text() {
+                Some(text) => target.text(text)?,
+                None => target.node(self.spec(&node)?, node.attrs_view(), |target| {
+                    self.fill(&node, |fragment| self.write_fragment(fragment, target))
+                })?,
+            }
         }
-        Ok(target)
+        while let Some((_, parent)) = active.pop() {
+            target.close_mark(parent)?;
+        }
+        Ok(())
     }
 
-    fn serialize_node_inner<D: Dom<Node = N>>(&self, dom: &D, node: &Node<'static>) -> Result<N> {
-        if let Some(text) = node.text() {
-            return dom.create_text(&text.to_text());
+    /// The node's spec from its type's `toDOM`.
+    fn spec<'n>(&self, node: &'n Node<'static>) -> Result<DomSpec<'n, N>> {
+        let to_dom = self.nodes.get(node.node_type().name()).ok_or_else(|| {
+            js::not_a_function(
+                "this.nodes[node.type.name]",
+                "this.nodes[node.type.name](node)",
+            )
+        })?;
+        to_dom(node)
+    }
+
+    /// Serializes the node's content with `write`, into the hole its spec has.
+    fn fill(
+        &self,
+        node: &Node<'static>,
+        write: impl FnOnce(&Fragment<'static>) -> Result<()>,
+    ) -> Result<()> {
+        if node.is_leaf() {
+            return Err(Error::Range(
+                "Content hole not allowed in a leaf node spec".into(),
+            ));
         }
-        let name = node.node_type().name();
-        let to_dom = self
-            .nodes
-            .get(name)
-            .ok_or_else(|| Error::Other(format!("No toDOM for node type {name}")))?;
-        let spec = to_dom(node)?;
-        let rendered = render(dom, &spec, None, Some(node.attrs_view()))?;
-        if let Some(content_dom) = rendered.content_dom {
-            if node.is_leaf() {
-                return Err(Error::Range(
-                    "Content hole not allowed in a leaf node spec".into(),
-                ));
-            }
-            stack::grow(|| self.serialize_fragment(dom, node.content(), Some(content_dom)))?;
-        }
-        Ok(rendered.dom)
+        stack::grow(|| write(node.content()))
     }
 
     /// Serialize a node, with its marks around it.
     pub fn serialize_node<D: Dom<Node = N>>(&self, dom: &D, node: &Node<'static>) -> Result<N> {
-        let mut element = self.serialize_node_inner(dom, node)?;
+        let mut element = match node.text() {
+            Some(text) => dom.create_text(&text.to_text())?,
+            None => {
+                let rendered = render(dom, &self.spec(node)?, None, Some(node.attrs_view()))?;
+                if let Some(content_dom) = rendered.content_dom {
+                    self.fill(node, |fragment| {
+                        self.serialize_fragment(dom, fragment, Some(content_dom))
+                            .map(drop)
+                    })?;
+                }
+                rendered.dom
+            }
+        };
         for mark in node.marks().iter().rev() {
             if let Some(wrap) = self.serialize_mark(dom, &mark, node.is_inline())? {
                 dom.append_child(wrap.content_dom.as_ref().unwrap_or(&wrap.dom), &element)?;
@@ -168,6 +415,49 @@ impl<N: Clone> DomSerializer<N> {
     }
 }
 
+/// A DOM as a serializer's target: what it renders goes in `top`.
+struct DomTarget<'d, D: Dom> {
+    dom: &'d D,
+    top: D::Node,
+}
+
+impl<D: Dom> Target<D::Node> for DomTarget<'_, D> {
+    type Parent = D::Node;
+
+    fn open_mark(&mut self, spec: DomSpec<'_, D::Node>, attrs: ValueRef<'_>) -> Result<D::Node> {
+        let rendered = render(self.dom, &spec, None, Some(attrs))?;
+        self.dom.append_child(&self.top, &rendered.dom)?;
+        let content = rendered.content_dom.unwrap_or(rendered.dom);
+        Ok(std::mem::replace(&mut self.top, content))
+    }
+
+    fn close_mark(&mut self, parent: D::Node) -> Result<()> {
+        self.top = parent;
+        Ok(())
+    }
+
+    fn node(
+        &mut self,
+        spec: DomSpec<'_, D::Node>,
+        attrs: ValueRef<'_>,
+        content: impl FnOnce(&mut Self) -> Result<()>,
+    ) -> Result<()> {
+        let rendered = render(self.dom, &spec, None, Some(attrs))?;
+        if let Some(content_dom) = rendered.content_dom {
+            let parent = std::mem::replace(&mut self.top, content_dom);
+            let filled = content(self);
+            self.top = parent;
+            filled?;
+        }
+        self.dom.append_child(&self.top, &rendered.dom)
+    }
+
+    fn text(&mut self, text: TextRef<'_>) -> Result<()> {
+        let text = self.dom.create_text(&text.to_text())?;
+        self.dom.append_child(&self.top, &text)
+    }
+}
+
 /// `DOMSerializer.renderSpec`: render a spec, a string as a text node. With a hole in the spec,
 /// `content_dom` is the element that has it.
 pub fn render_spec<D: Dom>(
@@ -175,17 +465,32 @@ pub fn render_spec<D: Dom>(
     structure: &DomSpec<D::Node>,
     xml_ns: Option<&str>,
 ) -> Result<Rendered<D::Node>> {
-    if let DomSpec::Value(Value::String(text)) = structure {
-        return Ok(Rendered {
-            dom: dom.create_text(&(**text).into())?,
-            content_dom: None,
-        });
-    }
     render(dom, structure, xml_ns, None)
+}
+
+/// `renderSpec` of a node's or mark's spec, which refuses an array from `attrs` that starts with
+/// a string.
+pub fn render_spec_of<D: Dom>(
+    dom: &D,
+    structure: &DomSpec<D::Node>,
+    attrs: ValueRef,
+) -> Result<Rendered<D::Node>> {
+    render(dom, structure, None, Some(attrs))
 }
 
 fn invalid() -> Error {
     Error::Range("Invalid array passed to renderSpec".into())
+}
+
+fn hole_not_alone() -> Error {
+    Error::Range("Content hole must be the only child of its parent node".into())
+}
+
+fn text<D: Dom>(dom: &D, text: &str) -> Result<Rendered<D::Node>> {
+    Ok(Rendered {
+        dom: dom.create_text(&text.into())?,
+        content_dom: None,
+    })
 }
 
 fn render<D: Dom>(
@@ -204,14 +509,40 @@ fn render<D: Dom>(
         DomSpec::Rendered(rendered) if dom.kind(&rendered.dom)? == NodeKind::Element => {
             return Ok(rendered.clone());
         }
+        DomSpec::Text(string) => return text(dom, string),
+        DomSpec::Value(Value::String(string)) => return text(dom, string),
+        DomSpec::Attr(value) => {
+            return render(dom, &DomSpec::of_attr(*value), xml_ns, block_arrays_in);
+        }
+        DomSpec::Element {
+            tag,
+            attrs,
+            children,
+        } => {
+            let (namespace, tag) = qualified(tag, xml_ns);
+            let element = dom.create_element(namespace, tag)?;
+            set_spec_attributes(dom, &element, attrs)?;
+            return fill(dom, element, children, namespace, block_arrays_in);
+        }
+        DomSpec::Wrapping { tag, attrs } => {
+            let (namespace, tag) = qualified(tag, xml_ns);
+            let element = dom.create_element(namespace, tag)?;
+            set_spec_attributes(dom, &element, attrs)?;
+            return Ok(Rendered {
+                dom: element.clone(),
+                content_dom: Some(element),
+            });
+        }
         DomSpec::Array { items, origin } => (items, *origin),
         DomSpec::Value(array @ Value::Array(_)) => {
             return render(dom, &array.clone().into(), xml_ns, block_arrays_in);
         }
         _ => return Err(invalid()),
     };
-    let Some(DomSpec::Value(Value::String(tag))) = items.first() else {
-        return Err(invalid());
+    let tag = match items.first() {
+        Some(DomSpec::Value(Value::String(tag))) => tag.as_str(),
+        Some(DomSpec::Text(tag)) => tag.as_ref(),
+        _ => return Err(invalid()),
     };
     if let (Some(attrs), Some(origin)) = (block_arrays_in, origin)
         && holds_spec_array(attrs, origin)
@@ -220,10 +551,7 @@ fn render<D: Dom>(
             "Using an array from an attribute object as a DOM spec. This may be an attempted cross site scripting attack.".into(),
         ));
     }
-    let (namespace, tag) = match tag.find(' ') {
-        Some(space) if space > 0 => (Some(&tag[..space]), &tag[space + 1..]),
-        _ => (xml_ns, tag.as_str()),
-    };
+    let (namespace, tag) = qualified(tag, xml_ns);
     let element = dom.create_element(namespace, tag)?;
     // Any object that is neither an array nor a DOM node holds the attributes, a
     // `{dom, contentDOM}` one included.
@@ -246,34 +574,41 @@ fn render<D: Dom>(
         }
         _ => 1,
     };
+    fill(
+        dom,
+        element,
+        &items[start.min(items.len())..],
+        namespace,
+        block_arrays_in,
+    )
+}
+
+/// Renders a spec's children into its element, which a hole must be the only one of.
+fn fill<D: Dom>(
+    dom: &D,
+    element: D::Node,
+    children: &[DomSpec<D::Node>],
+    namespace: Option<&str>,
+    block_arrays_in: Option<ValueRef>,
+) -> Result<Rendered<D::Node>> {
     let mut content_dom = None;
-    for (index, child) in items.iter().enumerate().skip(start) {
-        match child {
-            DomSpec::Value(Value::Number(number)) if number.as_f64() == Some(0.0) => {
-                if index < items.len() - 1 || index > start {
-                    return Err(Error::Range(
-                        "Content hole must be the only child of its parent node".into(),
-                    ));
-                }
-                return Ok(Rendered {
-                    dom: element.clone(),
-                    content_dom: Some(element),
-                });
+    for child in children {
+        if is_hole(child) {
+            if children.len() > 1 {
+                return Err(hole_not_alone());
             }
-            DomSpec::Value(Value::String(text)) => {
-                let text = dom.create_text(&text.as_str().into())?;
-                dom.append_child(&element, &text)?;
+            return Ok(Rendered {
+                dom: element.clone(),
+                content_dom: Some(element),
+            });
+        }
+        let inner = stack::grow(|| render(dom, child, namespace, block_arrays_in))?;
+        dom.append_child(&element, &inner.dom)?;
+        if let Some(inner_content) = inner.content_dom {
+            if content_dom.is_some() {
+                return Err(Error::Range("Multiple content holes".into()));
             }
-            _ => {
-                let inner = stack::grow(|| render(dom, child, namespace, block_arrays_in))?;
-                dom.append_child(&element, &inner.dom)?;
-                if let Some(inner_content) = inner.content_dom {
-                    if content_dom.is_some() {
-                        return Err(Error::Range("Multiple content holes".into()));
-                    }
-                    content_dom = Some(inner_content);
-                }
-            }
+            content_dom = Some(inner_content);
         }
     }
     Ok(Rendered {
@@ -282,17 +617,47 @@ fn render<D: Dom>(
     })
 }
 
+/// `child === 0`.
+pub fn is_hole<N>(child: &DomSpec<N>) -> bool {
+    match child {
+        DomSpec::Hole => true,
+        DomSpec::Value(Value::Number(number)) => number.as_f64() == Some(0.0),
+        DomSpec::Attr(value) => value.as_f64() == Some(0.0),
+        _ => false,
+    }
+}
+
+/// A spec's tag and its namespace: the part before a space, or the namespace it's in.
+pub fn qualified<'t>(tag: &'t str, xml_ns: Option<&'t str>) -> (Option<&'t str>, &'t str) {
+    match tag.find(' ') {
+        Some(space) if space > 0 => (Some(&tag[..space]), &tag[space + 1..]),
+        _ => (xml_ns, tag),
+    }
+}
+
+fn set_attribute<D: Dom>(dom: &D, element: &D::Node, name: &str, value: &Value) -> Result<()> {
+    match name.find(' ') {
+        Some(space) if space > 0 => {
+            dom.set_attribute(element, Some(&name[..space]), &name[space + 1..], value)
+        }
+        _ if name == "style" && dom.set_style(element, value)? => Ok(()),
+        _ => dom.set_attribute(element, None, name, value),
+    }
+}
+
 fn set_attributes<D: Dom>(dom: &D, element: &D::Node, attrs: &Map) -> Result<()> {
     for (name, value) in attrs.iter() {
-        if matches!(value, Value::Null) {
-            continue;
+        if !matches!(value, Value::Null) {
+            set_attribute(dom, element, name, value)?;
         }
-        match name.find(' ') {
-            Some(space) if space > 0 => {
-                dom.set_attribute(element, Some(&name[..space]), &name[space + 1..], value)?
-            }
-            _ if name == "style" && dom.set_style(element, value)? => {}
-            _ => dom.set_attribute(element, None, name, value)?,
+    }
+    Ok(())
+}
+
+fn set_spec_attributes<D: Dom>(dom: &D, element: &D::Node, attrs: &SpecAttrs) -> Result<()> {
+    for (name, value) in attrs.iter() {
+        if !value.is_null() {
+            set_attribute(dom, element, name, &value.to_value())?;
         }
     }
     Ok(())

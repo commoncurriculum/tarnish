@@ -16,7 +16,7 @@ use crate::mark::{self, MarkHandle};
 use crate::node::{self, NodeHandle};
 
 /// A DOM spec of JavaScript's.
-fn spec(value: Unknown) -> Result<DomSpec<JsNode>> {
+fn spec(value: Unknown) -> Result<DomSpec<'static, JsNode>> {
     if let Some(node) = dom_node(value)? {
         return Ok(DomSpec::Node(node));
     }

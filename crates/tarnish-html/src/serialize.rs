@@ -108,7 +108,7 @@ pub(crate) fn inner(tree: &Tree, node: NodeId) -> String {
         return out;
     }
     for child in children(tree, node) {
-        write(tree, child, &mut out);
+        write(tree, child, &mut out, None);
     }
     out
 }
@@ -116,8 +116,17 @@ pub(crate) fn inner(tree: &Tree, node: NodeId) -> String {
 /// `outerHTML`: the node with its children.
 pub(crate) fn outer(tree: &Tree, node: NodeId) -> String {
     let mut out = String::new();
-    write(tree, node, &mut out);
+    write(tree, node, &mut out, None);
     out
+}
+
+/// `outerHTML` of `node`, split where a node appended to the element `at` inside it would be
+/// written: what comes before, and what comes after.
+pub(crate) fn outer_split(tree: &Tree, node: NodeId, at: NodeId) -> (String, String) {
+    let mut out = String::new();
+    let split = write(tree, node, &mut out, Some(at)).unwrap_or(out.len());
+    let after = out.split_off(split);
+    (out, after)
 }
 
 /// The children a node's HTML holds: a template's are its content's.
@@ -135,12 +144,17 @@ enum Step {
     Close(NodeId),
 }
 
-fn write(tree: &Tree, node: NodeId, out: &mut String) {
+/// Writes the node, and gives where a node appended to `split_at` would be written.
+fn write(tree: &Tree, node: NodeId, out: &mut String, split_at: Option<NodeId>) -> Option<usize> {
+    let mut split = None;
     let mut steps = vec![Step::Open(node)];
     while let Some(step) = steps.pop() {
         let node = match step {
             Step::Open(node) => node,
             Step::Close(node) => {
+                if split_at == Some(node) {
+                    split = Some(out.len());
+                }
                 let element = tree.element(node).expect("an element");
                 out.push_str("</");
                 write_tag(out, element);
@@ -165,6 +179,8 @@ fn write(tree: &Tree, node: NodeId, out: &mut String) {
                     let start = steps.len();
                     steps.extend(children(tree, node).map(Step::Open));
                     steps[start..].reverse();
+                } else if split_at == Some(node) {
+                    split = Some(out.len());
                 }
             }
             Data::Text(text) => {
@@ -192,6 +208,7 @@ fn write(tree: &Tree, node: NodeId, out: &mut String) {
             Data::Document | Data::Fragment => {}
         }
     }
+    split
 }
 
 #[cfg(test)]

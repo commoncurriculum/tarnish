@@ -15,6 +15,7 @@ use crate::names::{self, NameKind};
 use crate::select::{self, Selectors};
 use crate::serialize;
 use crate::tree::{Attr, Data, Element, FOLLOWING, NodeId, PRECEDING, Space, Tree};
+use crate::write::Content;
 use tarnish_css::Declarations;
 
 /// An HTML document and the nodes made in it: what [`parse_document`](HtmlDom::parse_document)
@@ -211,6 +212,41 @@ impl HtmlNode {
     /// `outerHTML`: the HTML of the node and its children.
     pub fn outer_html(&self) -> String {
         serialize::outer(&self.dom.tree(), self.id)
+    }
+
+    /// The node's HTML inside a parent whose content shows as `content`: a text node's text
+    /// as it's written there.
+    pub(crate) fn outer_html_in(&self, content: Content) -> String {
+        let tree = self.dom.tree();
+        match (&tree.node(self.id).data, content) {
+            (Data::Text(text), Content::Raw) => text.clone(),
+            _ => serialize::outer(&tree, self.id),
+        }
+    }
+
+    /// The node's HTML, split where a node appended to `at` inside it would be written, and how
+    /// content shows there: or, when `at` can't have children, the error appending one gives.
+    pub(crate) fn outer_html_split(
+        &self,
+        at: &HtmlNode,
+    ) -> Result<(String, String, Result<Content>)> {
+        let held = self
+            .dom
+            .tree()
+            .element(at.id)
+            .map(|element| match element.is_html() {
+                true => Content::of_html(&element.name.local),
+                false => Content::Text,
+            });
+        let content = match held {
+            Some(content) => Ok(content),
+            None => match self.dom.append_child(at, &self.dom.create_fragment()?) {
+                Ok(()) => Ok(Content::Dropped),
+                Err(refused) => Err(refused),
+            },
+        };
+        let (before, after) = serialize::outer_split(&self.dom.tree(), self.id, at.id);
+        Ok((before, after, content))
     }
 
     /// `getAttribute`: the value of the attribute of this qualified name, which an HTML

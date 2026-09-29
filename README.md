@@ -110,6 +110,12 @@ This example is `tarnish-html`'s doctest.
 
 - **Rules are closures.** A rule's `getAttrs` gets an `HtmlNode`, which reads the element's
   attributes and inline style. `parseDOM` and `toDOM` aren't read from a spec's JSON.
+- **`to_html` builds no DOM.** It writes the HTML of the DOM the serializer would build as the
+  serializer renders each spec, through `HtmlWriter`, a `dom::Target`. A `toDOM` can give a
+  typed spec (`DomSpec::element`, `DomSpec::wrapping`, text, the hole, a value of its node's
+  attributes) that borrows from the node, which the writer writes directly; any other spec it
+  renders in a DOM of its own. Its tests hold it to the DOM's HTML, and to the DOM's errors, on
+  random documents whose specs take every shape.
 - **Fragments and documents.** `parse_html` parses HTML as a `<template>`'s content holds it.
   `HtmlDom::parse_document` parses a whole document, whose `body()` a parser can read.
 - **Styles ignore quirks mode.** Inline styles parse as in a no-quirks document, in Rust and in
@@ -249,7 +255,7 @@ Names are Rust's: `nodeSize` is `node_size`, `Transform.addMark` is `Transform::
 | A `Step` subclass, `Step.jsonID`, `step instanceof MyStep` | A `transform::CustomStep`, `transform::register_step`, `Step::custom::<MyStep>()` |
 | `StepMap`, `Mapping`, `MapResult` | `transform::StepMap`, `Mapping`, `MapResult` |
 | `liftTarget`, `findWrapping`, `canSplit`, `canJoin`, `joinPoint`, `insertPoint`, `dropPoint`, `replaceStep` | The same functions in `transform` |
-| `DOMParser`, `DOMSerializer`, `DOMParser.schemaRules` | `dom::DomParser` (`from_schema`), `dom::DomSerializer`, `dom::schema_rules`, over the `dom::Dom` trait |
+| `DOMParser`, `DOMSerializer`, `DOMParser.schemaRules` | `dom::DomParser` (`from_schema`), `dom::DomSerializer`, `dom::schema_rules`, over the `dom::Dom` trait; `DomSerializer::write_fragment` renders to any `dom::Target` |
 
 Positions count UTF-16 units, as they do in the browser, so a step lands where it did there, even
 one that splits a surrogate pair.

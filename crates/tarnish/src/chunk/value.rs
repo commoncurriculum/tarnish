@@ -133,6 +133,15 @@ impl<'c> ValueRef<'c> {
         }
     }
 
+    /// `String(value)`.
+    pub fn to_js_string(self) -> Cow<'c, str> {
+        JsonView::to_js_string(self)
+    }
+
+    pub fn truthy(self) -> bool {
+        JsonView::truthy(self)
+    }
+
     pub fn is_object(self) -> bool {
         matches!(self.kind(), Kind::Object(..))
     }
@@ -283,6 +292,38 @@ pub(crate) trait JsonView<'v>: Copy {
             Kind::Number(_) => TypeOf::Number,
             Kind::String(_) => TypeOf::String,
             Kind::Array(_) | Kind::Object(_) => TypeOf::Object,
+        }
+    }
+
+    /// `String(value)`: an array joins its items with commas, `null` among them as nothing.
+    fn to_js_string(self) -> Cow<'v, str> {
+        match self.kind() {
+            Kind::Null => Cow::Borrowed("null"),
+            Kind::Bool(true) => Cow::Borrowed("true"),
+            Kind::Bool(false) => Cow::Borrowed("false"),
+            Kind::Number(number) => Cow::Owned(crate::js::number_to_string(
+                number.as_f64().unwrap_or(f64::NAN),
+            )),
+            Kind::String(string) => Cow::Borrowed(string),
+            Kind::Array(_) => Cow::Owned(
+                self.items()
+                    .map(|item| match item.kind() {
+                        Kind::Null => Cow::Borrowed(""),
+                        _ => stack::grow(|| item.to_js_string()),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(","),
+            ),
+            Kind::Object(_) => Cow::Borrowed("[object Object]"),
+        }
+    }
+
+    fn truthy(self) -> bool {
+        match self.kind() {
+            Kind::Null | Kind::Bool(false) => false,
+            Kind::Number(number) => number.as_f64().is_some_and(|n| n != 0.0 && !n.is_nan()),
+            Kind::String(string) => !string.is_empty(),
+            Kind::Bool(true) | Kind::Array(_) | Kind::Object(_) => true,
         }
     }
 
