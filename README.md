@@ -156,8 +156,6 @@ The modules are ProseMirror's, named as its JavaScript names them:
 | `step.apply(doc)`, `step.invert(doc)` | `Tarnish.Step` |
 | `new Mapping(maps).map(pos, assoc)` | `Tarnish.Mapping.map/4` |
 | `new Transform(doc)`, its methods, `tr.doc` and `tr.steps` | `Tarnish.Transform.new/2` |
-| `DOMParser`, `DOMSerializer` | `Tarnish.DOMParser`, `Tarnish.DOMSerializer` |
-| prosemirror-markdown's `MarkdownParser`, `MarkdownSerializer` | `Tarnish.MarkdownParser`, `Tarnish.MarkdownSerializer` |
 
 ```elixir
 {:ok, schema} = Tarnish.Schema.new(%{"nodes" => [{"doc", %{"content" => "paragraph+"}}, ...], "marks" => [...]})
@@ -176,9 +174,9 @@ ops = [%{"op" => "addMark", "from" => 1, "to" => 6, "mark" => %{"type" => "em"}}
 {:ok, text} = Tarnish.Node.text_between(doc, 0, 12, "\n")
 text = Tarnish.Node.text_content(doc)
 
-# Convert, as your application's conversions do.
-{:ok, doc_json} = Tarnish.MarkdownParser.parse(markdown_string)
-{:ok, html_string} = Tarnish.DOMSerializer.serialize(doc_json)
+# Convert with your application's conversions, in its NIF or in Node workers.
+{:ok, doc_json} = Tarnish.Bridge.parse_markdown(markdown_string)
+{:ok, html_string} = Tarnish.Bridge.serialize_html(doc_json)
 ```
 
 - **Input.** Specs, documents, steps and ops are ProseMirror's JSON as Jason decodes it. Give a
@@ -190,14 +188,13 @@ text = Tarnish.Node.text_content(doc)
 - **Output.** A document keeps the map it was read from, and `to_json` shares every part of that
   map that is still what ProseMirror writes. After steps or ops, only the nodes they changed are
   new maps. In text, a lone surrogate, where a position splits a pair, is U+FFFD.
-- **Conversions.** `Tarnish.DOMParser`, `Tarnish.DOMSerializer`, `Tarnish.MarkdownParser` and
-  `Tarnish.MarkdownSerializer`, and `Tarnish.convert` for a batch of them, convert between a
-  document's JSON and HTML or Markdown, as your application's own conversions do. Each gives
-  `{:ok, value}` or `{:error, message}`. They run in
-  your NIF, which implements `convert/1` and `convert_light/1` (`config :tarnish, conversions:
-  :nif`, the default), or in worker processes over `Tarnish.Bridge`: add it to your supervision
-  tree, with `config :tarnish, conversions: :bridge` and `config :tarnish, Tarnish.Bridge,
-  command: [...]`. A worker writes `{"ready":true}`, then answers each line holding `{"id",
+- **Conversions.** `Tarnish.Bridge` converts between a document's JSON and Markdown or HTML
+  with your application's own conversions: `parse_markdown`, `serialize_markdown`, `parse_html`,
+  `serialize_html`, and `each` for a batch. Each gives `{:ok, value}` or `{:error, message}`.
+  Its backend runs them in Node workers (`config :tarnish, Tarnish.Bridge, backend: :node,
+  command: [...]`, the default) or in your NIF, which implements `convert/1` and
+  `convert_light/1` (`backend: :nif`). Add it to your supervision tree; it starts the workers
+  only for `:node`. A worker writes `{"ready":true}`, then answers each line holding `{"id",
   "operation", "input", "options"}` with a line holding `{"id", "result"}` or `{"id", "error"}`,
   in order.
 - **In your own NIF.** `tarnish-nif` is the base of any NIF on tarnish, the package's own
