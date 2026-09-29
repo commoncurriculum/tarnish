@@ -22,6 +22,11 @@ mimalloc = { version = "0.1", default-features = false, features = ["v2"] }
 safer-ffi = "0.1"
 tarnish = { path = "../tarnish" }
 
+# musl can't give a library it loads after start the initial-exec thread-locals mimalloc uses by
+# default, and a program loads this library after start.
+[target.'cfg(target_env = "musl")'.dependencies]
+mimalloc = { version = "0.1", default-features = false, features = ["v2", "local_dynamic_tls"] }
+
 [[example]]
 name = "header"
 required-features = ["headers"]
