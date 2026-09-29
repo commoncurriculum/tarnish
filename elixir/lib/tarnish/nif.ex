@@ -3,10 +3,10 @@ defmodule Tarnish.NIF do
   Declares the functions of tarnish's NIF, in the module that loads the library holding them.
 
   `Tarnish.Native` loads tarnish's own NIF. An application with a NIF of its own can hold
-  tarnish's functions in that one library instead: its crate depends on `tarnish_elixir` without
-  the `standalone` feature, and `rustler::init!` registers tarnish's functions with its own. The
-  module that loads it declares them with `use Tarnish.NIF`, and `Tarnish` calls that module
-  when it is configured:
+  tarnish's functions in that one library instead: its crate builds on the `tarnish-nif` crate,
+  its `rustler::init!` registers tarnish's functions with its own, and its load hook calls
+  `tarnish_nif::load`. The module that loads it declares them with `use Tarnish.NIF`, and
+  `Tarnish` calls that module when it is configured:
 
       config :tarnish, native: MyApp.Native
 

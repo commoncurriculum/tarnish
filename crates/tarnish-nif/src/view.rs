@@ -34,6 +34,7 @@ pub fn read<'a, T>(
     let reading = Reading {
         refused: Cell::new(false),
         heavy: Cell::new(false),
+        bounded: weight != usize::MAX,
         left: Cell::new(weight),
         keys: RefCell::new(Vec::new()),
         open: RefCell::new(Vec::new()),
@@ -65,6 +66,8 @@ pub struct Json<'a, 'r> {
 pub struct Reading<'a> {
     refused: Cell<bool>,
     heavy: Cell<bool>,
+    /// Whether the weight it may read is bounded, as a light call's is.
+    bounded: bool,
     /// The weight left to read.
     left: Cell<usize>,
     /// The keys looked up so far, as terms.
@@ -137,6 +140,15 @@ impl<'a> Reading<'a> {
             && more(&closed)
     }
 
+    /// Whether an integer past 64 bits may be read: its digits take time in proportion to its
+    /// size, which a bounded reading leaves to an unbounded one.
+    fn big_integer(&self) -> bool {
+        if self.bounded {
+            self.heavy.set(true);
+        }
+        !self.bounded
+    }
+
     /// Counts `weight` more read, `false` once it's more than was left, which ends the reading.
     fn weigh(&self, weight: usize) -> bool {
         match self.left.get().checked_sub(weight) {
@@ -206,6 +218,7 @@ impl<'a, 'r> Json<'a, 'r> {
                     None => self.refuse(Kind::Null),
                 }
             }
+            TermType::Integer if !fits_64_bits(term) && !self.reading.big_integer() => Kind::Null,
             TermType::Integer => match integer(term) {
                 Some((number, written)) => {
                     if !written {
@@ -261,7 +274,8 @@ impl<'a, 'r> Json<'a, 'r> {
             TermType::Atom => Cow::Owned(atom_name(key)?),
             TermType::Integer => Cow::Owned(match key.decode::<i64>() {
                 Ok(integer) => integer.to_string(),
-                Err(_) => key.decode::<BigInt>().ok()?.to_string(),
+                Err(_) if self.reading.big_integer() => key.decode::<BigInt>().ok()?.to_string(),
+                Err(_) => return None,
             }),
             _ => return None,
         })
@@ -539,6 +553,10 @@ impl<'a> js::Json<'a> for Json<'a, '_> {
             self.reading.irregular();
         }
     }
+}
+
+fn fits_64_bits(term: Term) -> bool {
+    term.decode::<i64>().is_ok() || term.decode::<u64>().is_ok()
 }
 
 /// An integer as JSON reads what Jason writes for it: exactly within 64 bits, and as the

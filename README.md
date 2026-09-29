@@ -169,12 +169,18 @@ text = Tarnish.text_content(doc)
   keep a call on the caller's scheduler or send it to a dirty one, a thread pool for batches, and
   tarnish's functions. An application with a NIF of its own builds it on `tarnish-nif`, so one
   library loads and every call reads and writes terms the same way. Its `rustler::init!`
-  registers tarnish's functions with its own; the module that loads it declares them with
-  `use Tarnish.NIF`, and `config :tarnish, native: MyApp.Native` has `Tarnish` call it.
-  `Tarnish.Native` is then neither built nor loaded.
+  registers tarnish's functions with its own, and its load hook starts the pool: pass
+  `tarnish_nif::load`, or call it from a hook of your own, with the count of threads as the load
+  info. The module that loads it declares tarnish's functions with `use Tarnish.NIF`, and
+  `config :tarnish, native: MyApp.Native` has `Tarnish` call it. `Tarnish.Native` is then
+  neither built nor loaded.
 
   ```toml
   tarnish-nif = { git = "https://github.com/commoncurriculum/tarnish" }
+  ```
+
+  ```rust
+  rustler::init!("Elixir.MyApp.Native", load = tarnish_nif::load);
   ```
 
 ### C, and other languages through it

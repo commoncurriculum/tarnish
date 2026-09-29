@@ -19,6 +19,8 @@ use crate::etf::{self, NotJson};
 /// each byte. What a term weighs keeps roughly in step with how long working on it takes.
 pub struct Reader {
     left: usize,
+    /// Whether the weight it may read is bounded, as a light call's is.
+    bounded: bool,
     irregular: bool,
 }
 
@@ -39,6 +41,7 @@ impl Reader {
     pub fn new(weight: usize) -> Reader {
         Reader {
             left: weight,
+            bounded: weight != usize::MAX,
             irregular: false,
         }
     }
@@ -110,7 +113,12 @@ impl Reader {
         Ok(bytes)
     }
 
+    /// The VM writes the whole term out before its size is known, however large it is, so a
+    /// bounded reading leaves that to an unbounded one.
     fn external(&mut self, term: Term, slot: &mut Value) -> Result<(), Unread> {
+        if self.bounded {
+            return Err(Unread::Heavy);
+        }
         self.irregular = true;
         let bytes = term.to_binary();
         self.weigh(bytes.len())?;
