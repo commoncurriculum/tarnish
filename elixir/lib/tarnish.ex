@@ -27,8 +27,10 @@ defmodule Tarnish do
 
   alias Tarnish.Doc
 
-  # The module that loaded the NIF: Tarnish.Native, or an application's own (Tarnish.NIF).
+  # The module that loaded the NIF: Tarnish.Native, or an application's own (Tarnish.NIF), which
+  # is compiled after this package.
   @native Application.compile_env(:tarnish, :native, Tarnish.Native)
+  @compile {:no_warn_undefined, @native}
 
   @opaque schema :: reference()
   @opaque doc :: %Doc{}
