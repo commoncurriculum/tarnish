@@ -104,3 +104,29 @@ jobs:
           cargo run -p tarnish-c --example header --features headers
           git diff --exit-code crates/tarnish-c/include
       - run: npm run test:c
+
+  # On musl, a library loaded after the program starts can't have initial-exec thread-locals, so
+  # the NIF and the C library are loaded that way on Alpine, as the Elixir image loads the NIF.
+  musl:
+    runs-on: ubuntu-latest
+    container: hexpm/elixir:1.17.3-erlang-25.3.2.21-alpine-3.22.5
+    env:
+      MIX_ENV: test
+      # Rust links a program statically on musl, which a library can't be.
+      RUSTFLAGS: -C target-feature=-crt-static
+    steps:
+      - run: apk add --no-cache bash build-base curl git
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Load the NIF and run the Elixir tests
+        working-directory: elixir
+        run: mix local.hex --force && mix local.rebar --force && mix deps.get && mix test
+      - name: Load the C library with dlopen
+        run: |
+          cargo build --release -p tarnish-c
+          cc -std=c11 -Wall -Wextra -Werror -I crates/tarnish-c/include \
+            crates/tarnish-c/tests/load.c -o target/load
+          target/load target/release/libtarnish_c.so

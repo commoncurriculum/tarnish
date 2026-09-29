@@ -16,3 +16,8 @@ doctest = false
 mimalloc = { version = "0.1", default-features = false, features = ["v2"] }
 rustler = "0.38"
 tarnish-nif = { path = "../tarnish-nif" }
+
+# musl can't give a library it loads after start the initial-exec thread-locals mimalloc uses by
+# default, and a program loads this library after start.
+[target.'cfg(target_env = "musl")'.dependencies]
+mimalloc = { version = "0.1", default-features = false, features = ["v2", "local_dynamic_tls"] }
