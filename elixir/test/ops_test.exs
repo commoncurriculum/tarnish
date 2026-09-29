@@ -20,7 +20,7 @@ defmodule Tarnish.OpsTest do
 
     schemas =
       for spec <- specs["schemas"] do
-        {:ok, schema} = Tarnish.schema(spec)
+        {:ok, schema} = Tarnish.Schema.new(spec)
         schema
       end
 
@@ -30,7 +30,7 @@ defmodule Tarnish.OpsTest do
   fixtures = @fixtures |> File.read!() |> Jason.decode!()
 
   defp doc(schemas, %{"schema" => schema, "doc" => json}) do
-    {:ok, doc} = Tarnish.node_from_json(Enum.at(schemas, schema), json)
+    {:ok, doc} = Tarnish.Node.from_json(Enum.at(schemas, schema), json)
     doc
   end
 
@@ -51,8 +51,9 @@ defmodule Tarnish.OpsTest do
       doc = doc(schemas, @fixture)
 
       transformed =
-        with {:ok, changed, steps} <- Tarnish.transform(doc, @fixture["ops"]),
-             do: {:ok, Tarnish.to_json(changed), steps}
+        with {:ok, %Tarnish.Transform{doc: changed, steps: steps}} <-
+               Tarnish.Transform.new(doc, @fixture["ops"]),
+             do: {:ok, Tarnish.Node.to_json(changed), steps}
 
       assert transformed == expected(@fixture)
     end
@@ -65,7 +66,13 @@ defmodule Tarnish.OpsTest do
       separator = @fixture["blockSeparator"]
 
       text =
-        Tarnish.text_between(doc(schemas, @fixture), from, to, separator, @fixture["leafText"])
+        Tarnish.Node.text_between(
+          doc(schemas, @fixture),
+          from,
+          to,
+          separator,
+          @fixture["leafText"]
+        )
 
       assert text == expected(@fixture)
     end
@@ -74,7 +81,7 @@ defmodule Tarnish.OpsTest do
   for {fixture, index} <- Enum.with_index(fixtures["textContent"]) do
     @fixture fixture
     test "textContent #{index} is ProseMirror's", %{schemas: schemas} do
-      assert Tarnish.text_content(doc(schemas, @fixture)) == @fixture["result"]
+      assert Tarnish.Node.text_content(doc(schemas, @fixture)) == @fixture["result"]
     end
   end
 
@@ -89,34 +96,34 @@ defmodule Tarnish.OpsTest do
 
     test "shares the maps of the nodes its steps leave", %{schema: schema} do
       [first, second, third] = content = for text <- ~w(one two three), do: paragraph(text)
-      {:ok, doc} = Tarnish.node_from_json(schema, %{"type" => "doc", "content" => content})
+      {:ok, doc} = Tarnish.Node.from_json(schema, %{"type" => "doc", "content" => content})
       mark = %{"type" => "em"}
       ops = [%{"op" => "addMark", "from" => 6, "to" => 9, "mark" => mark}]
-      {:ok, changed, [_step]} = Tarnish.transform(doc, ops)
-      %{"content" => [one, two, three]} = Tarnish.to_json(changed)
+      {:ok, %Tarnish.Transform{doc: changed, steps: [_step]}} = Tarnish.Transform.new(doc, ops)
+      %{"content" => [one, two, three]} = Tarnish.Node.to_json(changed)
       assert :erts_debug.same(one, first) and :erts_debug.same(three, third)
       refute :erts_debug.same(two, second)
     end
 
     test "is the document given when there are no ops", %{schema: schema} do
-      {:ok, doc} = Tarnish.node_from_json(schema, paragraphs(2, "same"))
-      assert Tarnish.transform(doc, []) == {:ok, doc, []}
+      {:ok, doc} = Tarnish.Node.from_json(schema, paragraphs(2, "same"))
+      assert Tarnish.Transform.new(doc, []) == {:ok, %Tarnish.Transform{doc: doc, steps: []}}
     end
 
     test "comes from a dirty scheduler past a normal one's limits", %{schema: schema} do
-      {:ok, doc} = Tarnish.node_from_json(schema, paragraphs(200, "text"))
+      {:ok, doc} = Tarnish.Node.from_json(schema, paragraphs(200, "text"))
       insert = %{"op" => "insert", "pos" => 2, "content" => [%{"type" => "text", "text" => "x"}]}
       ops = List.duplicate(insert, 200)
       assert Tarnish.Native.transform(doc.ref, ops) == :dirty
-      {:ok, changed, steps} = Tarnish.transform(doc, ops)
+      {:ok, %Tarnish.Transform{doc: changed, steps: steps}} = Tarnish.Transform.new(doc, ops)
       assert length(steps) == 200
-      %{"content" => [first | _]} = Tarnish.to_json(changed)
+      %{"content" => [first | _]} = Tarnish.Node.to_json(changed)
       assert first == paragraph("t" <> String.duplicate("x", 200) <> "ext")
 
       mark = %{"type" => "strong"}
       whole = [%{"op" => "addMark", "from" => 0, "to" => 1200, "mark" => mark}]
       assert Tarnish.Native.transform(doc.ref, whole) == :dirty
-      assert {:ok, _, [_ | _]} = Tarnish.transform(doc, whole)
+      assert {:ok, %Tarnish.Transform{steps: [_ | _]}} = Tarnish.Transform.new(doc, whole)
     end
   end
 
@@ -126,17 +133,17 @@ defmodule Tarnish.OpsTest do
     test "comes from a dirty scheduler past a normal one's limits", %{schema: schema} do
       long = String.duplicate("long ", 200_000)
       json = %{"type" => "doc", "content" => [paragraph(long)]}
-      {:ok, doc} = Tarnish.node_from_json(schema, json)
+      {:ok, doc} = Tarnish.Node.from_json(schema, json)
       assert Tarnish.Native.text_content(doc.ref) == :dirty
-      assert Tarnish.text_content(doc) == long
+      assert Tarnish.Node.text_content(doc) == long
       assert Tarnish.Native.text_between(doc.ref, 0, 1_000_002, "\n", nil) == :dirty
-      assert Tarnish.text_between(doc, 0, 1_000_002, "\n") == {:ok, long}
+      assert Tarnish.Node.text_between(doc, 0, 1_000_002, "\n") == {:ok, long}
     end
 
     test "has U+FFFD for each half of a surrogate pair a position splits", %{schema: schema} do
-      {:ok, doc} = Tarnish.node_from_json(schema, paragraphs(1, "a😀b"))
-      assert Tarnish.text_between(doc, 1, 3) == {:ok, "a�"}
-      assert Tarnish.text_between(doc, 3, 5) == {:ok, "�b"}
+      {:ok, doc} = Tarnish.Node.from_json(schema, paragraphs(1, "a😀b"))
+      assert Tarnish.Node.text_between(doc, 1, 3) == {:ok, "a�"}
+      assert Tarnish.Node.text_between(doc, 3, 5) == {:ok, "�b"}
     end
   end
 end

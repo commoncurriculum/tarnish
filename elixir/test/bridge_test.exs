@@ -15,9 +15,9 @@ defmodule Tarnish.BridgeTest do
 
   test "converts HTML to a document's JSON and back", %{opts: opts} do
     html = "<p>Hi <em>there</em></p>"
-    assert {:ok, doc_json} = Tarnish.parse_html(html, opts)
+    assert {:ok, doc_json} = Tarnish.DOMParser.parse(html, opts)
     assert %{"type" => "doc", "content" => [%{"type" => "paragraph"}]} = doc_json
-    assert Tarnish.serialize_html(doc_json, opts) == {:ok, html}
+    assert Tarnish.DOMSerializer.serialize(doc_json, opts) == {:ok, html}
   end
 
   test "answers each request in order, across its workers", %{opts: opts} do
@@ -31,14 +31,15 @@ defmodule Tarnish.BridgeTest do
   end
 
   test "gives a worker's error as the answer", %{opts: opts} do
-    assert Tarnish.parse_markdown("# x", %{}, opts) == {:error, "Unknown operation parseMarkdown"}
+    assert Tarnish.MarkdownParser.parse("# x", %{}, opts) ==
+             {:error, "Unknown operation parseMarkdown"}
   end
 
   test "keeps its workers across calls", %{opts: opts} do
     before = worker_pids(opts[:pool])
     assert length(before) == 2
 
-    for _ <- 1..3, do: assert({:ok, _} = Tarnish.parse_html("<p>x</p>", opts))
+    for _ <- 1..3, do: assert({:ok, _} = Tarnish.DOMParser.parse("<p>x</p>", opts))
 
     assert worker_pids(opts[:pool]) == before
   end
