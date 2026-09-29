@@ -23,6 +23,14 @@ defmodule Tarnish do
 
   A part of a term that ProseMirror reads and Jason couldn't encode, such as a tuple, raises
   `ArgumentError`. A part it ignores, such as a key a node doesn't have, isn't read.
+
+  ## Conversions
+
+  `parse_markdown/3`, `serialize_markdown/3`, `parse_html/2`, `serialize_html/2` and `convert/2`
+  convert between a document's JSON and Markdown or HTML, as the application's own conversions
+  do. They run in the application's NIF, which implements `convert/1` and `convert_light/1`
+  (`config :tarnish, conversions: :nif`, the default), or in worker processes through
+  `Tarnish.Bridge` (`conversions: :bridge`). Each gives `{:ok, value}` or `{:error, message}`.
   """
 
   alias Tarnish.Doc
@@ -36,6 +44,10 @@ defmodule Tarnish do
   @opaque doc :: %Doc{}
   @type json :: map() | list() | String.t() | number() | boolean() | nil
   @type error :: {:error, {atom(), String.t()}}
+
+  @typedoc "A conversion: its operation, its input, and the options when it takes them."
+  @type request :: {String.t(), json()} | {String.t(), json(), map()}
+  @type converted :: {:ok, json()} | {:error, String.t()}
 
   @doc """
   Builds a schema from its spec: a map of `"nodes"`, `"marks"` and `"topNode"`, as
@@ -183,4 +195,96 @@ defmodule Tarnish do
     {:ok, text} = with :dirty <- @native.text_content(ref), do: @native.text_content_dirty(ref)
     text
   end
+
+  @doc "Parses Markdown to a document's JSON."
+  @spec parse_markdown(String.t(), map(), keyword()) :: converted()
+  def parse_markdown(markdown_string, markdown_options \\ %{}, opts \\ []),
+    do: convert_one({"parseMarkdown", markdown_string, markdown_options}, opts)
+
+  @doc "Serializes a document's JSON to Markdown."
+  @spec serialize_markdown(json(), map(), keyword()) :: converted()
+  def serialize_markdown(doc_json, markdown_options \\ %{}, opts \\ []),
+    do: convert_one({"serializeMarkdown", doc_json, markdown_options}, opts)
+
+  @doc "Parses HTML to a document's JSON."
+  @spec parse_html(String.t(), keyword()) :: converted()
+  def parse_html(html_string, opts \\ []), do: convert_one({"parseHTML", html_string}, opts)
+
+  @doc "Serializes a document's JSON to HTML."
+  @spec serialize_html(json(), keyword()) :: converted()
+  def serialize_html(doc_json, opts \\ []), do: convert_one({"serializeHTML", doc_json}, opts)
+
+  @doc """
+  Makes each conversion, in order, and gives one result for each. A request is
+  `{operation, input}` or `{operation, input, options}`, where the operation is
+  `"parseMarkdown"`, `"serializeMarkdown"`, `"parseHTML"` or `"serializeHTML"`.
+
+  The NIF spreads a batch over its threads, as `Tarnish.Bridge` spreads one over its workers,
+  and reads maps, lists, strings, numbers and atoms itself. A request holding any other term,
+  such as a struct, is encoded with Jason and decoded back first, as a worker would read it, so a
+  term Jason can't encode raises as Jason raises. `opts` are `Tarnish.Bridge.convert/2`'s.
+  """
+  @spec convert([request()], keyword()) :: [converted()]
+  def convert(requests, opts \\ []) do
+    case conversions() do
+      :nif -> convert_in_nif(requests)
+      :bridge -> Tarnish.Bridge.convert(requests, opts)
+    end
+  end
+
+  @doc false
+  def conversions do
+    case Application.get_env(:tarnish, :conversions, :nif) do
+      conversions when conversions in [:nif, :bridge] ->
+        conversions
+
+      other ->
+        raise ArgumentError,
+              "config :tarnish, conversions: must be :nif or :bridge, not #{inspect(other)}"
+    end
+  end
+
+  defp convert_one(request, opts) do
+    [converted] = convert([request], opts)
+    converted
+  end
+
+  defp convert_in_nif(requests) do
+    answers = native_convert(requests)
+
+    if :not_json in answers do
+      encoded = for {request, :not_json} <- Enum.zip(requests, answers), do: as_encoded(request)
+      fill(answers, native_convert(encoded))
+    else
+      answers
+    end
+  end
+
+  # A single request converts on the caller's own scheduler when the NIF finds it light, which
+  # spares handing the process to a dirty scheduler and back.
+  defp native_convert([request]) do
+    case @native.convert_light(request) do
+      :dirty -> @native.convert([request])
+      answer -> [answer]
+    end
+  end
+
+  defp native_convert(requests), do: @native.convert(requests)
+
+  defp fill([:not_json | answers], [answer | rest]) when answer != :not_json,
+    do: [answer | fill(answers, rest)]
+
+  defp fill([answer | answers], rest) when answer != :not_json, do: [answer | fill(answers, rest)]
+  defp fill([], []), do: []
+
+  # The request as a worker reads the JSON Jason writes for it, each object's keys in the order
+  # written.
+  defp as_encoded({operation, input}), do: as_encoded({operation, input, nil})
+
+  defp as_encoded({operation, input, options}) do
+    request = {decoded(operation), decoded(input)}
+    if options in [nil, %{}], do: request, else: Tuple.append(request, decoded(options))
+  end
+
+  defp decoded(term), do: term |> Jason.encode!() |> Jason.decode!(objects: :ordered_objects)
 end

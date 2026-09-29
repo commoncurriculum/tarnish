@@ -19,8 +19,9 @@ defmodule Tarnish.MixProject do
   defp deps do
     [
       {:rustler, "~> 0.38.0", runtime: false},
-      # The tests read the fixtures with it.
-      {:jason, "~> 1.4", runtime: false}
+      {:jason, "~> 1.4"},
+      # Tarnish.Bridge's pool of workers
+      {:nimble_pool, "~> 1.1"}
     ]
   end
 end

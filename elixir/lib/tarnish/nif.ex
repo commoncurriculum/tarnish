@@ -11,6 +11,11 @@ defmodule Tarnish.NIF do
       config :tarnish, native: MyApp.Native
 
   Then `Tarnish.Native` isn't built or loaded.
+
+  A NIF that makes `Tarnish`'s conversions also implements `convert/1`, which takes a list of
+  requests on a dirty scheduler, and `convert_light/1`, which takes one on the caller's and gives
+  `:dirty` when it is too heavy for that. Each answer is `{:ok, value}`, `{:error, message}`, or
+  `:not_json` for a request holding a term the NIF doesn't read.
   """
 
   defmacro __using__(_opts) do
@@ -59,6 +64,11 @@ defmodule Tarnish.NIF do
       def text_content(_doc), do: :erlang.nif_error(:nif_not_loaded)
       @doc false
       def text_content_dirty(_doc), do: :erlang.nif_error(:nif_not_loaded)
+
+      @doc false
+      def convert(_requests), do: :erlang.nif_error(:nif_not_loaded)
+      @doc false
+      def convert_light(_request), do: :erlang.nif_error(:nif_not_loaded)
     end
   end
 end

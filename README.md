@@ -163,6 +163,10 @@ ops = [%{"op" => "addMark", "from" => 1, "to" => 6, "mark" => %{"type" => "em"}}
 # Its text, to index for search.
 {:ok, text} = Tarnish.text_between(doc, 0, 12, "\n")
 text = Tarnish.text_content(doc)
+
+# Convert, as your application's conversions do.
+{:ok, doc_json} = Tarnish.parse_markdown(markdown_string)
+{:ok, html_string} = Tarnish.serialize_html(doc_json)
 ```
 
 - **Input.** Specs, documents, steps and ops are ProseMirror's JSON as Jason decodes it. Give a
@@ -174,6 +178,15 @@ text = Tarnish.text_content(doc)
 - **Output.** A document keeps the map it was read from, and `to_json` shares every part of that
   map that is still what ProseMirror writes. After steps or ops, only the nodes they changed are
   new maps. In text, a lone surrogate, where a position splits a pair, is U+FFFD.
+- **Conversions.** `parse_markdown`, `serialize_markdown`, `parse_html`, `serialize_html` and
+  `convert`, for a batch, convert between a document's JSON and Markdown or HTML, as your
+  application's own conversions do. Each gives `{:ok, value}` or `{:error, message}`. They run in
+  your NIF, which implements `convert/1` and `convert_light/1` (`config :tarnish, conversions:
+  :nif`, the default), or in worker processes over `Tarnish.Bridge`: add it to your supervision
+  tree, with `config :tarnish, conversions: :bridge` and `config :tarnish, Tarnish.Bridge,
+  command: [...]`. A worker writes `{"ready":true}`, then answers each line holding `{"id",
+  "operation", "input", "options"}` with a line holding `{"id", "result"}` or `{"id", "error"}`,
+  in order.
 - **In your own NIF.** `tarnish-nif` is the base of any NIF on tarnish, the package's own
   (`tarnish_elixir`) among them. It holds the terms read and written as JSON, the budgets that
   keep a call on the caller's scheduler or send it to a dirty one, a thread pool for batches, and
@@ -320,7 +333,7 @@ The proof doesn't depend on anyone reading the Rust. CI checks it:
 | prosemirror-model's suite, against tarnish | 309 passing |
 | prosemirror-transform's suite, against tarnish | 238 passing |
 | tarnish's own suite, against JavaScript and tarnish | 38 passing |
-| Elixir (`mix test`) | 516 tests |
+| Elixir (`mix test`) | 522 tests |
 | C (`npm run test:c`) | 148 recorded transforms, 308 op lists and texts, the error cases and a 200,000-deep attribute |
 | Rust (`cargo test`) | the recorded cases, and a 20,000-deep document through every operation on a 256 KB stack |
 
