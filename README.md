@@ -11,7 +11,8 @@ and apply the steps editors send, without running JavaScript.
   309 of 309 model tests and 238 of 238 transform tests pass.
 - **Bindings.** Elixir, taking and returning Erlang terms, and C, taking and returning JSON, for
   any language that can call a C library.
-- **Safe.** No `unsafe` code, and no depth limit: documents nest as deeply as memory allows.
+- **Safe.** No `unsafe` code, and none of an engine's limits: documents nest as deeply, and
+  strings grow as long, as memory allows.
 - **JavaScript's behavior, as V8 has it.** Where ProseMirror's code leans on JavaScript, such as
   `String()`, `JSON.parse`, or the `TypeError` of reading a property of `undefined`, tarnish does
   what Node does, down to the error's message.
