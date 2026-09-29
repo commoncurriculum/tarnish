@@ -1,9 +1,7 @@
 use crate::{Error, Result, deadline, number_to_string};
 
-/// The most UTF-16 units a string holds in V8, which throws building a longer one.
-pub const MAX_STRING_LENGTH: usize = (1 << 29) - 24;
-
-/// What V8 throws building a string longer than [`MAX_STRING_LENGTH`].
+/// What JavaScript throws building a string longer than it holds, as tarnish throws building one
+/// longer than memory holds.
 pub fn invalid_string_length() -> Error {
     Error::Range("Invalid string length".into())
 }
@@ -105,7 +103,7 @@ pub fn trim_end(string: &str) -> &str {
     }
 }
 
-/// `string.repeat(count)`.
+/// `string.repeat(count)`, as long as memory allows.
 pub fn repeat(string: &str, count: f64) -> Result<String> {
     let times = if count.is_nan() { 0.0 } else { count.trunc() };
     if times < 0.0 || times.is_infinite() {
@@ -117,15 +115,11 @@ pub fn repeat(string: &str, count: f64) -> Result<String> {
     if times == 0.0 || string.is_empty() {
         return Ok(String::new());
     }
-    let times = times as usize;
-    if times > MAX_STRING_LENGTH / utf16_len(string) {
-        return Err(invalid_string_length());
-    }
-    let length = times * string.len();
+    let length = (times as usize)
+        .checked_mul(string.len())
+        .ok_or_else(invalid_string_length)?;
     deadline::build(length)?;
     let mut repeated = String::new();
-    // An allocation that fails is a crash in V8, where this throws what building too long a
-    // string throws.
     repeated
         .try_reserve_exact(length)
         .map_err(|_| invalid_string_length())?;
@@ -180,11 +174,11 @@ mod tests {
         );
         assert_eq!(thrown("", -1.0), "RangeError: Invalid count value: -1");
         assert_eq!(
-            thrown("a", 536_870_889.0),
+            thrown("ab", 2f64.powi(63)),
             "RangeError: Invalid string length"
         );
         assert_eq!(
-            thrown("😀", 268_435_445.0),
+            thrown("a", 2f64.powi(63)),
             "RangeError: Invalid string length"
         );
         assert_eq!(repeat("ab", f64::NAN).unwrap(), "");
