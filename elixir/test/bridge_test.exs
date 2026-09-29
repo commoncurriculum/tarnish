@@ -1,5 +1,5 @@
 defmodule Tarnish.BridgeTest do
-  # The conversions are set for the whole VM, and a test kills a worker.
+  # The backend is set for the whole VM, and a test kills a worker.
   use ExUnit.Case, async: false
 
   @moduletag :bridge
@@ -7,31 +7,31 @@ defmodule Tarnish.BridgeTest do
   @worker ["node", Path.expand("support/bridge_worker.mjs", __DIR__)]
 
   setup do
-    Application.put_env(:tarnish, :conversions, :bridge)
-    on_exit(fn -> Application.delete_env(:tarnish, :conversions) end)
+    Application.put_env(:tarnish, Tarnish.Bridge, backend: :node)
+    on_exit(fn -> Application.delete_env(:tarnish, Tarnish.Bridge) end)
     pool = start_supervised!({Tarnish.Bridge, name: nil, size: 2, command: @worker})
     %{opts: [pool: pool, size: 2]}
   end
 
   test "converts HTML to a document's JSON and back", %{opts: opts} do
     html = "<p>Hi <em>there</em></p>"
-    assert {:ok, doc_json} = Tarnish.DOMParser.parse(html, opts)
+    assert {:ok, doc_json} = Tarnish.Bridge.parse_html(html, %{}, opts)
     assert %{"type" => "doc", "content" => [%{"type" => "paragraph"}]} = doc_json
-    assert Tarnish.DOMSerializer.serialize(doc_json, opts) == {:ok, html}
+    assert Tarnish.Bridge.serialize_html(doc_json, %{}, opts) == {:ok, html}
   end
 
   test "answers each request in order, across its workers", %{opts: opts} do
     requests = for n <- 1..9, do: {"parseHTML", "<p>#{n}</p>"}
 
     texts =
-      for {:ok, doc_json} <- Tarnish.convert(requests, opts),
+      for {:ok, doc_json} <- Tarnish.Bridge.each(requests, opts),
           do: get_in(doc_json, ["content", Access.at(0), "content", Access.at(0), "text"])
 
     assert texts == Enum.map(1..9, &to_string/1)
   end
 
   test "gives a worker's error as the answer", %{opts: opts} do
-    assert Tarnish.MarkdownParser.parse("# x", %{}, opts) ==
+    assert Tarnish.Bridge.parse_markdown("# x", %{}, opts) ==
              {:error, "Unknown operation parseMarkdown"}
   end
 
@@ -39,7 +39,7 @@ defmodule Tarnish.BridgeTest do
     before = worker_pids(opts[:pool])
     assert length(before) == 2
 
-    for _ <- 1..3, do: assert({:ok, _} = Tarnish.DOMParser.parse("<p>x</p>", opts))
+    for _ <- 1..3, do: assert({:ok, _} = Tarnish.Bridge.parse_html("<p>x</p>", %{}, opts))
 
     assert worker_pids(opts[:pool]) == before
   end
@@ -51,12 +51,12 @@ defmodule Tarnish.BridgeTest do
       {:ok, :error}
     end)
 
-    assert Tarnish.convert(List.duplicate({"parseHTML", "<p>x</p>"}, 4), opts) ==
+    assert Tarnish.Bridge.each(List.duplicate({"parseHTML", "<p>x</p>"}, 4), opts) ==
              List.duplicate({:ok, %{"type" => "doc", "content" => [paragraph("x")]}}, 4)
   end
 
-  test "starts no pool when the conversions run in the NIF" do
-    Application.put_env(:tarnish, :conversions, :nif)
+  test "starts no pool when the NIF converts" do
+    Application.put_env(:tarnish, Tarnish.Bridge, backend: :nif)
     assert Tarnish.Bridge.start_link(command: @worker) == :ignore
   end
 

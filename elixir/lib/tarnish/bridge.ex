@@ -1,199 +1,134 @@
 defmodule Tarnish.Bridge do
   @moduledoc """
-  The connection to worker processes that make `Tarnish`'s conversions: a pool of them, each on
-  a port. `Tarnish`'s conversion functions send their requests over it when
-  `config :tarnish, conversions: :bridge`. Put it in your supervision tree; it starts no workers
-  when the conversions run in your NIF.
+  Converts documents between Markdown, HTML and ProseMirror JSON with the application's own
+  conversions, in its NIF or in Node workers. Both give the same answers.
 
-      config :tarnish, conversions: :bridge
-      config :tarnish, Tarnish.Bridge, command: ["node", "worker.mjs"], size: 2
+      config :tarnish, Tarnish.Bridge, backend: :node, command: ["node", "worker.mjs"], size: 2
+      config :tarnish, Tarnish.Bridge, backend: :nif
 
-  A worker writes `{"ready":true}` once it can answer, then answers each line holding
-  `{"id", "operation", "input", "options"}` with a line holding `{"id", "result"}` or
-  `{"id", "error"}`, in the order the requests came.
+  `:node`, the default, sends the requests to a pool of workers, `Tarnish.Bridge.Pool`. `:nif`
+  calls the NIF that `config :tarnish, native:` names, which implements `convert/1` and
+  `convert_light/1` (see `Tarnish.NIF`). Put `Tarnish.Bridge` in your supervision tree; it starts
+  the pool only for `:node`.
+
+  Each conversion gives `{:ok, value}` or `{:error, message}`. `opts` are the pool's: `timeout:`
+  in milliseconds (30,000 by default), and `pool:` and `size:` for a pool other than the one in
+  your supervision tree. The NIF takes none.
   """
 
-  @behaviour NimblePool
+  alias Tarnish.Bridge.Pool
 
-  @default_size 2
-  @default_timeout 30_000
-  @ready_timeout 60_000
-  @max_frame_bytes 16 * 1024 * 1024
+  @native Application.compile_env(:tarnish, :native, Tarnish.Native)
+  @compile {:no_warn_undefined, @native}
+
+  @typedoc "A conversion: its operation, its input, and its options when it takes them."
+  @type request :: {String.t(), Tarnish.json()} | {String.t(), Tarnish.json(), map()}
+  @type result :: {:ok, Tarnish.json()} | {:error, String.t()}
 
   def child_spec(opts) do
-    %{
-      id: Keyword.get(opts, :name, __MODULE__),
-      start: {__MODULE__, :start_link, [opts]}
-    }
+    case backend() do
+      :node -> Pool.child_spec(opts)
+      :nif -> %{id: __MODULE__, start: {__MODULE__, :start_link, [opts]}}
+    end
   end
 
+  # The NIF has no process of its own: the application loads it.
   def start_link(opts) do
-    case Tarnish.conversions() do
-      :bridge ->
-        [executable | args] = command(opts)
-
-        NimblePool.start_link(
-          worker: {__MODULE__, %{executable: executable, args: args}},
-          pool_size: Keyword.get(opts, :size, configured(:size, @default_size)),
-          name: Keyword.get(opts, :name, __MODULE__)
-        )
-
-      :nif ->
-        :ignore
+    case backend() do
+      :node -> Pool.start_link(opts)
+      :nif -> :ignore
     end
   end
 
-  # Sends the requests to the workers, a share to each, and gives their answers in order.
-  @doc false
-  @spec call([Tarnish.request()], keyword()) :: [Tarnish.converted()]
-  def call(requests, opts) do
-    size = Keyword.get(opts, :size, configured(:size, @default_size))
-    per_worker = max(ceil(length(requests) / size), 1)
+  @doc "Markdown to a document's JSON: `{:ok, doc_json}` or `{:error, message}`."
+  @spec parse_markdown(String.t(), map(), keyword()) :: result()
+  def parse_markdown(markdown_string, markdown_options \\ %{}, opts \\ []),
+    do: one({"parseMarkdown", markdown_string, markdown_options}, opts)
 
-    requests
-    |> Enum.chunk_every(per_worker)
-    |> Task.async_stream(&call_worker(&1, opts),
-      max_concurrency: size,
-      ordered: true,
-      timeout: :infinity
-    )
-    |> Enum.flat_map(fn {:ok, answers} -> answers end)
-  end
+  @doc "A document's JSON to Markdown: `{:ok, markdown_string}` or `{:error, message}`."
+  @spec serialize_markdown(Tarnish.json(), map(), keyword()) :: result()
+  def serialize_markdown(doc_json, markdown_options \\ %{}, opts \\ []),
+    do: one({"serializeMarkdown", doc_json, markdown_options}, opts)
 
-  # A worker takes every frame of its share before it answers any, which saves a round trip per
-  # request.
-  defp call_worker(requests, opts) do
-    pool = Keyword.get(opts, :pool, __MODULE__)
-    timeout = Keyword.get(opts, :timeout, @default_timeout)
+  @doc "HTML to a document's JSON: `{:ok, doc_json}` or `{:error, message}`."
+  @spec parse_html(String.t(), map(), keyword()) :: result()
+  def parse_html(html_string, options \\ %{}, opts \\ []),
+    do: one({"parseHTML", html_string, options}, opts)
 
-    NimblePool.checkout!(
-      pool,
-      :bridge,
-      fn _from, port ->
-        numbered = Enum.with_index(requests)
+  @doc "A document's JSON to HTML: `{:ok, html_string}` or `{:error, message}`."
+  @spec serialize_html(Tarnish.json(), map(), keyword()) :: result()
+  def serialize_html(doc_json, options \\ %{}, opts \\ []),
+    do: one({"serializeHTML", doc_json, options}, opts)
 
-        Enum.each(numbered, fn {request, id} -> Port.command(port, [encode(request, id), ?\n]) end)
+  @doc """
+  Makes each conversion, in order, and gives one result for each. The operation of a request is
+  `"parseMarkdown"`, `"serializeMarkdown"`, `"parseHTML"` or `"serializeHTML"`.
 
-        results =
-          Enum.map(numbered, fn {_request, id} -> decode(receive_frame(port, timeout), id) end)
-
-        # Port.connect links the borrower; unlink before its Task exits and closes the worker.
-        Process.unlink(port)
-        {results, :ok}
-      end,
-      timeout
-    )
-  end
-
-  defp encode({operation, input}, id), do: encode({operation, input, %{}}, id)
-
-  defp encode({operation, input, options}, id) do
-    request = %{id: id, operation: operation, input: input}
-    request = if options in [nil, %{}], do: request, else: Map.put(request, :options, options)
-    Jason.encode_to_iodata!(request)
-  end
-
-  defp decode(frame, id) do
-    case json(frame) do
-      %{"id" => ^id, "result" => result} -> {:ok, result}
-      %{"id" => ^id, "error" => message} -> {:error, message}
-      response -> raise "bridge worker answered request #{id} with id #{inspect(response["id"])}"
+  The NIF spreads a batch over its threads, as the pool spreads one over its workers. It reads
+  maps, lists, strings, numbers and atoms itself. A request holding any other term, such as a
+  struct, is encoded with Jason and decoded back first, as a worker would read it, so a term
+  Jason can't encode raises as Jason raises.
+  """
+  @spec each([request()], keyword()) :: [result()]
+  def each(requests, opts \\ []) do
+    case backend() do
+      :node -> Pool.run(requests, opts)
+      :nif -> run_in_nif(requests)
     end
   end
 
-  # `JSON.stringify` escapes a lone surrogate, which Jason refuses and an Elixir string can't hold.
-  # It reads as U+FFFD, as tarnish writes it. `JSON.stringify` writes a surrogate pair unescaped,
-  # so every surrogate escape in a frame is a lone one.
-  @lone_surrogate ~r/(?<!\\)((?:\\\\)*)\\ud[89a-f][0-9a-f]{2}/i
-
-  defp json(frame) do
-    case Jason.decode(frame) do
-      {:ok, value} -> value
-      {:error, _} -> @lone_surrogate |> Regex.replace(frame, "\\1\\\\ufffd") |> Jason.decode!()
-    end
+  defp one(request, opts) do
+    [result] = each([request], opts)
+    result
   end
 
-  defp receive_frame(port, timeout) do
-    receive do
-      {^port, {:data, {:eol, line}}} -> line
-      {^port, {:data, {:noeol, part}}} -> part <> receive_frame(port, timeout)
-      {^port, {:exit_status, status}} -> raise "bridge worker exited with status #{status}"
-    after
-      timeout -> raise "bridge worker timed out after #{timeout}ms"
-    end
-  end
+  defp backend do
+    case Keyword.get(Application.get_env(:tarnish, __MODULE__, []), :backend, :node) do
+      backend when backend in [:node, :nif] ->
+        backend
 
-  defp command(opts) do
-    case Keyword.get(opts, :command, configured(:command, nil)) do
-      [executable | args] ->
-        found =
-          System.find_executable(executable) ||
-            raise(ArgumentError, "bridge executable not found: #{executable}")
-
-        [found | args]
-
-      nil ->
+      other ->
         raise ArgumentError,
-              "no bridge command: pass :command, or set config :tarnish, Tarnish.Bridge, command: [...]"
+              "config :tarnish, Tarnish.Bridge, backend: must be :node or :nif, not #{inspect(other)}"
     end
   end
 
-  defp configured(key, default),
-    do: Keyword.get(Application.get_env(:tarnish, __MODULE__, []), key, default)
+  defp run_in_nif(requests) do
+    answers = convert_in_nif(requests)
 
-  @impl NimblePool
-  def init_worker(%{executable: executable, args: args} = state) do
-    port =
-      Port.open({:spawn_executable, executable}, [
-        :binary,
-        :exit_status,
-        {:args, args},
-        {:line, @max_frame_bytes}
-      ])
-
-    receive do
-      {^port, {:data, {:eol, line}}} ->
-        if Jason.decode(line) != {:ok, %{"ready" => true}} do
-          Port.close(port)
-          raise "bridge worker's first line was #{inspect(line)}, not {\"ready\":true}"
-        end
-
-        {:ok, port, state}
-    after
-      @ready_timeout ->
-        Port.close(port)
-        raise "bridge worker did not become ready within #{@ready_timeout}ms"
+    if :not_json in answers do
+      encoded = for {request, :not_json} <- Enum.zip(requests, answers), do: as_encoded(request)
+      fill(answers, convert_in_nif(encoded))
+    else
+      answers
     end
   end
 
-  @impl NimblePool
-  def handle_checkout(:bridge, {pid, _ref}, port, state) do
-    Port.connect(port, pid)
-    {:ok, port, port, state}
-  rescue
-    ArgumentError -> {:remove, :closed, state}
+  # A single request converts on the caller's own scheduler when the NIF finds it light, which
+  # spares handing the process to a dirty scheduler and back.
+  defp convert_in_nif([request]) do
+    case @native.convert_light(request) do
+      :dirty -> @native.convert([request])
+      answer -> [answer]
+    end
   end
 
-  @impl NimblePool
-  def handle_checkin(:ok, _from, port, state) do
-    Port.connect(port, self())
-    {:ok, port, state}
-  rescue
-    ArgumentError -> {:remove, :closed, state}
+  defp convert_in_nif(requests), do: @native.convert(requests)
+
+  defp fill([:not_json | answers], [answer | rest]) when answer != :not_json,
+    do: [answer | fill(answers, rest)]
+
+  defp fill([answer | answers], rest) when answer != :not_json, do: [answer | fill(answers, rest)]
+  defp fill([], []), do: []
+
+  # The request as a worker reads the JSON Jason writes for it, each object's keys in the order
+  # written.
+  defp as_encoded({operation, input}), do: as_encoded({operation, input, nil})
+
+  defp as_encoded({operation, input, options}) do
+    request = {decoded(operation), decoded(input)}
+    if options in [nil, %{}], do: request, else: Tuple.append(request, decoded(options))
   end
 
-  def handle_checkin(:error, _from, _port, state), do: {:remove, :closed, state}
-  def handle_checkin({:error, _reason}, _from, _port, state), do: {:remove, :closed, state}
-
-  @impl NimblePool
-  def handle_info({port, {:exit_status, _status}}, port), do: {:remove, :closed}
-  def handle_info(_message, port), do: {:ok, port}
-
-  @impl NimblePool
-  def terminate_worker(_reason, port, state) do
-    Port.close(port)
-    {:ok, state}
-  catch
-    :error, :badarg -> {:ok, state}
-  end
+  defp decoded(term), do: term |> Jason.encode!() |> Jason.decode!(objects: :ordered_objects)
 end
