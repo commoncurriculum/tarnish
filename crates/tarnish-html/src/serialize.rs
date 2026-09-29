@@ -1,63 +1,110 @@
-//! Writing HTML as the standard's fragment serialization does, with scripting off: as
-//! linkedom's `innerHTML` and `outerHTML` do.
+//! Writing HTML as <https://html.spec.whatwg.org/#serialising-html-fragments> does, with
+//! scripting off.
 
-use html5ever::{QualName, ns};
+use std::borrow::Cow;
 
-use crate::tree::{Data, Element, NodeId, Tree, qualified};
+use html5ever::QualName;
 
-/// An element's tag: its local name in HTML's, SVG's and MathML's namespaces, else its
-/// qualified name.
-fn tag_name(element: &Element) -> String {
-    let namespace = &element.name.ns;
-    match *namespace == ns!(html) || *namespace == ns!(svg) || *namespace == ns!(mathml) {
-        true => element.name.local.to_string(),
-        false => element.qualified_name(),
+use crate::tree::{Data, Element, NodeId, Space, Tree};
+
+/// Whether an HTML element of this local name is void: written without content or an end tag.
+pub fn is_void(local: &str) -> bool {
+    const VOID: [&str; 18] = [
+        "area", "base", "basefont", "bgsound", "br", "col", "embed", "frame", "hr", "img", "input",
+        "keygen", "link", "meta", "param", "source", "track", "wbr",
+    ];
+    VOID.contains(&local)
+}
+
+/// Whether the text in an HTML element of this local name is written as it is. With scripting
+/// on, `noscript` would be one.
+pub fn is_raw_text(local: &str) -> bool {
+    matches!(
+        local,
+        "style" | "script" | "xmp" | "iframe" | "noembed" | "noframes" | "plaintext"
+    )
+}
+
+/// The name an attribute is written with: its namespace's usual prefix for XML's, XMLNS's and
+/// XLink's, its own in any other namespace, and then its local name.
+pub fn attribute_name<'a>(
+    namespace: Option<&str>,
+    prefix: Option<&'a str>,
+    local: &'a str,
+) -> Cow<'a, str> {
+    match namespace {
+        None => Cow::Borrowed(local),
+        Some("http://www.w3.org/XML/1998/namespace") => Cow::Owned(format!("xml:{local}")),
+        Some("http://www.w3.org/2000/xmlns/") if local == "xmlns" => Cow::Borrowed(local),
+        Some("http://www.w3.org/2000/xmlns/") => Cow::Owned(format!("xmlns:{local}")),
+        Some("http://www.w3.org/1999/xlink") => Cow::Owned(format!("xlink:{local}")),
+        Some(_) => match prefix {
+            Some(prefix) => Cow::Owned(format!("{prefix}:{local}")),
+            None => Cow::Borrowed(local),
+        },
     }
 }
 
-/// An attribute's name as HTML writes it: its namespace's usual prefix and its local name.
-fn attribute_name(name: &QualName) -> String {
-    let local = &name.local;
-    if name.ns == ns!() {
-        local.to_string()
-    } else if name.ns == ns!(xml) {
-        format!("xml:{local}")
-    } else if name.ns == ns!(xmlns) {
-        match &**local {
-            "xmlns" => local.to_string(),
-            _ => format!("xmlns:{local}"),
-        }
-    } else if name.ns == ns!(xlink) {
-        format!("xlink:{local}")
-    } else {
-        qualified(name)
-    }
+/// Write text, escaping `&`, `<`, `>` and U+00A0.
+pub fn escape_text(out: &mut String, text: &str) {
+    escape(out, text, false);
 }
 
-const VOID: [&str; 18] = [
-    "area", "base", "basefont", "bgsound", "br", "col", "embed", "frame", "hr", "img", "input",
-    "keygen", "link", "meta", "param", "source", "track", "wbr",
-];
+/// Write an attribute's value, escaping `&`, `"`, `<`, `>` and U+00A0. The standard escapes
+/// `<` and `>` in attributes since <https://github.com/whatwg/html/pull/6362>.
+pub fn escape_attribute(out: &mut String, value: &str) {
+    escape(out, value, true);
+}
 
-/// The elements whose text is written as it is. With scripting on, `noscript` would be one.
-const RAW_TEXT: [&str; 7] = [
-    "style",
-    "script",
-    "xmp",
-    "iframe",
-    "noembed",
-    "noframes",
-    "plaintext",
-];
+fn escape(out: &mut String, text: &str, attribute: bool) {
+    let bytes = text.as_bytes();
+    let mut start = 0;
+    let mut index = 0;
+    while index < bytes.len() {
+        let (escaped, length) = match bytes[index] {
+            b'&' => ("&amp;", 1),
+            b'<' => ("&lt;", 1),
+            b'>' => ("&gt;", 1),
+            b'"' if attribute => ("&quot;", 1),
+            0xC2 if bytes.get(index + 1) == Some(&0xA0) => ("&nbsp;", 2),
+            _ => {
+                index += 1;
+                continue;
+            }
+        };
+        out.push_str(&text[start..index]);
+        out.push_str(escaped);
+        index += length;
+        start = index;
+    }
+    out.push_str(&text[start..]);
+}
 
-fn is_void(element: &Element) -> bool {
-    element.is_html() && VOID.contains(&element.qualified_name().as_str())
+fn write_tag(out: &mut String, element: &Element) {
+    if let (Space::Other, Some(prefix)) = (element.space(), &element.name.prefix) {
+        out.push_str(prefix);
+        out.push(':');
+    }
+    out.push_str(&element.name.local);
+}
+
+fn write_attribute_name(out: &mut String, name: &QualName) {
+    let namespace = Some(&*name.ns).filter(|namespace| !namespace.is_empty());
+    out.push_str(&attribute_name(
+        namespace,
+        name.prefix.as_deref(),
+        &name.local,
+    ));
+}
+
+fn is_void_element(element: &Element) -> bool {
+    element.is_html() && is_void(&element.name.local)
 }
 
 /// `innerHTML`: the node's children, or a template's content.
 pub(crate) fn inner(tree: &Tree, node: NodeId) -> String {
     let mut out = String::new();
-    if tree.element(node).is_some_and(is_void) {
+    if tree.element(node).is_some_and(is_void_element) {
         return out;
     }
     for child in children(tree, node) {
@@ -96,7 +143,7 @@ fn write(tree: &Tree, node: NodeId, out: &mut String) {
             Step::Close(node) => {
                 let element = tree.element(node).expect("an element");
                 out.push_str("</");
-                out.push_str(&tag_name(element));
+                write_tag(out, element);
                 out.push('>');
                 continue;
             }
@@ -104,16 +151,16 @@ fn write(tree: &Tree, node: NodeId, out: &mut String) {
         match &tree.node(node).data {
             Data::Element(element) => {
                 out.push('<');
-                out.push_str(&tag_name(element));
+                write_tag(out, element);
                 for attr in &element.attrs {
                     out.push(' ');
-                    out.push_str(&attribute_name(&attr.name));
+                    write_attribute_name(out, &attr.name);
                     out.push_str("=\"");
-                    escape(&attr.value, true, out);
+                    escape_attribute(out, &attr.value);
                     out.push('"');
                 }
                 out.push('>');
-                if !is_void(element) {
+                if !is_void_element(element) {
                     steps.push(Step::Close(node));
                     let start = steps.len();
                     steps.extend(children(tree, node).map(Step::Open));
@@ -125,13 +172,11 @@ fn write(tree: &Tree, node: NodeId, out: &mut String) {
                     .node(node)
                     .parent
                     .and_then(|parent| tree.element(parent));
-                let raw = parent.is_some_and(|parent| {
-                    parent.name.ns == ns!(html)
-                        && RAW_TEXT.contains(&parent.qualified_name().as_str())
-                });
-                match raw {
+                match parent
+                    .is_some_and(|parent| parent.is_html() && is_raw_text(&parent.name.local))
+                {
                     true => out.push_str(text),
-                    false => escape(text, false, out),
+                    false => escape_text(out, text),
                 }
             }
             Data::Comment(comment) => {
@@ -144,22 +189,36 @@ fn write(tree: &Tree, node: NodeId, out: &mut String) {
                 out.push_str(name);
                 out.push('>');
             }
-            Data::Document | Data::Fragment | Data::ProcessingInstruction { .. } => {}
+            Data::Document | Data::Fragment => {}
         }
     }
 }
 
-/// Escape text, or an attribute's value, which escapes quotes where text escapes angle
-/// brackets.
-fn escape(text: &str, attribute: bool, out: &mut String) {
-    for character in text.chars() {
-        match character {
-            '&' => out.push_str("&amp;"),
-            '\u{a0}' => out.push_str("&nbsp;"),
-            '"' if attribute => out.push_str("&quot;"),
-            '<' if !attribute => out.push_str("&lt;"),
-            '>' if !attribute => out.push_str("&gt;"),
-            _ => out.push(character),
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_and_attributes_escape_what_the_standard_escapes() {
+        let mut out = String::new();
+        escape_text(&mut out, "a<b>&\"c\u{a0}é\u{120}");
+        out.push('|');
+        escape_attribute(&mut out, "a<b>&\"c\u{a0}é\u{120}");
+        assert_eq!(
+            out,
+            "a&lt;b&gt;&amp;\"c&nbsp;é\u{120}|a&lt;b&gt;&amp;&quot;c&nbsp;é\u{120}"
+        );
+    }
+
+    #[test]
+    fn attribute_names_take_their_namespaces_prefixes() {
+        let xlink = Some("http://www.w3.org/1999/xlink");
+        let xmlns = Some("http://www.w3.org/2000/xmlns/");
+        assert_eq!(attribute_name(None, None, "href"), "href");
+        assert_eq!(attribute_name(xlink, Some("ns1"), "href"), "xlink:href");
+        assert_eq!(attribute_name(xmlns, None, "xmlns"), "xmlns");
+        assert_eq!(attribute_name(xmlns, Some("xmlns"), "a"), "xmlns:a");
+        assert_eq!(attribute_name(Some("urn:x"), Some("p"), "r"), "p:r");
+        assert_eq!(attribute_name(Some("urn:x"), None, "r"), "r");
     }
 }

@@ -1,6 +1,6 @@
 //! What ProseMirror's `DOMParser` and `DOMSerializer` do in the linkedom fork, recorded by
 //! `harness/record-dom.mjs`: over this crate's DOM, tarnish's must build the same trees, parse
-//! the same documents and write the same HTML.
+//! the same documents, and write the same HTML and strings.
 
 mod basic;
 
@@ -96,7 +96,7 @@ impl Check<'_> {
         let expected = expected(recorded);
         if *actual != expected {
             self.failures.push(format!(
-                "{what} of {:?}\n  jsdom: {expected}\n  tarnish-html: {actual}",
+                "{what} of {:?}\n  recorded: {expected}\n  tarnish-html: {actual}",
                 self.html
             ));
         }
@@ -109,7 +109,7 @@ impl Check<'_> {
             (None, true) => true,
             (Some(_), false) => {
                 println!(
-                    "{what} of {:?}\n  jsdom: {expected}\n  html5ever: {actual:?}",
+                    "{what} of {:?}\n  recorded: {expected}\n  html5ever: {actual:?}",
                     self.html
                 );
                 false
@@ -128,7 +128,7 @@ impl Check<'_> {
 }
 
 #[test]
-fn parses_are_jsdoms() {
+fn parses_match_the_fork() {
     let (schema, fixtures) = fixtures();
     let parser: DomParser<HtmlNode> = basic::parser(&schema);
     let mut failures = Vec::new();
@@ -165,7 +165,7 @@ fn parses_are_jsdoms() {
 }
 
 #[test]
-fn serializations_are_jsdoms() {
+fn serializations_match_the_fork() {
     let (schema, fixtures) = fixtures();
     let serializer = basic::serializer();
     let mut failures = Vec::new();
@@ -179,7 +179,7 @@ fn serializations_are_jsdoms() {
         };
         if html != expected(&recorded) {
             failures.push(format!(
-                "{}\n  jsdom: {recorded}\n  tarnish-html: {html}",
+                "{}\n  recorded: {recorded}\n  tarnish-html: {html}",
                 record["doc"]
             ));
         }
@@ -188,7 +188,7 @@ fn serializations_are_jsdoms() {
 }
 
 #[test]
-fn inline_styles_are_cssstyles() -> Result<()> {
+fn inline_styles_match_the_fork() -> Result<()> {
     let (_, fixtures) = fixtures();
     let properties = fixtures["styleProperties"].as_array().expect("properties");
     let dom = HtmlDom::new();
@@ -214,7 +214,7 @@ fn inline_styles_are_cssstyles() -> Result<()> {
             "cssText": written.attribute("style"),
         });
         if actual != *record {
-            failures.push(format!("  cssstyle: {record}\n  tarnish-html: {actual}"));
+            failures.push(format!("  recorded: {record}\n  tarnish-html: {actual}"));
         }
     }
     report(failures);
@@ -222,7 +222,13 @@ fn inline_styles_are_cssstyles() -> Result<()> {
 }
 
 #[test]
-fn rendered_specs_are_jsdoms() {
+fn the_forks_css_engine_is_this_one() {
+    let (_, fixtures) = fixtures();
+    assert_eq!(fixtures["engine"].as_str(), Some(tarnish_css::ENGINE));
+}
+
+#[test]
+fn rendered_specs_match_the_fork() {
     let (_, fixtures) = fixtures();
     let mut failures = Vec::new();
     for record in fixtures["renders"].as_array().expect("renders") {
@@ -237,10 +243,55 @@ fn rendered_specs_are_jsdoms() {
         let actual = outcome(rendered);
         if actual != expected(&recorded) {
             failures.push(format!(
-                "{}\n  jsdom: {recorded}\n  tarnish-html: {actual}",
+                "{}\n  recorded: {recorded}\n  tarnish-html: {actual}",
                 record["spec"]
             ));
         }
     }
     report(failures);
+}
+
+/// The node a `strings` record names, made in `dom` as the recorder made it.
+fn node_of(dom: &HtmlDom, record: &Value) -> Result<HtmlNode> {
+    let first_child =
+        |dom: &HtmlDom, node| dom.first_child(&node).map(|child| child.expect("a child"));
+    match record.get("node").and_then(Value::as_str) {
+        Some("text") => dom.create_text(&"x".into()),
+        Some("comment") => first_child(dom, dom.parse_fragment("<!--x-->")),
+        Some("fragment") => dom.create_fragment(),
+        Some("document") => Ok(dom.document()),
+        Some("doctype") => {
+            let doctype = HtmlDom::parse_document("<!DOCTYPE html>");
+            first_child(&doctype, doctype.document())
+        }
+        _ => {
+            let element = record["element"].as_str().expect("an element");
+            let element = match element.find(' ') {
+                Some(space) => dom.create_element(Some(&element[..space]), &element[space + 1..]),
+                None => dom.create_element(None, element),
+            }?;
+            if let Some(href) = record.get("href") {
+                dom.set_attribute(&element, None, "href", href)?;
+            }
+            Ok(element)
+        }
+    }
+}
+
+#[test]
+fn attribute_values_of_nodes_match_the_fork() -> Result<()> {
+    let (_, fixtures) = fixtures();
+    let mut failures = Vec::new();
+    for record in fixtures["strings"].as_array().expect("strings") {
+        let dom = match record.get("document").and_then(Value::as_str) {
+            Some(html) => HtmlDom::parse_document(html),
+            None => HtmlDom::new(),
+        };
+        let string = dom.attribute_value(&node_of(&dom, record)?)?;
+        if record["string"].as_str() != Some(&string) {
+            failures.push(format!("  recorded: {record}\n  tarnish-html: {string:?}"));
+        }
+    }
+    report(failures);
+    Ok(())
 }

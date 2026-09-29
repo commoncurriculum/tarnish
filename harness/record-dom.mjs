@@ -7,8 +7,12 @@
 // - Each document, from fixtures/transform.json, the parses and a few of its own, records the
 //   innerHTML of an element that DOMSerializer.serializeFragment fills.
 // - Each inline style records what an element's style holds with the style attribute set to it,
-//   and the attribute that setting style.cssText to it writes.
+//   and the attribute that setting style.cssText to it writes. The engine's engine() is recorded
+//   too, for the tests to check that they run the same tarnish-css natively.
 // - Each DOM output spec records the outerHTML of what DOMSerializer.renderSpec makes of it.
+// - Each node records what an attribute set to it holds, as renderSpec sets one to a
+//   {dom, contentDOM}: a link's href, resolved against its document's base URL, or else the name
+//   of its interface.
 import { readFileSync, writeFileSync } from "node:fs"
 import { parseHTML } from "linkedom"
 import { DOMParser, DOMSerializer, Node, Schema } from "prosemirror-model"
@@ -428,8 +432,6 @@ const serializes = docs.map(doc => ({
   }),
 }))
 
-// cssstyle rewrites or refuses more values than tarnish-html's port does, which reads those mark
-// rules read: fonts and colors. See crates/tarnish-html/src/style/mod.rs.
 const css = [
   "font-weight: bold",
   "font-weight:bold;font-style:italic",
@@ -536,6 +538,8 @@ const styles = css.map(text => {
     cssText: written.getAttribute("style"),
   }
 })
+// The same module instance as element.style's, which the styles above have started.
+const { engine } = await import(new URL("shared/css/engine.js", import.meta.resolve("linkedom")))
 
 const specs = [
   ["div", { class: "a", "data-X": "1", title: `a "b" & c${nbsp}<d>` }, "text & <more>", ["span", 0]],
@@ -559,7 +563,9 @@ const specs = [
   ["p", { "xml:lang": "en", "http://www.w3.org/XML/1998/namespace xml:space": "preserve" }],
   ["template", ["p", "in template"]],
   ["br", "text"],
+  ["http://www.w3.org/1999/xhtml x:br", "text"],
   ["style", "a < b & c"],
+  ["http://www.w3.org/1999/xhtml x:style", "a < b & c"],
   ["script", "if (a < b) {}"],
   ["noscript", "<b>"],
   ["pre", "\nx"],
@@ -587,10 +593,95 @@ const renders = specs.map(spec => ({
   }),
 }))
 
+// An element is named as a DOM spec names it. A record's document, if it has one, is parsed to make
+// the node in.
+const tags = [
+  ...["a", "abbr", "acronym", "address", "applet", "area", "article", "aside", "audio", "b", "base", "basefont"],
+  ...["bdi", "bdo", "bgsound", "big", "blink", "blockquote", "body", "br", "button", "canvas", "caption"],
+  ...["center", "cite", "code", "col", "colgroup", "data", "datalist", "dd", "del", "details", "dfn", "dialog"],
+  ...["dir", "div", "dl", "dt", "em", "embed", "fieldset", "figcaption", "figure", "font", "footer", "form"],
+  ...["frame", "frameset", "h1", "h2", "h3", "h4", "h5", "h6", "head", "header", "hgroup", "hr", "html", "i"],
+  ...["iframe", "image", "img", "input", "ins", "isindex", "kbd", "keygen", "label", "legend", "li", "link"],
+  ...["listing", "main", "map", "mark", "marquee", "menu", "meta", "meter", "multicol", "nav", "nextid", "nobr"],
+  ...["noembed", "noframes", "noscript", "object", "ol", "optgroup", "option", "output", "p", "param", "picture"],
+  ...["plaintext", "pre", "progress", "q", "rb", "rp", "rt", "rtc", "ruby", "s", "samp", "script", "search"],
+  ...["section", "select", "slot", "small", "source", "spacer", "span", "strike", "strong", "style", "sub"],
+  ...["summary", "sup", "table", "tbody", "td", "template", "textarea", "tfoot", "th", "thead", "time", "title"],
+  ...["tr", "track", "tt", "u", "ul", "var", "video", "wbr", "xmp", "h7", "foo", "custom-el", "x-1", "a-b.c"],
+  ...["annotation-xml", "color-profile", "font-face", "font-face-src", "font-face-uri", "font-face-format"],
+  ...["font-face-name", "missing-glyph"],
+  ...["http://www.w3.org/1999/xhtml x-Y", "http://www.w3.org/1999/xhtml A", "http://www.w3.org/1999/xhtml x:p"],
+  ...["http://www.w3.org/2000/svg svg", "http://www.w3.org/2000/svg title", "http://www.w3.org/2000/svg a"],
+  ...["http://www.w3.org/1998/Math/MathML math", "http://www.w3.org/1998/Math/MathML mi", "urn:x p", "urn:x a"],
+]
+const hrefs = [
+  "HTTP://Example.COM",
+  "https://example.com/a b?c=d#e",
+  "/docs",
+  "docs",
+  "//example.com/x",
+  "#x",
+  "?q",
+  "",
+  "  https://a.b/c\td\n  ",
+  "https://ex ample.com",
+  "javascript:alert(1)",
+  "mailto:A@B.com",
+  "data:text/plain,x y",
+  "http://[::1",
+  "https://user:pass@EXAMPLE.com:443/a/../b/./c",
+  "https://例え.jp/パス?キー=値",
+  "file:///C:/x",
+  "x?q#f",
+  "x#f",
+  " \t#f",
+  "x:y#f",
+]
+const bases = [
+  "<base href='https://example.com/a/b?c'>",
+  "<base href='relative/'>",
+  "<base href='x#f'>",
+  "<base href='https://ex ample.com/'>",
+  "<base><base href='https://one.example/x/'><base href='https://two.example/'>",
+  "<body><base href='https://body.example/'>",
+]
+const strings = [
+  ...tags.map(element => ({ element })),
+  ...hrefs.flatMap(href => ["a", "area", "http://www.w3.org/1999/xhtml x:a"].map(element => ({ element, href }))),
+  ...bases.flatMap(html => ["c?d", "/docs", "#x", "y#f", "//other.example/"].map(href => ({ document: html, element: "a", href }))),
+  ...["text", "comment", "fragment", "document", "doctype"].map(node => ({ node })),
+].map(record => {
+  const owner = record.document === undefined ? document : new window.DOMParser().parseFromString(record.document, "text/html")
+  const attribute = owner.createAttribute("x")
+  attribute.value = nodeOf(owner, record)
+  return { ...record, string: attribute.value }
+})
+
+function nodeOf(owner, { element, href, node }) {
+  switch (node) {
+    case "text":
+      return owner.createTextNode("x")
+    case "comment":
+      return owner.createComment("x")
+    case "fragment":
+      return owner.createDocumentFragment()
+    case "document":
+      return owner
+    case "doctype":
+      return new window.DOMParser().parseFromString("<!DOCTYPE html>", "text/html").doctype
+  }
+  const space = element.indexOf(" ")
+  const made = space > 0 ? owner.createElementNS(element.slice(0, space), element.slice(space + 1)) : owner.createElement(element)
+  if (href !== undefined) made.setAttribute("href", href)
+  return made
+}
+
 const spec = { topNode: schema.topNodeType.name, nodes: schema.spec.nodes.toObject(), marks: schema.spec.marks.toObject() }
 const oneEach = records => `[\n${records.map(record => `    ${JSON.stringify(record)}`).join(",\n")}\n  ]`
 writeFileSync(
   new URL("../fixtures/dom.json", import.meta.url),
-  `{\n  "schema": ${JSON.stringify(spec)},\n  "parses": ${oneEach(parses)},\n  "serializes": ${oneEach(serializes)},\n` +
-    `  "styleProperties": ${JSON.stringify(properties)},\n  "styles": ${oneEach(styles)},\n  "renders": ${oneEach(renders)}\n}\n`,
+  `{\n  "engine": ${JSON.stringify(engine())},\n  "schema": ${JSON.stringify(spec)},\n  "parses": ${oneEach(parses)},\n` +
+    `  "serializes": ${oneEach(serializes)},\n` +
+    `  "styleProperties": ${JSON.stringify(properties)},\n  "styles": ${oneEach(styles)},\n  "renders": ${oneEach(renders)},\n` +
+    `  "strings": ${oneEach(strings)}\n}\n`,
 )

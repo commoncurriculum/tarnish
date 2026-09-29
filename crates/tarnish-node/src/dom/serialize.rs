@@ -9,7 +9,7 @@ use napi_derive::napi;
 use tarnish::dom::{DomSerializer, DomSpec, MarkToDom, NodeToDom, Rendered};
 use tarnish::{Map, Value};
 
-use super::{JsDom, JsNode, attribute_value, dom_node};
+use super::{JsDom, JsNode, attribute_value, dom_node, is_node};
 use crate::fragment::FragmentHandle;
 use crate::js::{self, Hook, OrThrow};
 use crate::mark::{self, MarkHandle};
@@ -54,7 +54,7 @@ fn attributes(value: Unknown) -> Result<Option<Map>> {
         return Ok(None);
     }
     let object = Object::from_unknown(value)?;
-    if !js::is_nullish(&js::get(&object, "nodeType")?)? {
+    if is_node(&object)? {
         return Ok(None);
     }
     let mut attrs = Map::new();

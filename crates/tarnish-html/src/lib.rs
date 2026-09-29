@@ -4,12 +4,14 @@
 //!
 //! [`HtmlDom`] parses HTML with html5ever, which follows the HTML standard's parsing algorithm,
 //! and writes it as the standard's `innerHTML` and `outerHTML` do. Elements match CSS
-//! selectors with servo's `selectors`, and hold their inline style in tarnish-css, Servo's CSS
-//! engine, as the linkedom fork's `element.style` does.
+//! selectors with servo's `selectors`, and hold their inline style in tarnish-css.
 //!
 //! [`parse_html`] and [`to_html`] parse and write with a DOM of their own. To parse a whole
 //! document, or hand a parser a node, make the DOM with [`HtmlDom::parse_document`] or
 //! [`HtmlDom::parse_fragment`] and pass it as the parser's [`Dom`](tarnish::dom::Dom).
+//!
+//! [`names`] and [`serialize`] give the DOM's name checks and serialization's rules as
+//! functions of strings, for a DOM of another shape to share.
 //!
 //! ```
 //! use std::collections::HashMap;
@@ -57,10 +59,11 @@
 #![forbid(unsafe_code)]
 
 mod dom;
-mod names;
+mod interface;
+pub mod names;
 mod parse;
 mod select;
-mod serialize;
+pub mod serialize;
 mod tree;
 
 pub use dom::{HtmlDom, HtmlNode};

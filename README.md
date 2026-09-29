@@ -112,11 +112,17 @@ This example is `tarnish-html`'s doctest.
   attributes and inline style. `parseDOM` and `toDOM` aren't read from a spec's JSON.
 - **Fragments and documents.** `parse_html` parses HTML as a `<template>`'s content holds it.
   `HtmlDom::parse_document` parses a whole document, whose `body()` a parser can read.
+- **Styles ignore quirks mode.** Inline styles parse as in a no-quirks document, in Rust and in
+  the fork, even in a document without a doctype. Selectors do follow quirks mode. So
+  `width: 10` and `color: f00` are dropped where a browser, in quirks mode, would take them.
 - **Proven against the linkedom fork.** `npm run test:js` records to `fixtures/dom.json` what
   ProseMirror does in the fork with prosemirror-schema-basic and prosemirror-schema-list: 297
   parses of 287 HTML inputs, as a template's content and as a document, 450 documents written
-  as HTML, 85 inline styles and 40 DOM output specs. The crate's tests write those schemas'
-  rules and `toDOM`s in Rust, and must build the same trees, documents and HTML.
+  as HTML, 85 inline styles, 42 DOM output specs, and the strings 262 nodes give an attribute
+  set to them: a link its `href`, resolved against the document's `<base>`, any other node its
+  interface. The crate's tests write those schemas' rules and `toDOM`s in Rust, and must build
+  the same trees, documents, HTML and strings. They also check that the fork's `element.style`
+  runs the `tarnish-css` they do, by the `engine()` it recorded.
 - **Where the trees differ.** The tests print both trees for three inputs, where html5ever
   follows the HTML standard and parse5 8 doesn't, but for `<isindex>`:
   - elements in a `<select>`, which html5ever keeps, as the standard now does, and parse5
@@ -285,7 +291,7 @@ The proof doesn't depend on anyone reading the Rust. CI checks it:
 | --- | --- |
 | prosemirror-model's suite, against tarnish | 309 passing |
 | prosemirror-transform's suite, against tarnish | 238 passing |
-| tarnish's own suite, against JavaScript and tarnish | 36 passing |
+| tarnish's own suite, against JavaScript and tarnish | 38 passing |
 | Elixir (`mix test`) | 516 tests |
 | C (`npm run test:c`) | 148 recorded transforms, 308 op lists and texts, the error cases and a 200,000-deep attribute |
 | Rust (`cargo test`) | the recorded cases, and a 20,000-deep document through every operation on a 256 KB stack |
@@ -345,8 +351,9 @@ tarnish reads two things:
   ProseMirror has.
 
 HTML comes in through the `Dom` trait. `tarnish-html` parses it with html5ever, which follows the
-HTML standard as parse5 does, and holds inline styles in stylo, Servo's CSS engine. oxc and Yuku have no HTML parser, and Biome's builds a
-lossless syntax tree for its formatter and isn't published as a crate.
+HTML standard, and holds inline styles in stylo, Servo's CSS engine. oxc and Yuku have no HTML
+parser, and Biome's builds a lossless syntax tree for its formatter and isn't published as a
+crate.
 
 - **Yuku** is a JavaScript and TypeScript compiler written in Zig. Its idea of a tree as flat
   arrays of fixed-size nodes linked by index, instead of a tree of heap objects, is the idea
@@ -383,7 +390,7 @@ hold:
 | --- | --- |
 | `crates/tarnish` | The library: `model/`, `transform/`, `dom/`, `chunk/` (the document format), `json/` and `js/` (JSON and JavaScript's semantics for it), `api` (what the bindings call) |
 | `crates/tarnish-html` | An HTML DOM for `DomParser` and `DomSerializer`: html5ever's parser, the standard's serialization |
-| `crates/tarnish-css`, `crates/tarnish-css-wasm` | Inline styles on stylo, natively and as the WebAssembly the linkedom fork's `element.style` runs; `harness/css-wasm.mjs` writes it into the fork |
+| `crates/tarnish-css`, `crates/tarnish-css-wasm` | Inline styles on stylo, and the same as WebAssembly, which `harness/css-wasm.mjs` writes into the linkedom fork |
 | `elixir/`, `crates/tarnish_elixir` | The Elixir package and the Rustler NIF behind it |
 | `crates/tarnish-c` | The C library and its generated header |
 | `crates/tarnish-node` | The Node bridge that runs ProseMirror's suites against tarnish. Internal, not published |
@@ -408,7 +415,9 @@ cargo fmt --all --check && cargo clippy --all-targets -- -D warnings
 
 Building `tarnish-css` needs Python 3, which stylo's build script runs. Writing it into the
 linkedom fork (`node harness/css-wasm.mjs <checkout>`) also needs the `wasm32-unknown-unknown`
-target and the `wasm-bindgen-cli` version `tarnish-css-wasm` pins.
+target and the `wasm-bindgen-cli` version `tarnish-css-wasm` pins; npx fetches binaryen's
+`wasm-opt`. It writes `esm/shared/css/`: the module as `engine.wasm`, its glue as `engine.js`,
+and `THIRD-PARTY.md`, the crates it's compiled from, with their licences, texts and sources.
 
 ## License
 

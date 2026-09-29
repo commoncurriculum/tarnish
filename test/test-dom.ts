@@ -2,10 +2,9 @@
 import ist from "ist"
 import {DOMParser, DOMSerializer, DOMOutputSpec, Schema} from "prosemirror-model"
 import {schema as basic} from "prosemirror-schema-basic"
+import {parseHTML} from "linkedom"
 
-// @ts-ignore
-import {JSDOM} from "jsdom"
-const document = new JSDOM().window.document
+const {document} = parseHTML("")
 
 function html(spec: DOMOutputSpec) {
   return (DOMSerializer.renderSpec(document, spec).dom as HTMLElement).outerHTML
@@ -41,6 +40,17 @@ describe("DOMSerializer.renderSpec", () => {
     let span = document.createElement("span"), em = document.createElement("em")
     ist(html(["div", {dom: span, contentDOM: em}, "text"] as any),
         '<div dom="[object HTMLSpanElement]" contentdom="[object HTMLElement]">text</div>')
+  })
+
+  it("takes a rendered link's href, resolved, for an attribute", () => {
+    let a = document.createElement("a")
+    a.setAttribute("href", "HTTP://Example.COM")
+    ist(html(["div", {dom: a}] as any), '<div dom="http://example.com/"></div>')
+  })
+
+  it("takes an object that isn't a node as String does, whatever its ownerDocument", () => {
+    let title = {ownerDocument: {}, toString: () => "t"}
+    ist(html(["p", {title}] as any), '<p title="t"></p>')
   })
 
   it("takes a rendered object after a child as a child", () => {

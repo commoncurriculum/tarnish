@@ -14,3 +14,4 @@ precomputed-hash = "0.1"
 selectors = "0.40"
 tarnish = { path = "../tarnish", version = "0.1.0" }
 tarnish-css = { path = "../tarnish-css", version = "0.1.0" }
+url = "2"

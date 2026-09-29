@@ -235,7 +235,7 @@ fn render<D: Dom>(
             ];
             for (name, node) in nodes {
                 let Some(node) = node else { continue };
-                let value = Value::String(dom.stringify(node)?);
+                let value = Value::String(dom.attribute_value(node)?);
                 dom.set_attribute(&element, None, name, &value)?;
             }
             2

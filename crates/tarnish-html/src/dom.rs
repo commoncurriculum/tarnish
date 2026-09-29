@@ -5,14 +5,16 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use html5ever::{LocalName, QualName, local_name, ns};
+use html5ever::{LocalName, Namespace, Prefix, QualName, local_name, ns};
 use tarnish::dom::{Dom, NodeKind};
 use tarnish::{Error, Result, Text, Value, js};
+use url::Url;
 
-use crate::names;
+use crate::interface::interface;
+use crate::names::{self, NameKind};
 use crate::select::{self, Selectors};
 use crate::serialize;
-use crate::tree::{Attr, Data, Element, FOLLOWING, NodeId, PRECEDING, Tree};
+use crate::tree::{Attr, Data, Element, FOLLOWING, NodeId, PRECEDING, Space, Tree};
 use tarnish_css::Declarations;
 
 /// An HTML document and the nodes made in it: what [`parse_document`](HtmlDom::parse_document)
@@ -161,31 +163,38 @@ impl HtmlDom {
         }
     }
 
+    /// <https://html.spec.whatwg.org/#dom-hyperlink-href>: a link's URL resolved against the
+    /// document's base URL, or as written when it doesn't resolve. The document's own URL is
+    /// `about:blank`.
+    fn hyperlink_href(&self, tree: &Tree, href: &str) -> String {
+        let blank = Url::parse("about:blank").expect("a URL");
+        let selectors = self.selectors("base[href]").expect("a selector");
+        let base = select::query(tree, DOCUMENT, &selectors)
+            .and_then(|base| blank.join(tree.element(base)?.attribute("href")?).ok())
+            .unwrap_or(blank);
+        base.join(href)
+            .map_or_else(|_| href.to_owned(), String::from)
+    }
+
     /// Run `read` on the element's inline style, when it can have one.
     fn with_style<T>(node: &HtmlNode, read: impl FnOnce(&Declarations) -> T, none: T) -> T {
         let mut tree = node.dom.tree();
         let Some(element) = tree
             .element_mut(node.id)
-            .filter(|element| has_style(element))
+            .filter(|element| element.space() != Space::Other)
         else {
             return none;
         };
-        let style = element.style.get_or_insert_with(|| {
-            let css = element.attrs.iter().find(|attr| is_style(&attr.name));
-            Declarations::parse(css.map_or("", |attr| &attr.value))
-        });
+        let style = match element.style {
+            Some(ref style) => style,
+            None => {
+                let css = element.attr_ns(&ns!(), &local_name!("style"));
+                let style = Declarations::parse(css.map_or("", |attr| &attr.value));
+                element.style.insert(style)
+            }
+        };
         read(style)
     }
-}
-
-fn is_style(name: &QualName) -> bool {
-    name.ns == ns!() && name.local == local_name!("style")
-}
-
-/// Whether the element has `style`: HTML's, SVG's and MathML's do.
-fn has_style(element: &Element) -> bool {
-    let namespace = &element.name.ns;
-    *namespace == ns!(html) || *namespace == ns!(svg) || *namespace == ns!(mathml)
 }
 
 impl HtmlNode {
@@ -253,8 +262,15 @@ fn node_name(tree: &Tree, id: NodeId) -> String {
         Data::Document => "#document".into(),
         Data::Fragment => "#document-fragment".into(),
         Data::Doctype { name } => name.clone(),
-        Data::ProcessingInstruction { target, .. } => target.clone(),
     }
+}
+
+fn qual_name((namespace, prefix, local): (Option<&str>, Option<&str>, &str)) -> QualName {
+    QualName::new(
+        prefix.map(Prefix::from),
+        namespace.map_or(ns!(), Namespace::from),
+        LocalName::from(local),
+    )
 }
 
 fn hierarchy_error(message: &str) -> Error {
@@ -279,7 +295,6 @@ impl Dom for HtmlDom {
     fn text(&self, node: &HtmlNode) -> Result<Text> {
         Ok(match &node.dom.tree().node(node.id).data {
             Data::Text(text) | Data::Comment(text) => Text::from(text.as_str()),
-            Data::ProcessingInstruction { data, .. } => Text::from(data.as_str()),
             _ => Text::default(),
         })
     }
@@ -403,11 +418,14 @@ impl Dom for HtmlDom {
     fn create_element(&self, namespace: Option<&str>, name: &str) -> Result<HtmlNode> {
         let name = match namespace {
             None => {
-                names::validate_element(name)?;
+                NameKind::Element.validate(name)?;
                 let local = LocalName::from(name.to_ascii_lowercase());
                 QualName::new(None, ns!(html), local)
             }
-            Some(namespace) => names::validate_and_extract(Some(namespace), name, true)?,
+            Some(namespace) => {
+                let name = names::validate_and_extract(namespace, name, NameKind::Element)?;
+                qual_name(name)
+            }
         };
         let mut tree = self.tree();
         let is_template = name.ns == ns!(html) && name.local == local_name!("template");
@@ -445,7 +463,7 @@ impl Dom for HtmlDom {
         let element = tree.element_mut(id).expect("an element");
         match namespace {
             None => {
-                names::validate_attribute(name)?;
+                NameKind::Attribute.validate(name)?;
                 let name = match element.is_html() {
                     true => name.to_ascii_lowercase(),
                     false => name.to_owned(),
@@ -463,15 +481,8 @@ impl Dom for HtmlDom {
                 }
             }
             Some(namespace) => {
-                let name = names::validate_and_extract(Some(namespace), name, false)?;
-                let existing = element
-                    .attrs
-                    .iter_mut()
-                    .find(|attr| attr.name.ns == name.ns && attr.name.local == name.local);
-                match existing {
-                    Some(attr) => attr.value = value,
-                    None => element.attrs.push(Attr { name, value }),
-                }
+                let name = names::validate_and_extract(namespace, name, NameKind::Attribute)?;
+                element.set_attr_ns(qual_name(name), value);
             }
         }
         element.style = None;
@@ -482,44 +493,35 @@ impl Dom for HtmlDom {
         let id = self.element_of(element)?;
         let mut tree = self.tree();
         let element = tree.element_mut(id).expect("an element");
-        if !has_style(element) {
+        if element.space() == Space::Other {
             return Ok(false);
         }
-        // Setting `cssText` writes the attribute from the declarations kept.
+        // The attribute gets the declarations kept, not the text given.
         let style = Declarations::parse(&js::to_string(css));
-        let text = style.css_text();
-        match element.attrs.iter_mut().find(|attr| is_style(&attr.name)) {
-            Some(attr) => attr.value = text,
-            None => element.attrs.push(Attr {
-                name: QualName::new(None, ns!(), local_name!("style")),
-                value: text,
-            }),
-        }
+        let name = QualName::new(None, ns!(), local_name!("style"));
+        element.set_attr_ns(name, style.css_text());
         element.style = Some(style);
         Ok(true)
     }
 
-    fn stringify(&self, node: &HtmlNode) -> Result<String> {
+    fn attribute_value(&self, node: &HtmlNode) -> Result<String> {
         let tree = node.dom.tree();
         Ok(match &tree.node(node.id).data {
-            // A link stringifies to its `href`, which jsdom resolves against the document's URL
-            // and this keeps as written.
             Data::Element(element)
                 if element.is_html()
                     && matches!(element.name.local, local_name!("a") | local_name!("area")) =>
             {
-                element.attribute("href").unwrap_or_default().to_owned()
+                match element.attribute("href") {
+                    Some(href) => node.dom.hyperlink_href(&tree, href),
+                    None => String::new(),
+                }
             }
-            Data::Element(element) => format!(
-                "[object {}]",
-                names::interface(&element.name.ns, &element.name.local)
-            ),
+            Data::Element(element) => format!("[object {}]", interface(element)),
             Data::Text(_) => "[object Text]".into(),
             Data::Comment(_) => "[object Comment]".into(),
-            Data::Document => "[object Document]".into(),
+            Data::Document => "[object HTMLDocument]".into(),
             Data::Fragment => "[object DocumentFragment]".into(),
             Data::Doctype { .. } => "[object DocumentType]".into(),
-            Data::ProcessingInstruction { .. } => "[object ProcessingInstruction]".into(),
         })
     }
 }
