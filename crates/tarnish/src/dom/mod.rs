@@ -10,7 +10,10 @@ pub use parse::{
     PreserveWhitespace, Rule, RuleField, RuleFromNode, SchemaRule, Skip, StyleAttrsHook, StyleRule,
     TagRule, schema_rules,
 };
-pub use serialize::{DomSerializer, DomSpec, MarkToDom, NodeToDom, Rendered, render_spec};
+pub use serialize::{
+    AttrValue, DomSerializer, DomSpec, MarkToDom, NodeToDom, Rendered, SpecAttrs, Target, is_hole,
+    mark_to_dom, node_to_dom, qualified, render_spec, render_spec_of,
+};
 
 use crate::error::Result;
 use crate::json::Value;

@@ -4,6 +4,7 @@
 pub mod json;
 
 use std::borrow::Cow;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::chunk::JsonView;
 use crate::json::{EMPTY, Map, Number, Value};
@@ -165,6 +166,38 @@ pub fn attrs(value: &Value) -> Given<'_> {
         value if truthy(Some(value)) => Given::Object(Cow::Borrowed(&EMPTY)),
         value => Given::Falsy(value.clone()),
     }
+}
+
+/// A JavaScript engine, whose wording a `TypeError` takes where engines word the same error
+/// differently: V8 is Node's and Chrome's, JavaScriptCore is Bun's and Safari's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Engine {
+    V8,
+    JavaScriptCore,
+}
+
+static JAVASCRIPTCORE: AtomicBool = AtomicBool::new(false);
+
+/// Words the `TypeError`s thrown from here on as `engine` does, in every thread. V8's until set.
+pub fn set_engine(engine: Engine) {
+    JAVASCRIPTCORE.store(engine == Engine::JavaScriptCore, Ordering::Relaxed);
+}
+
+pub fn engine() -> Engine {
+    match JAVASCRIPTCORE.load(Ordering::Relaxed) {
+        true => Engine::JavaScriptCore,
+        false => Engine::V8,
+    }
+}
+
+/// The `TypeError` of calling `callee`, which is `undefined`, as `call`.
+pub(crate) fn not_a_function(callee: &str, call: &str) -> crate::Error {
+    crate::Error::Type(match engine() {
+        Engine::V8 => format!("{callee} is not a function"),
+        Engine::JavaScriptCore => {
+            format!("{callee} is not a function. (In '{call}', '{callee}' is undefined)")
+        }
+    })
 }
 
 /// JavaScript's two values without properties, which V8 names in the `TypeError` reading one

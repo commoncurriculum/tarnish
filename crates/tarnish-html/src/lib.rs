@@ -6,9 +6,11 @@
 //! and writes it as the standard's `innerHTML` and `outerHTML` do. Elements match CSS
 //! selectors with servo's `selectors`, and hold their inline style in tarnish-css.
 //!
-//! [`parse_html`] and [`to_html`] parse and write with a DOM of their own. To parse a whole
-//! document, or hand a parser a node, make the DOM with [`HtmlDom::parse_document`] or
-//! [`HtmlDom::parse_fragment`] and pass it as the parser's [`Dom`](tarnish::dom::Dom).
+//! [`parse_html`] parses with a DOM of its own. To parse a whole document, or hand a parser a
+//! node, make the DOM with [`HtmlDom::parse_document`] or [`HtmlDom::parse_fragment`] and pass
+//! it as the parser's [`Dom`](tarnish::dom::Dom). [`to_html`] writes the HTML the serializer
+//! would build in a DOM as it goes, without building it; [`HtmlWriter`] is the
+//! [`Target`](tarnish::dom::Target) it writes through.
 //!
 //! [`names`] and [`serialize`] give the DOM's name checks and serialization's rules as
 //! functions of strings, for a DOM of another shape to share.
@@ -65,8 +67,10 @@ mod parse;
 mod select;
 pub mod serialize;
 mod tree;
+mod write;
 
 pub use dom::{HtmlDom, HtmlNode};
+pub use write::HtmlWriter;
 
 use tarnish::dom::{DomParser, DomSerializer, ParseOptions};
 use tarnish::{Fragment, Node, Result, Slice};
@@ -93,15 +97,15 @@ pub fn parse_html_slice(
     parser.parse_slice(&dom, &dom.parse_fragment(html), options)
 }
 
-/// Write a fragment as HTML: the `innerHTML` of an element `serializeFragment` fills.
+/// Write a fragment as HTML: the `innerHTML` of an element `serializeFragment` fills, written as
+/// the serializer goes.
 pub fn to_html(
     serializer: &DomSerializer<HtmlNode>,
     fragment: &Fragment<'static>,
 ) -> Result<String> {
-    let dom = HtmlDom::new();
-    Ok(serializer
-        .serialize_fragment(&dom, fragment, None)?
-        .inner_html())
+    let mut writer = HtmlWriter::new();
+    serializer.write_fragment(fragment, &mut writer)?;
+    Ok(writer.finish())
 }
 
 #[cfg(test)]
