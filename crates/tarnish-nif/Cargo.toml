@@ -1,0 +1,17 @@
+[package]
+name = "tarnish-nif"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "The base of an application's Rustler NIF on tarnish: Erlang terms read as JSON and written back, work budgets, a batch pool, and tarnish's ProseMirror functions."
+
+[lib]
+doctest = false
+
+[dependencies]
+rayon = "1"
+rustler = { version = "0.38", features = ["big_integer"] }
+tarnish = { path = "../tarnish" }

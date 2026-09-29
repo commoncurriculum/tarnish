@@ -1,5 +1,9 @@
-//! Terms read in place as the JSON Jason encodes them, and values made as the terms Jason
-//! decodes from the JSON `JSON.stringify` writes for them.
+//! Terms read in place as the JSON Jason encodes them, for tarnish to read a node from without
+//! making their values first: a document's parts are read once, into its chunk. What is read
+//! weighs as [`Reader`](crate::term::Reader) weighs it, and reads as it reads it.
+//!
+//! Reading tells tarnish which nodes came from a map that is what `toJSON` writes for them, so
+//! that a document's JSON can be that map again.
 
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
@@ -12,39 +16,25 @@ use tarnish::js::{self, AttrKeys, Given, ReadMark, ReadNode, WrittenNumber};
 use tarnish::json::{self, Key, Map, Number, Value};
 use tarnish::stack;
 
+use crate::term::Unread;
+
 rustler::atoms! {
     __struct__,
     values,
     ordered_object = "Elixir.Jason.OrderedObject",
 }
 
-/// Why a term wasn't read.
-pub enum Unread {
-    /// A part of it read is one Jason couldn't encode.
-    NotJson,
-    /// It's more than the reading was to read.
-    TooBig,
-}
-
-/// Text that reads in about the time a map does.
-const TEXT_PER_MAP: usize = 256;
-
-/// The value of a term Jason could encode, reading no more than `limit` maps and lists, each
-/// [`TEXT_PER_MAP`] bytes of text counting as one more.
-pub fn read(term: Term, limit: usize) -> Result<Value, Unread> {
-    read_json(term, limit, |json| json.value())
-}
-
-/// What `read` makes of the term, read as JSON, reading no more than [`read`] does. A node read
-/// from a map that isn't what `toJSON` writes for it is flagged.
-pub fn read_json<'a, T>(
+/// What `read` makes of the term, read as JSON, while it weighs no more than `weight`. A node
+/// read from a map that isn't what `toJSON` writes for it is flagged.
+pub fn read<'a, T>(
     term: Term<'a>,
-    limit: usize,
+    weight: usize,
     read: impl FnOnce(Json<'a, '_>) -> T,
 ) -> Result<T, Unread> {
     let reading = Reading {
         refused: Cell::new(false),
-        left: Cell::new(limit),
+        heavy: Cell::new(false),
+        left: Cell::new(weight),
         keys: RefCell::new(Vec::new()),
         open: RefCell::new(Vec::new()),
         irregular: Cell::new(0),
@@ -54,20 +44,13 @@ pub fn read_json<'a, T>(
         term,
         reading: &reading,
     });
-    if reading.left.get() == 0 {
-        Err(Unread::TooBig)
+    if reading.heavy.get() {
+        Err(Unread::Heavy)
     } else if reading.refused.get() {
         Err(Unread::NotJson)
     } else {
         Ok(read)
     }
-}
-
-/// The term the external format holds.
-pub fn make<'a>(env: Env<'a>, bytes: &[u8]) -> Term<'a> {
-    env.binary_to_term(bytes)
-        .expect("the external format of a value")
-        .0
 }
 
 /// A term read as the JSON Jason encodes it: maps with string, atom or integer keys,
@@ -81,7 +64,8 @@ pub struct Json<'a, 'r> {
 
 pub struct Reading<'a> {
     refused: Cell<bool>,
-    /// The maps and lists left to read, none once the limit is reached.
+    heavy: Cell<bool>,
+    /// The weight left to read.
     left: Cell<usize>,
     /// The keys looked up so far, as terms.
     keys: RefCell<Vec<(&'static str, Term<'a>)>>,
@@ -153,11 +137,18 @@ impl<'a> Reading<'a> {
             && more(&closed)
     }
 
-    /// Counts `maps` more read, `false` once there are too many.
-    fn count(&self, maps: usize) -> bool {
-        let left = self.left.get().saturating_sub(maps);
-        self.left.set(left);
-        left > 0
+    /// Counts `weight` more read, `false` once it's more than was left, which ends the reading.
+    fn weigh(&self, weight: usize) -> bool {
+        match self.left.get().checked_sub(weight) {
+            Some(left) if !self.heavy.get() => {
+                self.left.set(left);
+                true
+            }
+            _ => {
+                self.heavy.set(true);
+                false
+            }
+        }
     }
 
     fn key(&self, env: Env<'a>, name: &'static str) -> Term<'a> {
@@ -194,7 +185,11 @@ impl<'a, 'r> Json<'a, 'r> {
 
     fn kind(self) -> Kind<'a> {
         let term = self.term;
-        match term.get_type() {
+        let kind = term.get_type();
+        if !matches!(kind, TermType::Map | TermType::List | TermType::Binary) {
+            self.reading.weigh(1);
+        }
+        match kind {
             TermType::Map => Kind::Object,
             TermType::List => Kind::Array,
             TermType::Binary => match self.string() {
@@ -233,10 +228,10 @@ impl<'a, 'r> Json<'a, 'r> {
         }
     }
 
-    /// A binary's text, which must be UTF-8. Past the reading's limit, it's none.
+    /// A binary's text, which must be UTF-8. Past the reading's weight, it's none.
     fn text_of(self, binary: Binary<'a>) -> Option<&'a str> {
         let bytes = binary.as_slice();
-        if !self.reading.count(bytes.len() / TEXT_PER_MAP) {
+        if !self.reading.weigh(1 + bytes.len()) {
             return None;
         }
         std::str::from_utf8(bytes).ok()
@@ -278,7 +273,7 @@ impl<'a, 'r> Json<'a, 'r> {
         let Ok(size) = self.term.map_size() else {
             return (fields, None);
         };
-        if !self.reading.count(1) {
+        if !self.reading.weigh(1 + size) {
             return (fields, None);
         }
         // A map with no keys but these, as strings, has each looked up. Any other key might be
@@ -324,7 +319,7 @@ impl<'a, 'r> Json<'a, 'r> {
             Kind::Bool(boolean) => Value::Bool(boolean),
             Kind::Number(number) => Value::Number(number),
             Kind::String(text) => Value::String(text.into_owned()),
-            Kind::Array if self.reading.count(1) => Value::Array(
+            Kind::Array if self.reading.weigh(1) => Value::Array(
                 self.list()
                     .map(|item| stack::grow(|| item.value()))
                     .collect(),
@@ -335,8 +330,9 @@ impl<'a, 'r> Json<'a, 'r> {
     }
 
     fn object(self) -> Map {
-        let mut object = Map::with_capacity(self.term.map_size().unwrap_or(0));
-        if !self.reading.count(1) {
+        let size = self.term.map_size().unwrap_or(0);
+        let mut object = Map::with_capacity(size);
+        if !self.reading.weigh(1 + size) {
             return object;
         }
         let mut entries = self.entries();
@@ -358,10 +354,11 @@ impl<'a, 'r> Json<'a, 'r> {
         std::iter::from_fn(move || {
             let list = rest?;
             match list.list_get_cell() {
-                Ok((head, tail)) => {
+                Ok((head, tail)) if self.reading.weigh(1) => {
                     rest = Some(tail);
                     Some(self.at(head))
                 }
+                Ok(_) => None,
                 Err(_) if list.is_empty_list() => None,
                 Err(_) => self.refuse(None),
             }
@@ -492,7 +489,7 @@ impl<'a> js::Json<'a> for Json<'a, '_> {
     }
 
     fn items(self) -> Option<impl Iterator<Item = Self>> {
-        (self.term.is_list() && self.reading.count(1)).then(|| self.list())
+        (self.term.is_list() && self.reading.weigh(1)).then(|| self.list())
     }
 
     fn attrs(self) -> Given<'a> {

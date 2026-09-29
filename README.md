@@ -164,15 +164,17 @@ text = Tarnish.text_content(doc)
 - **Output.** A document keeps the map it was read from, and `to_json` shares every part of that
   map that is still what ProseMirror writes. After steps or ops, only the nodes they changed are
   new maps. In text, a lone surrogate, where a position splits a pair, is U+FFFD.
-- **In your own NIF.** An application with a Rustler NIF of its own can hold tarnish's functions
-  in that library, so one library loads. Its crate depends on `tarnish_elixir` without the
-  `standalone` feature, and its `rustler::init!` registers tarnish's functions with its own. The
-  module that loads it declares them with `use Tarnish.NIF`, and
-  `config :tarnish, native: MyApp.Native` has `Tarnish` call it. `Tarnish.Native` is then
-  neither built nor loaded.
+- **In your own NIF.** `tarnish-nif` is the base of any NIF on tarnish, the package's own
+  (`tarnish_elixir`) among them. It holds the terms read and written as JSON, the budgets that
+  keep a call on the caller's scheduler or send it to a dirty one, a thread pool for batches, and
+  tarnish's functions. An application with a NIF of its own builds it on `tarnish-nif`, so one
+  library loads and every call reads and writes terms the same way. Its `rustler::init!`
+  registers tarnish's functions with its own; the module that loads it declares them with
+  `use Tarnish.NIF`, and `config :tarnish, native: MyApp.Native` has `Tarnish` call it.
+  `Tarnish.Native` is then neither built nor loaded.
 
   ```toml
-  tarnish_elixir = { git = "https://github.com/commoncurriculum/tarnish", default-features = false }
+  tarnish-nif = { git = "https://github.com/commoncurriculum/tarnish" }
   ```
 
 ### C, and other languages through it
@@ -402,6 +404,7 @@ hold:
 | `crates/tarnish-html` | An HTML DOM for `DomParser` and `DomSerializer`: html5ever's parser, the standard's serialization |
 | `crates/tarnish-css`, `crates/tarnish-css-wasm` | Inline styles on stylo, and the same as WebAssembly, which `harness/css-wasm.mjs` writes into the linkedom fork |
 | `elixir/`, `crates/tarnish_elixir` | The Elixir package and the Rustler NIF behind it |
+| `crates/tarnish-nif` | The base of a NIF on tarnish: terms as JSON, budgets, a batch pool, and tarnish's functions |
 | `crates/tarnish-c` | The C library and its generated header |
 | `crates/tarnish-node` | The Node bridge that runs ProseMirror's suites against tarnish. Internal, not published |
 | `upstream/` | ProseMirror's repositories, pinned as submodules, for their test suites |
