@@ -3,6 +3,8 @@ use std::fmt;
 use std::ops::Range;
 use std::sync::{Arc, LazyLock};
 
+use crate::{exact_byte_offset, is_whitespace, is_whitespace_unit};
+
 /// A string as JavaScript holds one. A document's positions count its UTF-16 units, so a step
 /// from a browser lands where it did there, even when it splits a surrogate pair. Text is kept
 /// as UTF-8, with its length in units, and as the units themselves only when it holds a lone
@@ -76,7 +78,7 @@ impl Text {
     /// The units the text is held in, widened: its UTF-8 bytes, or its UTF-16 units when it has
     /// a lone surrogate. An ASCII character is one unit of either, and no unit of another
     /// character is ASCII, so a scan for ASCII characters can read these.
-    pub(crate) fn held_units(&self) -> impl DoubleEndedIterator<Item = u16> + '_ {
+    pub fn held_units(&self) -> impl DoubleEndedIterator<Item = u16> + '_ {
         let (bytes, units): (&[u8], &[u16]) = match &self.0 {
             Repr::Utf8 { text, .. } => (text.as_bytes(), &[]),
             Repr::Utf16(units) => (&[], units),
@@ -110,7 +112,8 @@ impl Text {
             return self.clone();
         }
         if let Repr::Utf8 { text, .. } = &self.0
-            && let (Some(start), Some(end)) = (byte_offset(text, from), byte_offset(text, to))
+            && let (Some(start), Some(end)) =
+                (exact_byte_offset(text, from), exact_byte_offset(text, to))
         {
             return Text::utf8(&text[start..end], to - from);
         }
@@ -119,7 +122,7 @@ impl Text {
 
     /// The part of the text between offsets into the units it is held in, which is `length`
     /// UTF-16 units long.
-    fn part(&self, raw: Range<usize>, length: usize) -> Text {
+    pub fn part(&self, raw: Range<usize>, length: usize) -> Text {
         match &self.0 {
             Repr::Utf8 { text, .. } => Text::utf8(&text[raw], length),
             Repr::Utf16(units) => Text::from_units(&units[raw]),
@@ -145,75 +148,37 @@ impl Text {
         out
     }
 
-    pub(crate) fn write_json(&self, out: &mut String) {
+    pub fn write_json(&self, out: &mut String) {
         match &self.0 {
-            Repr::Utf8 { text, .. } => crate::js::json::write_string(out, text),
-            Repr::Utf16(units) => crate::js::json::write_units(out, units),
+            Repr::Utf8 { text, .. } => crate::json::write_string(out, text),
+            Repr::Utf16(units) => crate::json::write_units(out, units),
         }
     }
-}
-
-/// The byte offset of UTF-16 offset `units` in `text`, or `None` when it falls between the two
-/// units of a surrogate pair.
-pub(crate) fn byte_offset(text: &str, units: usize) -> Option<usize> {
-    // Through ASCII, a unit is a byte.
-    let prefix = &text.as_bytes()[..units.min(text.len())];
-    if prefix.is_ascii() && units <= text.len() {
-        return Some(units);
-    }
-    let mut seen = 0;
-    for (offset, character) in text.char_indices() {
-        if seen >= units {
-            return (seen == units).then_some(offset);
-        }
-        seen += character.len_utf16();
-    }
-    (seen == units).then_some(text.len())
-}
-
-/// Whether a UTF-16 unit is whitespace to JavaScript's `\s`.
-pub(crate) fn is_js_space(unit: u16) -> bool {
-    matches!(
-        unit,
-        0x09..=0x0D
-            | 0x20
-            | 0xA0
-            | 0x1680
-            | 0x2000..=0x200A
-            | 0x2028
-            | 0x2029
-            | 0x202F
-            | 0x205F
-            | 0x3000
-            | 0xFEFF
-    )
 }
 
 /// Whether the text is all JavaScript whitespace: `!/\S/.test(text)`.
-pub(crate) fn is_blank(text: &Text) -> bool {
+pub fn is_blank(text: &Text) -> bool {
     match &text.0 {
-        Repr::Utf8 { text, .. } => text
-            .chars()
-            .all(|character| character.len_utf16() == 1 && is_js_space(character as u16)),
-        Repr::Utf16(units) => units.iter().all(|&unit| is_js_space(unit)),
+        Repr::Utf8 { text, .. } => text.chars().all(is_whitespace),
+        Repr::Utf16(units) => units.iter().all(|&unit| is_whitespace_unit(unit)),
     }
 }
 
 /// The line breaks in a text, `\r\n`, `\r` and `\n`, each as its offset in UTF-16 units and its
 /// length.
-pub(crate) fn line_breaks(text: &Text) -> impl Iterator<Item = (usize, usize)> + '_ {
+pub fn line_breaks(text: &Text) -> impl Iterator<Item = (usize, usize)> + '_ {
     LineBreaks::new(text).map(|found| (found.unit, found.len))
 }
 
 /// [`line_breaks`] of UTF-8 text or of UTF-16 units.
-pub(crate) fn raw_line_breaks(raw: Raw<'_>) -> Vec<(usize, usize)> {
+pub fn raw_line_breaks(raw: Raw<'_>) -> Vec<(usize, usize)> {
     LineBreaks::of(raw)
         .map(|found| (found.unit, found.len))
         .collect()
 }
 
 /// `text.split(/\r?\n|\r/)`.
-pub(crate) fn split_lines(text: &Text) -> impl Iterator<Item = Text> + '_ {
+pub fn split_lines(text: &Text) -> impl Iterator<Item = Text> + '_ {
     let mut breaks = LineBreaks::new(text);
     let mut line = Some((0, 0));
     std::iter::from_fn(move || {
@@ -228,7 +193,7 @@ pub(crate) fn split_lines(text: &Text) -> impl Iterator<Item = Text> + '_ {
 }
 
 /// `text.replace(/\r?\n|\r/g, with)`.
-pub(crate) fn replace_line_breaks(text: &Text, with: char) -> Text {
+pub fn replace_line_breaks(text: &Text, with: char) -> Text {
     let mut breaks = LineBreaks::new(text).peekable();
     if breaks.peek().is_none() {
         return text.clone();
@@ -270,7 +235,7 @@ struct LineBreak {
 
 /// The units a text is held in: UTF-8 bytes, or UTF-16 units for a text with a lone surrogate.
 #[derive(Clone, Copy)]
-pub(crate) enum Raw<'a> {
+pub enum Raw<'a> {
     Utf8(&'a [u8]),
     Utf16(&'a [u16]),
 }

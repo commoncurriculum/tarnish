@@ -4,13 +4,13 @@
 use std::borrow::Cow;
 use std::sync::LazyLock;
 
-use tarnish::stack;
+use tarnish_js::stack;
 
 use crate::marked::{Lexer, List, ListTokenizer, Token, TokenData, Tokens, hr};
-use tarnish_js::JsError;
+use tarnish_js::Error;
 use tarnish_js::regexp::RegExp;
 use tarnish_js::units::Units;
-use tarnish_js::utf16;
+use tarnish_js::{utf16, value};
 
 const ROMAN_UPPER: &str = "(?:C|XC|L?X{0,3}(?:IX|IV|V?I{0,3}))";
 const ROMAN_LOWER: &str = "(?:c|xc|l?x{0,3}(?:ix|iv|v?i{0,3}))";
@@ -305,7 +305,7 @@ fn has_newlines_in_a_row(raw: &[u16]) -> bool {
     false
 }
 
-fn list(lexer: &mut Lexer, src: &Units) -> Result<Option<Token>, JsError> {
+fn list(lexer: &mut Lexer, src: &Units) -> Result<Option<Token>, Error> {
     let mut src: &[u16] = src;
     if !may_be_list(src) {
         return Ok(None);
@@ -469,11 +469,7 @@ fn list(lexer: &mut Lexer, src: &Units) -> Result<Option<Token>, JsError> {
     }
 
     // Don't consume the newlines at the end of the last item.
-    let Some(last) = list.items.last_mut() else {
-        return Err(JsError::type_error(
-            "undefined is not an object (evaluating 'list.items[list.items.length - 1].raw')",
-        ));
-    };
+    let last = value::defined(list.items.last_mut(), "raw")?;
     last.raw = last.raw.slice_of(utf16::trim_end(&last.raw));
     let text = last.text.clone().unwrap_or_default();
     last.text = Some(text.slice_of(utf16::trim_end(&text)));

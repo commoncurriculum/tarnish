@@ -2,8 +2,8 @@
 
 use super::PreserveWhitespace;
 use super::html::{BLOCK_TAGS, trailing_spaces};
+use crate::Result;
 use crate::dom::Dom;
-use crate::error::Result;
 use crate::json::Map;
 use crate::model::{ContentMatch, Fragment, Mark, Node, NodeType, Whitespace};
 

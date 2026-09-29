@@ -5,11 +5,13 @@ use std::borrow::Cow;
 
 use super::compare_deep::deep_equal;
 use super::schema::{MarkType, NodeType};
+use crate::Text;
 use crate::chunk::{
     ASCII, BINDING, Chunk, EMPTY_SET, HELD_AS_UNITS, Holder, NODES, Record, TEXT_NODE, ValueRef,
 };
 use crate::js;
-use crate::text::{self, Raw, Text, byte_offset};
+use crate::js::exact_byte_offset;
+use crate::js::text::{self, Raw};
 
 #[derive(Clone, Copy)]
 pub struct NodeRef<'c> {
@@ -35,7 +37,7 @@ impl<'c> NodeRef<'c> {
     }
 
     /// Whether a binding's reading set the node's flag, as
-    /// [`Json::read_node`](crate::js::Json::read_node) may.
+    /// [`Json::read_node`](crate::model::read::Json::read_node) may.
     #[inline]
     pub fn flagged(self) -> bool {
         self.record.flags & BINDING != 0
@@ -151,7 +153,7 @@ impl<'c> NodeRef<'c> {
                     && self
                         .children()
                         .zip(other.children())
-                        .all(|(a, b)| crate::stack::grow(|| a.equals(b)))
+                        .all(|(a, b)| crate::js::stack::grow(|| a.equals(b)))
             }
             _ => false,
         }
@@ -399,7 +401,9 @@ impl<'c> TextRef<'c> {
     pub(crate) fn byte_range(self, from: usize, to: usize) -> Option<(usize, usize)> {
         match self {
             TextRef::Utf8 { ascii: true, .. } => Some((from, to)),
-            TextRef::Utf8 { text, .. } => Some((byte_offset(text, from)?, byte_offset(text, to)?)),
+            TextRef::Utf8 { text, .. } => {
+                Some((exact_byte_offset(text, from)?, exact_byte_offset(text, to)?))
+            }
             TextRef::Units(_) => None,
         }
     }

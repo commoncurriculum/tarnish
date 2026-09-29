@@ -2,7 +2,8 @@
 //! the very node read from a map, which holds what `toJSON` writes for it, is that map again.
 
 use rustler::{Env, Term};
-use tarnish::{Field, Fields, NodeId, NodeRef, stack};
+use tarnish::js::stack;
+use tarnish::{Field, Fields, NodeId, NodeRef};
 
 use crate::term::Writer;
 

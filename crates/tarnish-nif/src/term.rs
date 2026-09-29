@@ -8,9 +8,10 @@ use rustler::types::atom;
 use rustler::types::map::MapIterator;
 use rustler::{Binary, Encoder, Env, NewBinary, Term, TermType};
 use tarnish::chunk::{Kind, ValueRef};
+use tarnish::js::stack;
 use tarnish::js::{self, WrittenNumber};
 use tarnish::json::{Key, Map, Number, Value};
-use tarnish::{Field, Fields, stack};
+use tarnish::{Field, Fields};
 
 use crate::etf::{self, NotJson};
 

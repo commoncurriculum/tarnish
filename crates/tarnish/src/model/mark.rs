@@ -4,12 +4,12 @@ use std::fmt;
 use std::sync::Arc;
 
 use super::attrs::Attrs;
+use super::read::Json;
 use super::read::Reader;
 use super::schema::{MarkType, Schema};
 use super::view::{MarkRef, SetRef};
+use crate::Result;
 use crate::chunk::{Builder, Chunk, EMPTY_SET, Holder, ValueRef};
-use crate::error::Result;
-use crate::js::Json;
 use crate::json::Map;
 
 /// A mark, in the chunk that holds it.

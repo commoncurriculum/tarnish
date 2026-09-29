@@ -239,7 +239,8 @@ pub fn serializer() -> DomSerializer<HtmlNode> {
         (
             "heading",
             node_spec(|node| {
-                let tag = format!("h{}", js::to_string(&attr(node, "level")));
+                let level = js::to_string(&attr(node, "level")).expect("a level converts");
+                let tag = format!("h{level}");
                 json::json!([tag, 0])
             }),
         ),

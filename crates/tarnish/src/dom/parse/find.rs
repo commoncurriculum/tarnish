@@ -2,9 +2,9 @@
 
 use super::FindPosition;
 use super::context::ParseContext;
+use crate::Result;
+use crate::Text;
 use crate::dom::Dom;
-use crate::error::Result;
-use crate::text::Text;
 
 impl<'p, D: Dom> ParseContext<'p, D> {
     /// Set each position to find that `hit` picks, of those not found yet when `unfound_only`,

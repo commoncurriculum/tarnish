@@ -4,15 +4,15 @@ use std::fmt;
 use std::sync::Arc;
 
 use super::node::Node;
+use super::read::Json;
 use super::read::Reader;
 use super::schema::Schema;
 use super::view::NodeRef;
+use crate::Text;
 use crate::chunk::{Builder, Chunk, Holder, Kid};
-use crate::error::{Error, Result};
-use crate::js::Json;
+use crate::js::stack;
 use crate::json::Value;
-use crate::stack;
-use crate::text::Text;
+use crate::{Error, Result};
 
 /// What [`Fragment::nodes_between`] calls for each node: the node, its position, its parent,
 /// and its index in the parent. Returning `false` skips the node's children.

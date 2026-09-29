@@ -9,10 +9,11 @@
 use std::ops::Range;
 
 use super::rules::{BLOCK, INLINE};
+use tarnish_js::is_whitespace_unit;
 use tarnish_js::regexp::{Match, RegExp};
 use tarnish_js::utf16::{
     BACKSLASH, BACKTICK, CLOSE_BRACKET, CLOSE_PAREN, LESS_THAN, OPEN_BRACKET, OPEN_PAREN, find,
-    is_line_terminator, is_whitespace, unit,
+    is_line_terminator, unit,
 };
 
 /// How many units from `at` on `each` holds for.
@@ -96,7 +97,7 @@ pub fn heading(src: &[u16]) -> Option<Heading> {
         return None;
     }
     let text = spaces + depth;
-    if src.get(text).is_some_and(|&each| !is_whitespace(each)) {
+    if src.get(text).is_some_and(|&each| !is_whitespace_unit(each)) {
         return None;
     }
     // `.` stops at a line terminator, and only `\n` or the end may follow the text.
@@ -190,7 +191,7 @@ fn may_be_lheading(src: &[u16]) -> bool {
         // `\n(?!\s*?\n)`
         let blank = next
             .iter()
-            .find(|&&each| each == unit(b'\n') || !is_whitespace(each));
+            .find(|&&each| each == unit(b'\n') || !is_whitespace_unit(each));
         if blank == Some(&unit(b'\n')) {
             return false;
         }

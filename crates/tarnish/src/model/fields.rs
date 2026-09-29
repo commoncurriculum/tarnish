@@ -6,8 +6,8 @@ use super::node::Node;
 use super::view::{MarkRef, NodeRef, SetRef, TextRef};
 use crate::chunk::ValueRef;
 use crate::js::json;
+use crate::js::stack;
 use crate::json::{Map, Value};
-use crate::stack;
 
 #[derive(Clone, Copy)]
 pub enum Field<'c> {

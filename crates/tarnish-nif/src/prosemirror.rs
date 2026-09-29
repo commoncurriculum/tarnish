@@ -7,7 +7,9 @@
 //! dirty scheduler, through the function of the same name ending in `_dirty`.
 
 use rustler::{Encoder, Env, NifResult, Resource, ResourceArc, Term};
-use tarnish::{Error, Node, Schema, Text, Value, api, stack};
+use tarnish::js::stack;
+use tarnish::transform::TRANSFORM_ERROR;
+use tarnish::{Error, Node, REPLACE_ERROR, Schema, Text, Value, api};
 
 use crate::doc::Doc;
 use crate::share;
@@ -109,10 +111,10 @@ fn failure(env: Env, failed: Error) -> Term {
     let kind = match &failed {
         Error::Range(_) => range_error(),
         Error::Syntax(_) => syntax_error(),
-        Error::Replace(_) => replace_error(),
-        Error::Transform(_) => transform_error(),
+        Error::Of(class, _) if **class == REPLACE_ERROR => replace_error(),
+        Error::Of(class, _) if **class == TRANSFORM_ERROR => transform_error(),
         Error::Type(_) => type_error(),
-        Error::Other(_) | Error::Host => js_error(),
+        Error::Other(_) | Error::Of(..) | Error::Host => js_error(),
     };
     (error(), (kind, failed.message())).encode(env)
 }

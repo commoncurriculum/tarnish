@@ -9,7 +9,7 @@ mod rule_context;
 mod walk;
 
 use super::Dom;
-use crate::error::Result;
+use crate::Result;
 use crate::json::Map;
 use crate::model::{ContentMatch, Node, ResolvedPos, Schema, Slice};
 use context::ParseContext;

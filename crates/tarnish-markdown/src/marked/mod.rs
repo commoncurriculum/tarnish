@@ -13,12 +13,12 @@ pub use lexer::Lexer;
 pub(crate) use matchers::{hr, indent};
 pub use tokens::{Cell, Def, Destination, List, Table, Token, TokenData, Tokens};
 
-use tarnish_js::JsError;
+use tarnish_js::Error;
 use tarnish_js::units::Units;
 
 pub type ExtensionTokenizer =
-    Box<dyn Fn(&mut Lexer, &Units, &[Token]) -> Result<Option<Token>, JsError> + Send + Sync>;
-pub type ListTokenizer = fn(&mut Lexer, &Units) -> Result<Option<Token>, JsError>;
+    Box<dyn Fn(&mut Lexer, &Units, &[Token]) -> Result<Option<Token>, Error> + Send + Sync>;
+pub type ListTokenizer = fn(&mut Lexer, &Units) -> Result<Option<Token>, Error>;
 
 /// An inline tokenizer extension, as `marked.use({ extensions })` takes one. Its `start(src)`
 /// is `src.indexOf(start)`, the only kind Tiptap registers for an extension, and its

@@ -2,8 +2,8 @@
 //! call: terms read as the JSON values Jason encodes them as, and values written as the terms
 //! Jason decodes from their JSON.
 
+use tarnish::js::stack;
 use tarnish::json::{Key, Map, Number, Value};
-use tarnish::stack;
 
 use tarnish::js::{MAX_SAFE_INTEGER, number_to_string};
 

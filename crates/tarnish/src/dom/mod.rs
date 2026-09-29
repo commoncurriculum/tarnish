@@ -15,9 +15,9 @@ pub use serialize::{
     mark_to_dom, node_to_dom, qualified, render_spec, render_spec_of,
 };
 
-use crate::error::Result;
+use crate::Result;
+use crate::Text;
 use crate::json::Value;
-use crate::text::Text;
 
 /// What kind of DOM node a node is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

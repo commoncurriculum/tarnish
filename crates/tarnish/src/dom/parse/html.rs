@@ -1,8 +1,8 @@
 //! What HTML says about elements and whitespace.
 
+use crate::Result;
+use crate::Text;
 use crate::dom::{Dom, NodeKind};
-use crate::error::Result;
-use crate::text::Text;
 
 pub(super) const BLOCK_TAGS: &[&str] = &[
     "address",
@@ -128,7 +128,7 @@ fn collapse<T: Copy>(
 #[cfg(test)]
 mod tests {
     use super::{collapse_spaces, has_non_space, is_html_space, trailing_spaces};
-    use crate::text::Text;
+    use crate::Text;
 
     /// Collapsing and measuring HTML whitespace agree with a scan of the units, for text held
     /// as UTF-8 and for text with a lone surrogate, held as units.

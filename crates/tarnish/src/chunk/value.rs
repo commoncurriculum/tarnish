@@ -6,9 +6,9 @@ use std::fmt;
 use super::{Chunk, Holder, corrupt};
 use crate::js::TypeOf;
 use crate::js::json::{write_number, write_string};
+use crate::js::stack;
 use crate::json::{EMPTY, Key, Map, Number, Value};
 use crate::model::compare_deep::entries_equal;
-use crate::stack;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Tag {
@@ -134,7 +134,7 @@ impl<'c> ValueRef<'c> {
     }
 
     /// `String(value)`.
-    pub fn to_js_string(self) -> Cow<'c, str> {
+    pub fn to_js_string(self) -> crate::Result<Cow<'c, str>> {
         JsonView::to_js_string(self)
     }
 
@@ -295,9 +295,9 @@ pub(crate) trait JsonView<'v>: Copy {
         }
     }
 
-    /// `String(value)`: an array joins its items with commas, `null` among them as nothing.
-    fn to_js_string(self) -> Cow<'v, str> {
-        match self.kind() {
+    /// `String(value)`, as [`js::to_string`](crate::js::to_string) gives it.
+    fn to_js_string(self) -> crate::Result<Cow<'v, str>> {
+        Ok(match self.kind() {
             Kind::Null => Cow::Borrowed("null"),
             Kind::Bool(true) => Cow::Borrowed("true"),
             Kind::Bool(false) => Cow::Borrowed("false"),
@@ -305,17 +305,21 @@ pub(crate) trait JsonView<'v>: Copy {
                 number.as_f64().unwrap_or(f64::NAN),
             )),
             Kind::String(string) => Cow::Borrowed(string),
-            Kind::Array(_) => Cow::Owned(
-                self.items()
-                    .map(|item| match item.kind() {
+            Kind::Array(_) => {
+                let mut parts = Vec::new();
+                for item in self.items() {
+                    parts.push(match item.kind() {
                         Kind::Null => Cow::Borrowed(""),
-                        _ => stack::grow(|| item.to_js_string()),
-                    })
-                    .collect::<Vec<_>>()
-                    .join(","),
-            ),
+                        _ => stack::grow(|| item.to_js_string())?,
+                    });
+                }
+                Cow::Owned(parts.join(","))
+            }
+            Kind::Object(_) if self.get("toString").is_some() => {
+                return Err(crate::js::no_primitive());
+            }
             Kind::Object(_) => Cow::Borrowed("[object Object]"),
-        }
+        })
     }
 
     fn truthy(self) -> bool {

@@ -9,11 +9,11 @@ use super::content::{Automaton, ContentMatch};
 use super::fragment::Fragment;
 use super::mark::{Mark, Marks};
 use super::node::Node;
+use super::read::Given;
 use super::view::NodeRef;
-use crate::error::{Error, Result};
-use crate::js::Given;
+use crate::Text;
 use crate::json::Map;
-use crate::text::Text;
+use crate::{Error, Result};
 
 /// A function the host gives a node spec, such as `leafText`.
 pub type NodeHook<T> = Arc<dyn for<'a> Fn(&Node<'a>) -> Result<T> + Send + Sync>;

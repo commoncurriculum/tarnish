@@ -6,11 +6,11 @@ use std::fmt;
 use std::sync::{Arc, LazyLock, RwLock};
 
 use super::map::{Mappable, StepMap};
-use crate::error::{Error, Result};
 use crate::js;
+use crate::js::stack;
 use crate::json::{Map, NULL, Value};
-use crate::model::{Fragment, Mark, Node, Schema, Slice};
-use crate::stack;
+use crate::model::{Fragment, Mark, Node, REPLACE_ERROR, Schema, Slice};
+use crate::{Error, Result};
 
 /// A step type of an application's own, as a subclass of ProseMirror's `Step` is. Register it
 /// with [`register_step`] so that [`Step::from_json`] reads it. It outlives any one document,
@@ -80,7 +80,9 @@ impl<'a> StepResult<'a> {
     ) -> Result<StepResult<'a>> {
         match doc.into_replaced(from, to, slice) {
             Ok(doc) => Ok(StepResult::Ok(doc)),
-            Err(Error::Replace(message)) => Ok(StepResult::Failed(message)),
+            Err(Error::Of(class, message)) if *class == REPLACE_ERROR => {
+                Ok(StepResult::Failed(message))
+            }
             Err(error) => Err(error),
         }
     }
@@ -492,7 +494,7 @@ impl<'a> Step<'a> {
                 _ => self.clone(),
             },
             Step::Attr { pos, attr, .. } => {
-                let node = js::non_null(doc.node_at(*pos)?, "attrs")?;
+                let node = js::value::non_null(doc.node_at(*pos)?, "attrs")?;
                 Step::Attr {
                     pos: *pos,
                     attr: attr.clone(),
@@ -765,7 +767,7 @@ impl<'a> Step<'a> {
         if !js::truthy(Some(json)) || !js::truthy(json.get("stepType")) {
             return Err(Error::Range("Invalid input for Step.fromJSON".into()));
         }
-        let step_type = js::string(json.get("stepType"));
+        let step_type = js::string(json.get("stepType"))?;
         let Some(&(_, class, kind)) = STEP_TYPES.iter().find(|(id, ..)| *id == step_type) else {
             return match custom_step(&step_type) {
                 Some(from_json) => Ok(Step::Custom(from_json(schema, json)?)),

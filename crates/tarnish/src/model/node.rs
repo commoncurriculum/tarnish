@@ -7,18 +7,18 @@ use super::attrs::Attrs;
 use super::content::ContentMatch;
 use super::fragment::{Fragment, LeafTextHook, NodeVisitor};
 use super::mark::{Mark, Marks};
+use super::read::Json;
 use super::read::Reader;
 use super::replace::{self, Slice};
 use super::resolved_pos::ResolvedPos;
 use super::schema::{MarkType, NodeType, Schema};
 use super::view::{NodeRef, TextRef};
+use crate::Text;
 use crate::chunk::{
     ASCII, Builder, Chunk, EMPTY_OBJECT, EXTERN, Holder, Kid, NODES, Record, TEXT_NODE, ValueRef,
 };
-use crate::error::{Error, Result};
-use crate::js::Json;
 use crate::json::{self, Map};
-use crate::text::Text;
+use crate::{Error, Result};
 
 /// A node of a document: a record in a chunk. Nodes are persistent: changing one writes a new
 /// one, into a new chunk, sharing what it can with the old.

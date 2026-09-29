@@ -3,12 +3,12 @@
 
 mod ops;
 
-use crate::error::{Error, Result};
+use crate::Text;
 use crate::js;
 use crate::json::Value;
 use crate::model::{Node, Schema, SchemaSpec};
-use crate::text::Text;
-use crate::transform::{Mappable, Mapping, Step, StepResult, Transform};
+use crate::transform::{Mappable, Mapping, Step, StepResult, TRANSFORM_ERROR, Transform};
+use crate::{Error, Result};
 
 /// A schema from its spec: `nodes` and `marks`, each an object of the types' specs in order or
 /// an array of `[name, spec]` pairs, and `topNode`.
@@ -22,7 +22,7 @@ pub fn apply_steps<'a>(doc: &Node<'a>, steps: &Value) -> Result<Node<'a>> {
     for step in step_list(doc.schema(), steps)? {
         doc = match step.apply(doc)? {
             StepResult::Ok(doc) => doc,
-            StepResult::Failed(message) => return Err(Error::Transform(message)),
+            StepResult::Failed(message) => return Err(Error::Of(&TRANSFORM_ERROR, message)),
         };
     }
     Ok(doc)
@@ -82,7 +82,10 @@ pub fn text_between(
 ) -> Result<Text> {
     // ProseMirror reads a child past the last for a `to` past the content.
     if doc.text().is_none() && to > doc.content().size() {
-        return Err(js::type_error(js::Nullish::Undefined, "nodeSize"));
+        return Err(js::value::cannot_read(
+            js::value::Nullish::Undefined,
+            "nodeSize",
+        ));
     }
     let separator = block_separator.map(Text::from);
     // An empty `leafText` is falsy, so the spec's `leafText` applies.

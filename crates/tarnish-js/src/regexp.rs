@@ -71,7 +71,7 @@ impl Drop for Match<'_> {
 }
 
 /// How many compiled regexes a thread keeps for the regexes marked builds from the input, as
-/// JavaScriptCore keeps them by source and flags.
+/// V8 keeps them by source and flags.
 const CACHED_REGEXES: usize = 256;
 
 thread_local! {
@@ -155,7 +155,7 @@ impl RegExp {
     }
 
     /// [`RegExp::replace`] on shared units. When what is left is one stretch of them, the result
-    /// shares it, as JavaScriptCore's does.
+    /// shares it, as V8's does.
     pub fn replace_units(&self, text: &Units, replacement: &str) -> Units {
         let replacement = utf16::from(replacement);
         // Stretches of `text` kept, and the units put between them.

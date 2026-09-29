@@ -2,7 +2,7 @@
 
 use super::fragment::Fragment;
 use super::view::{NodeRef, TextRef};
-use crate::stack;
+use crate::js::stack;
 
 impl Fragment<'_> {
     /// The first position at which this fragment and `other` differ, counting from `pos`, or

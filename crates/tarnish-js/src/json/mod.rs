@@ -9,13 +9,18 @@ mod deep;
 mod index;
 mod macros;
 mod map;
+mod write;
 
 pub use convert::IntoValue;
-pub use de::from_str;
+pub use de::{SyntaxError, from_str};
 pub use deep::{Event, events};
 pub use index::JsonIndex;
 pub use macros::{json, object};
 pub use map::Map;
+pub use write::{
+    stringify, stringify_entries, stringify_pretty, write_number, write_object, write_string,
+    write_units, write_value,
+};
 /// An object's key, kept in place up to 24 bytes, which every key the schemas name fits in.
 pub type Key = compact_str::CompactString;
 pub use serde_json::Number;

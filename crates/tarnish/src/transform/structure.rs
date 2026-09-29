@@ -4,10 +4,10 @@ use super::map::Mappable;
 use super::mark::clear_incompatible;
 use super::step::Step;
 use super::transform::Transform;
-use crate::error::{Error, Result};
 use crate::js;
 use crate::json::Map;
 use crate::model::{Fragment, Mark, Node, NodeRange, NodeType, Slice, Whitespace};
+use crate::{Error, Result};
 
 /// A node type to wrap content in, and its attributes.
 #[derive(Clone, Debug)]
@@ -259,7 +259,10 @@ pub fn can_split(
         Some(wrapper) => wrapper.node_type.clone(),
         // A `depth` of 0 leaves no node below `base`, whose type JavaScript reads.
         None if base == resolved.depth() => {
-            return Err(js::type_error(js::Nullish::Undefined, "type"));
+            return Err(js::value::cannot_read(
+                js::value::Nullish::Undefined,
+                "type",
+            ));
         }
         None => resolved.node(base + 1).node_type(),
     };
@@ -403,7 +406,7 @@ pub fn drop_point(doc: &Node, pos: usize, slice: &Slice) -> Result<Option<usize>
     }
     let mut content = slice.content().clone();
     for _ in 0..slice.open_start() {
-        content = js::non_null(content.first_child(), "content")?
+        content = js::value::non_null(content.first_child(), "content")?
             .content()
             .clone();
     }

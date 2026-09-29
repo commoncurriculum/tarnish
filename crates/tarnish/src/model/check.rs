@@ -4,8 +4,8 @@ use super::mark::added_to;
 use super::node::Node;
 use super::view::{MarkRef, NodeRef, SetRef};
 use crate::chunk::EMPTY_SET;
-use crate::error::{Error, Result};
-use crate::stack;
+use crate::js::stack;
+use crate::{Error, Result};
 
 impl Node<'_> {
     /// Raise an error if this node or a descendant doesn't fit the schema.

@@ -6,7 +6,7 @@
 use std::cell::Cell;
 use std::time::{Duration, Instant};
 
-use crate::JsError;
+use crate::Error;
 
 /// A check's failure once the deadline has passed.
 pub struct Late;
@@ -88,9 +88,9 @@ impl Deadline {
 /// What a failed check says, which nothing reads: `within` drops what it fails.
 const LATE: &str = "The conversion ran past its deadline";
 
-impl From<Late> for JsError {
-    fn from(Late: Late) -> JsError {
-        JsError::range_error(LATE)
+impl From<Late> for Error {
+    fn from(Late: Late) -> Error {
+        Error::Range(LATE.into())
     }
 }
 

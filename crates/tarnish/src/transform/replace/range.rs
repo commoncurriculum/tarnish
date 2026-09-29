@@ -1,8 +1,8 @@
 use super::fits_trivially;
-use crate::error::Result;
+use crate::Result;
 use crate::js;
+use crate::js::stack;
 use crate::model::{Fragment, Node, NodeType, ResolvedPos, Slice};
-use crate::stack;
 use crate::transform::step::Step;
 use crate::transform::structure::insert_point;
 use crate::transform::transform::Transform;
@@ -86,7 +86,7 @@ impl<'a> Transform<'a> {
         let mut left_nodes: Vec<Node<'a>> = Vec::new();
         let mut content = slice.content().clone();
         for _ in 0..slice.open_start() {
-            let node = js::non_null(content.first_child(), "content")?;
+            let node = js::value::non_null(content.first_child(), "content")?;
             content = node.content().clone();
             left_nodes.push(node);
         }
@@ -259,23 +259,23 @@ fn close_fragment<'a>(
 ) -> Result<Fragment<'a>> {
     let mut fragment = fragment.clone();
     if depth < old_open {
-        let first = js::non_null(fragment.first_child(), "copy")?;
+        let first = js::value::non_null(fragment.first_child(), "copy")?;
         let closed = stack::grow(|| {
             close_fragment(first.content(), depth + 1, old_open, new_open, Some(&first))
         })?;
         fragment = fragment.replace_child(0, first.copy(closed));
     }
     if depth > new_open {
-        let parent = js::defined(parent, "contentMatchAt")?;
+        let parent = js::value::defined(parent, "contentMatchAt")?;
         let matched = parent.content_match_at(0)?;
-        let start =
-            js::non_null(matched.fill_before(&fragment, false, 0)?, "append")?.append(&fragment);
-        let end = js::non_null(matched.match_fragment(&start), "fillBefore")?.fill_before(
+        let start = js::value::non_null(matched.fill_before(&fragment, false, 0)?, "append")?
+            .append(&fragment);
+        let end = js::value::non_null(matched.match_fragment(&start), "fillBefore")?.fill_before(
             &Fragment::empty(),
             true,
             0,
         )?;
-        fragment = start.append(&js::non_null(end, "size")?);
+        fragment = start.append(&js::value::non_null(end, "size")?);
     }
     Ok(fragment)
 }

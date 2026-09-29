@@ -4,10 +4,17 @@ use super::fragment::Fragment;
 use super::node::Node;
 use super::resolved_pos::ResolvedPos;
 use super::schema::Schema;
-use crate::error::{Error, Result};
 use crate::js;
+use crate::js::Class;
+use crate::js::stack;
 use crate::json::{Map, NULL, Value};
-use crate::stack;
+use crate::{Error, Result};
+
+/// What a slice that doesn't fit where it is put throws.
+pub static REPLACE_ERROR: Class = Class {
+    name: "ReplaceError",
+    message_alone: false,
+};
 
 /// A piece cut out of a document: its content, and how deep it is cut open at each end.
 #[derive(Clone, Debug, PartialEq)]
@@ -235,12 +242,13 @@ pub(crate) fn replace_top<'a>(
     slice: &Slice<'a>,
 ) -> Result<Replaced<'a>> {
     if slice.open_start > from.depth() {
-        return Err(Error::Replace(
+        return Err(Error::Of(
+            &REPLACE_ERROR,
             "Inserted content deeper than insertion position".into(),
         ));
     }
     if from.depth() + slice.open_end != to.depth() + slice.open_start {
-        return Err(Error::Replace("Inconsistent open depths".into()));
+        return Err(Error::Of(&REPLACE_ERROR, "Inconsistent open depths".into()));
     }
     let index = from.index(0);
     if index == to.index(0) && 0 < from.depth() - slice.open_start {
@@ -285,11 +293,14 @@ fn replace_outer<'a>(
 
 fn check_join(main: &Node, sub: &Node) -> Result<()> {
     if !sub.node_type().compatible_content(&main.node_type()) {
-        return Err(Error::Replace(format!(
-            "Cannot join {} onto {}",
-            sub.node_type().name(),
-            main.node_type().name()
-        )));
+        return Err(Error::Of(
+            &REPLACE_ERROR,
+            format!(
+                "Cannot join {} onto {}",
+                sub.node_type().name(),
+                main.node_type().name()
+            ),
+        ));
     }
     Ok(())
 }
@@ -342,10 +353,10 @@ fn close<'a>(node: &Node<'a>, content: Fragment<'a>) -> Result<Node<'a>> {
 
 fn check_content(node: &Node, content: &Fragment) -> Result<()> {
     if !node.node_type().valid_content(content) {
-        return Err(Error::Replace(format!(
-            "Invalid content for node {}",
-            node.node_type().name()
-        )));
+        return Err(Error::Of(
+            &REPLACE_ERROR,
+            format!("Invalid content for node {}", node.node_type().name()),
+        ));
     }
     Ok(())
 }

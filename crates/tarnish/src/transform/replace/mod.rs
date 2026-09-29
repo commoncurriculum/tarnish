@@ -5,7 +5,7 @@ mod range;
 
 pub use fit::replace_step;
 
-use crate::error::Result;
+use crate::Result;
 use crate::model::{ResolvedPos, Slice};
 
 fn fits_trivially(from: &ResolvedPos, to: &ResolvedPos, slice: &Slice) -> Result<bool> {

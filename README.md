@@ -12,6 +12,9 @@ and apply the steps editors send, without running JavaScript.
 - **Bindings.** Elixir, taking and returning Erlang terms, and C, taking and returning JSON, for
   any language that can call a C library.
 - **Safe.** No `unsafe` code, and no depth limit: documents nest as deeply as memory allows.
+- **JavaScript's behavior, as V8 has it.** Where ProseMirror's code leans on JavaScript, such as
+  `String()`, `JSON.parse`, or the `TypeError` of reading a property of `undefined`, tarnish does
+  what Node does, down to the error's message.
 
 ## Use it
 
@@ -412,13 +415,13 @@ hold:
 
 | Path | What it is |
 | --- | --- |
-| `crates/tarnish` | The library: `model/`, `transform/`, `dom/`, `chunk/` (the document format), `json/` and `js/` (JSON and JavaScript's semantics for it), `api` (what the bindings call) |
+| `crates/tarnish` | The library: `model/`, `transform/`, `dom/`, `chunk/` (the document format), `api` (what the bindings call). `tarnish::js` is `tarnish-js` |
 | `crates/tarnish-html` | An HTML DOM for `DomParser` and `DomSerializer`: html5ever's parser, the standard's serialization |
 | `crates/tarnish-css`, `crates/tarnish-css-wasm` | Inline styles on stylo, and the same as WebAssembly, which `harness/css-wasm.mjs` writes into the linkedom fork |
 | `elixir/`, `crates/tarnish_elixir` | The Elixir package and the Rustler NIF behind it |
 | `crates/tarnish-nif` | The base of a NIF on tarnish: terms as JSON, budgets, a batch pool, and tarnish's functions |
 | `crates/tarnish-c` | The C library and its generated header |
-| `crates/tarnish-js` | JavaScript's built-ins as a library ported from JavaScript uses them: strings as UTF-16, `RegExp`, arrays, numbers and JSON |
+| `crates/tarnish-js` | JavaScript's values and built-ins as V8 runs them, which every crate here builds on: JSON values and `JSON`, strings as UTF-16, numbers, conversions, errors and `sort`, and as features `RegExp` on regress and `localeCompare` on ICU |
 | `crates/tarnish-markdown` | marked 17.0.6's lexer and marked-more-lists 1.0.1's list tokenizer, on `tarnish-js`. `tools/marked_rules.ts` writes marked's rules into `src/marked/rules.rs` |
 | `vendor/regress` | regress 0.12.0, the `RegExp` engine of `tarnish-js`, with its patches marked in the source |
 | `crates/tarnish-node` | The Node bridge that runs ProseMirror's suites against tarnish. Internal, not published |

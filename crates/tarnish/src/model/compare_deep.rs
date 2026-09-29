@@ -4,8 +4,8 @@
 use crate::chunk::JsonView;
 use crate::chunk::Kind;
 use crate::js;
+use crate::js::stack;
 use crate::json::{Map, Value};
-use crate::stack;
 
 pub fn compare_deep(a: &Value, b: &Value) -> bool {
     deep_equal(a, b)
