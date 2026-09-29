@@ -16,11 +16,11 @@ document = Path.expand("../../target/bench/document.json", __DIR__)
   |> Jason.decode!(objects: :ordered_objects)
   |> Access.get("schemas")
   |> hd()
-  |> Tarnish.schema()
+  |> Tarnish.Schema.new()
 
 %{"doc" => json, "steps" => steps} = document |> File.read!() |> Jason.decode!()
-{:ok, doc} = Tarnish.node_from_json(schema, json)
-{:ok, changed} = Tarnish.apply_steps(doc, steps)
+{:ok, doc} = Tarnish.Node.from_json(schema, json)
+{:ok, changed} = Tarnish.Step.apply(doc, steps)
 
 stat = fn ->
   fields = "/proc/self/stat" |> File.read!() |> String.split()
@@ -51,14 +51,14 @@ sustained = fn name, call ->
   )
 end
 
-sustained.("node_from_json", fn -> Tarnish.node_from_json(schema, json) end)
-sustained.("to_json, unchanged", fn -> Tarnish.to_json(doc) end)
-sustained.("to_json after the steps", fn -> Tarnish.to_json(changed) end)
-sustained.("check", fn -> Tarnish.check(doc) end)
-sustained.("apply_steps, 10 steps", fn -> Tarnish.apply_steps(doc, steps) end)
+sustained.("Node.from_json", fn -> Tarnish.Node.from_json(schema, json) end)
+sustained.("Node.to_json, unchanged", fn -> Tarnish.Node.to_json(doc) end)
+sustained.("Node.to_json after the steps", fn -> Tarnish.Node.to_json(changed) end)
+sustained.("Node.check", fn -> Tarnish.Node.check(doc) end)
+sustained.("Step.apply, 10 steps", fn -> Tarnish.Step.apply(doc, steps) end)
 
 sustained.("from JSON, apply, to JSON", fn ->
-  {:ok, doc} = Tarnish.node_from_json(schema, json)
-  {:ok, doc} = Tarnish.apply_steps(doc, steps)
-  Tarnish.to_json(doc)
+  {:ok, doc} = Tarnish.Node.from_json(schema, json)
+  {:ok, doc} = Tarnish.Step.apply(doc, steps)
+  Tarnish.Node.to_json(doc)
 end)

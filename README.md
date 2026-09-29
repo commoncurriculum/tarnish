@@ -147,22 +147,38 @@ This example is `tarnish-html`'s doctest.
 {:tarnish, git: "https://github.com/commoncurriculum/tarnish", subdir: "elixir"}
 ```
 
+The modules are ProseMirror's, named as its JavaScript names them:
+
+| JavaScript | Elixir |
+| --- | --- |
+| `new Schema(spec)` | `Tarnish.Schema.new/1` |
+| `Node.fromJSON`, `node.toJSON()`, `node.check()`, `node.textBetween`, `node.textContent` | `Tarnish.Node` |
+| `step.apply(doc)`, `step.invert(doc)` | `Tarnish.Step` |
+| `new Mapping(maps).map(pos, assoc)` | `Tarnish.Mapping.map/4` |
+| `new Transform(doc)`, its methods, `tr.doc` and `tr.steps` | `Tarnish.Transform.new/2` |
+| `DOMParser`, `DOMSerializer` | `Tarnish.DOMParser`, `Tarnish.DOMSerializer` |
+| prosemirror-markdown's `MarkdownParser`, `MarkdownSerializer` | `Tarnish.MarkdownParser`, `Tarnish.MarkdownSerializer` |
+
 ```elixir
-{:ok, schema} = Tarnish.schema(%{"nodes" => [{"doc", %{"content" => "paragraph+"}}, ...], "marks" => [...]})
-{:ok, doc} = Tarnish.node_from_json(schema, json)
-:ok = Tarnish.check(doc)
-{:ok, doc} = Tarnish.apply_steps(doc, steps)
-{:ok, inverted} = Tarnish.invert_steps(doc, steps)
-json = Tarnish.to_json(doc)
-{:ok, pos} = Tarnish.map_position(schema, steps, 5)
+{:ok, schema} = Tarnish.Schema.new(%{"nodes" => [{"doc", %{"content" => "paragraph+"}}, ...], "marks" => [...]})
+{:ok, doc} = Tarnish.Node.from_json(schema, json)
+:ok = Tarnish.Node.check(doc)
+{:ok, doc} = Tarnish.Step.apply(doc, steps)
+{:ok, inverted} = Tarnish.Step.invert(doc, steps)
+json = Tarnish.Node.to_json(doc)
+{:ok, pos} = Tarnish.Mapping.map(schema, steps, 5)
 
 # Change the document on the server, and send editors the steps.
 ops = [%{"op" => "addMark", "from" => 1, "to" => 6, "mark" => %{"type" => "em"}}]
-{:ok, doc, steps} = Tarnish.transform(doc, ops)
+{:ok, %Tarnish.Transform{doc: doc, steps: steps}} = Tarnish.Transform.new(doc, ops)
 
 # Its text, to index for search.
-{:ok, text} = Tarnish.text_between(doc, 0, 12, "\n")
-text = Tarnish.text_content(doc)
+{:ok, text} = Tarnish.Node.text_between(doc, 0, 12, "\n")
+text = Tarnish.Node.text_content(doc)
+
+# Convert, as your application's conversions do.
+{:ok, doc_json} = Tarnish.MarkdownParser.parse(markdown_string)
+{:ok, html_string} = Tarnish.DOMSerializer.serialize(doc_json)
 ```
 
 - **Input.** Specs, documents, steps and ops are ProseMirror's JSON as Jason decodes it. Give a
@@ -174,6 +190,16 @@ text = Tarnish.text_content(doc)
 - **Output.** A document keeps the map it was read from, and `to_json` shares every part of that
   map that is still what ProseMirror writes. After steps or ops, only the nodes they changed are
   new maps. In text, a lone surrogate, where a position splits a pair, is U+FFFD.
+- **Conversions.** `Tarnish.DOMParser`, `Tarnish.DOMSerializer`, `Tarnish.MarkdownParser` and
+  `Tarnish.MarkdownSerializer`, and `Tarnish.convert` for a batch of them, convert between a
+  document's JSON and HTML or Markdown, as your application's own conversions do. Each gives
+  `{:ok, value}` or `{:error, message}`. They run in
+  your NIF, which implements `convert/1` and `convert_light/1` (`config :tarnish, conversions:
+  :nif`, the default), or in worker processes over `Tarnish.Bridge`: add it to your supervision
+  tree, with `config :tarnish, conversions: :bridge` and `config :tarnish, Tarnish.Bridge,
+  command: [...]`. A worker writes `{"ready":true}`, then answers each line holding `{"id",
+  "operation", "input", "options"}` with a line holding `{"id", "result"}` or `{"id", "error"}`,
+  in order.
 - **In your own NIF.** `tarnish-nif` is the base of any NIF on tarnish, the package's own
   (`tarnish_elixir`) among them. It holds the terms read and written as JSON, the budgets that
   keep a call on the caller's scheduler or send it to a dirty one, a thread pool for batches, and
@@ -212,7 +238,7 @@ Go and Node can all load.
 
 ### Changing documents from Elixir and C
 
-`Tarnish.transform` and `tarnish_transform` take a list of ops and apply them in order to one
+`Tarnish.Transform.new` and `tarnish_transform` take a list of ops and apply them in order to one
 `Transform`. An op names a `Transform` method in `"op"` and gives its arguments by the names
 ProseMirror gives them:
 
@@ -320,7 +346,7 @@ The proof doesn't depend on anyone reading the Rust. CI checks it:
 | prosemirror-model's suite, against tarnish | 309 passing |
 | prosemirror-transform's suite, against tarnish | 238 passing |
 | tarnish's own suite, against JavaScript and tarnish | 38 passing |
-| Elixir (`mix test`) | 516 tests |
+| Elixir (`mix test`) | 522 tests |
 | C (`npm run test:c`) | 148 recorded transforms, 308 op lists and texts, the error cases and a 200,000-deep attribute |
 | Rust (`cargo test`) | the recorded cases, and a 20,000-deep document through every operation on a 256 KB stack |
 
@@ -339,8 +365,8 @@ and tarnish from Elixir.
 | Write the changed document's JSON | 71 | 225 | 6 |
 
 - **Elixir reading.** Most of the Elixir read time is spent reading Erlang terms. Keeping the
-  document between calls, as `%Tarnish.Doc{}` does, skips the read.
-- **Elixir writing.** The Elixir `to_json` shares the maps it read, so it writes only what the
+  document between calls, as `%Tarnish.Node{}` does, skips the read.
+- **Elixir writing.** `Tarnish.Node.to_json` shares the maps it read, so it writes only what the
   steps changed.
 - **Rust writing.** Rust's `to_json` builds every value anew, and is slower than V8 at that.
 

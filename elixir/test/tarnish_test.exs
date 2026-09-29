@@ -16,7 +16,7 @@ defmodule TarnishTest do
     specs = path |> File.read!() |> Jason.decode!(objects: :ordered_objects)
 
     for spec <- specs["schemas"] do
-      {:ok, schema} = Tarnish.schema(spec)
+      {:ok, schema} = Tarnish.Schema.new(spec)
       schema
     end
   end
@@ -32,17 +32,17 @@ defmodule TarnishTest do
     test "transform #{index} gives the document ProseMirror gives", %{schemas: schemas} do
       %{"schema" => schema, "start" => start, "steps" => steps, "result" => result} = @fixture
       schema = Enum.at(schemas, schema)
-      {:ok, doc} = Tarnish.node_from_json(schema, start)
+      {:ok, doc} = Tarnish.Node.from_json(schema, start)
 
-      {:ok, changed} = Tarnish.apply_steps(doc, steps)
-      assert Tarnish.to_json(changed) == result
+      {:ok, changed} = Tarnish.Step.apply(doc, steps)
+      assert Tarnish.Node.to_json(changed) == result
 
-      {:ok, inverted} = Tarnish.invert_steps(doc, steps)
-      {:ok, undone} = Tarnish.apply_steps(changed, inverted)
-      assert Tarnish.to_json(undone) == start
+      {:ok, inverted} = Tarnish.Step.invert(doc, steps)
+      {:ok, undone} = Tarnish.Step.apply(changed, inverted)
+      assert Tarnish.Node.to_json(undone) == start
 
       for [from, to] <- @fixture["mapping"] do
-        assert Tarnish.map_position(schema, steps, from, 1) == {:ok, to}
+        assert Tarnish.Mapping.map(schema, steps, from, 1) == {:ok, to}
       end
     end
   end
@@ -56,9 +56,9 @@ defmodule TarnishTest do
     test "node #{index} from JSON is the one ProseMirror reads", %{model_schemas: schemas} do
       schema = Enum.at(schemas, @fixture["schema"])
 
-      case Tarnish.node_from_json(schema, @fixture["json"]) do
+      case Tarnish.Node.from_json(schema, @fixture["json"]) do
         {:ok, doc} ->
-          assert Tarnish.to_json(doc) == @fixture["result"]
+          assert Tarnish.Node.to_json(doc) == @fixture["result"]
 
         {:error, {kind, message}} ->
           %{"class" => class, "message" => expected} = @fixture["error"]
@@ -72,27 +72,27 @@ defmodule TarnishTest do
     test "a step splitting a surrogate pair leaves U+FFFD for each half, #{index}",
          %{model_schemas: schemas} do
       %{"schema" => schema, "start" => start, "steps" => steps, "result" => result} = @fixture
-      {:ok, doc} = Tarnish.node_from_json(Enum.at(schemas, schema), start)
-      {:ok, changed} = Tarnish.apply_steps(doc, steps)
+      {:ok, doc} = Tarnish.Node.from_json(Enum.at(schemas, schema), start)
+      {:ok, changed} = Tarnish.Step.apply(doc, steps)
       # JSON.stringify escapes a surrogate only when it's alone.
       replaced = Regex.replace(~r/\\ud[89a-f][0-9a-f]{2}/i, result, "\\ufffd")
-      assert Tarnish.to_json(changed) == Jason.decode!(replaced)
+      assert Tarnish.Node.to_json(changed) == Jason.decode!(replaced)
 
-      {:ok, inverted} = Tarnish.invert_steps(doc, steps)
-      {:ok, undone} = Tarnish.apply_steps(changed, inverted)
-      assert Tarnish.to_json(undone) == start
+      {:ok, inverted} = Tarnish.Step.invert(doc, steps)
+      {:ok, undone} = Tarnish.Step.apply(changed, inverted)
+      assert Tarnish.Node.to_json(undone) == start
     end
   end
 
   defp doc(schema, json) do
-    {:ok, doc} = Tarnish.node_from_json(schema, json)
+    {:ok, doc} = Tarnish.Node.from_json(schema, json)
     doc
   end
 
   describe "schemas" do
     test "take their types as {name, spec} pairs, in order", _ do
       spec = %{nodes: [doc: %{content: "text*"}, text: %{}], marks: [strong: %{}, em: %{}]}
-      {:ok, schema} = Tarnish.schema(spec)
+      {:ok, schema} = Tarnish.Schema.new(spec)
 
       text = %{
         "type" => "text",
@@ -103,11 +103,11 @@ defmodule TarnishTest do
       doc = doc(schema, %{"type" => "doc", "content" => [text]})
 
       assert %{"content" => [%{"marks" => [%{"type" => "strong"}, %{"type" => "em"}]}]} =
-               Tarnish.to_json(doc)
+               Tarnish.Node.to_json(doc)
     end
 
     test "refuse types in a map, which loses their order", _ do
-      assert_raise ArgumentError, fn -> Tarnish.schema(%{"nodes" => %{"doc" => %{}}}) end
+      assert_raise ArgumentError, fn -> Tarnish.Schema.new(%{"nodes" => %{"doc" => %{}}}) end
     end
   end
 
@@ -115,14 +115,14 @@ defmodule TarnishTest do
     setup %{schemas: [schema | _]}, do: %{schema: schema}
 
     test "a schema without its top node", _ do
-      assert Tarnish.schema(%{"nodes" => [{"text", %{}}]}) ==
+      assert Tarnish.Schema.new(%{"nodes" => [{"text", %{}}]}) ==
                {:error, {:range_error, "Schema is missing its top node type ('doc')"}}
     end
 
     test "a content expression that doesn't parse", _ do
       spec = %{"nodes" => [{"doc", %{"content" => "paragraph+"}}, {"text", %{}}]}
 
-      assert Tarnish.schema(spec) ==
+      assert Tarnish.Schema.new(spec) ==
                {:error,
                 {:syntax_error,
                  "No node type or group 'paragraph' found (in content expression 'paragraph+')"}}
@@ -130,20 +130,22 @@ defmodule TarnishTest do
 
     test "a document that doesn't fit the schema", %{schema: schema} do
       doc = doc(schema, %{"type" => "doc", "content" => [%{"type" => "text", "text" => "loose"}]})
-      assert {:error, {:range_error, "Invalid content for node doc" <> _}} = Tarnish.check(doc)
+
+      assert {:error, {:range_error, "Invalid content for node doc" <> _}} =
+               Tarnish.Node.check(doc)
     end
 
     test "a step that doesn't apply", %{schema: schema} do
       doc = doc(schema, %{"type" => "doc", "content" => [%{"type" => "paragraph"}]})
       step = %{"stepType" => "replace", "from" => 0, "to" => 1}
-      assert {:error, {:transform_error, _}} = Tarnish.apply_steps(doc, [step])
+      assert {:error, {:transform_error, _}} = Tarnish.Step.apply(doc, [step])
     end
 
     test "a term that isn't JSON", %{schema: schema} do
-      assert_raise ArgumentError, fn -> Tarnish.node_from_json(schema, {:not, :json}) end
+      assert_raise ArgumentError, fn -> Tarnish.Node.from_json(schema, {:not, :json}) end
       text = %{"type" => "text", "text" => {:not, :json}}
       json = %{"type" => "doc", "content" => [%{"type" => "paragraph", "content" => [text]}]}
-      assert_raise ArgumentError, fn -> Tarnish.node_from_json(schema, json) end
+      assert_raise ArgumentError, fn -> Tarnish.Node.from_json(schema, json) end
     end
   end
 
@@ -159,8 +161,8 @@ defmodule TarnishTest do
       for json <- [paragraphs(10_000, "many"), paragraphs(1, String.duplicate("long ", 200_000))] do
         assert Tarnish.Native.node_from_json(schema, json) == :dirty
         doc = doc(schema, json)
-        assert Tarnish.to_json(doc) == json
-        assert Tarnish.check(doc) == :ok
+        assert Tarnish.Node.to_json(doc) == json
+        assert Tarnish.Node.check(doc) == :ok
       end
     end
 
@@ -169,7 +171,7 @@ defmodule TarnishTest do
       split = %{"type" => "paragraph", "content" => [text("ma"), text("ny")]}
       doc = doc(schema, %{"type" => "doc", "content" => List.duplicate(split, 10_000)})
       assert Tarnish.Native.to_json(doc.ref, doc.json) == :dirty
-      assert Tarnish.to_json(doc) == paragraphs(10_000, "many")
+      assert Tarnish.Node.to_json(doc) == paragraphs(10_000, "many")
     end
 
     test "apply many steps on a dirty scheduler", %{schema: schema} do
@@ -180,8 +182,8 @@ defmodule TarnishTest do
         List.duplicate(%{"stepType" => "replace", "from" => 2, "to" => 2, "slice" => slice}, 200)
 
       assert Tarnish.Native.apply_steps(doc.ref, steps) == :dirty
-      {:ok, applied} = Tarnish.apply_steps(doc, steps)
-      %{"content" => [first | _]} = Tarnish.to_json(applied)
+      {:ok, applied} = Tarnish.Step.apply(doc, steps)
+      %{"content" => [first | _]} = Tarnish.Node.to_json(applied)
       text = "t" <> String.duplicate("x", 200) <> "ext"
       assert first == %{"type" => "paragraph", "content" => [%{"type" => "text", "text" => text}]}
     end
@@ -204,7 +206,7 @@ defmodule TarnishTest do
 
     test "is the map it was read from, as ProseMirror writes it", %{schema: schema} do
       json = %{"type" => "doc", "content" => [heading(2, "Title"), paragraph([text("a")])]}
-      assert :erts_debug.same(Tarnish.to_json(doc(schema, json)), json)
+      assert :erts_debug.same(Tarnish.Node.to_json(doc(schema, json)), json)
     end
 
     test "shares the maps of the nodes steps leave", %{schema: schema} do
@@ -214,8 +216,8 @@ defmodule TarnishTest do
       doc = doc(schema, %{"type" => "doc", "content" => content})
       slice = %{"content" => [text("!")]}
       step = %{"stepType" => "replace", "from" => 9, "to" => 9, "slice" => slice}
-      {:ok, changed} = Tarnish.apply_steps(doc, [step])
-      %{"content" => [one, two, three]} = Tarnish.to_json(changed)
+      {:ok, changed} = Tarnish.Step.apply(doc, [step])
+      %{"content" => [one, two, three]} = Tarnish.Node.to_json(changed)
       assert :erts_debug.same(one, first) and :erts_debug.same(three, third)
       assert two == paragraph([text("two!")]) and not :erts_debug.same(two, second)
     end
@@ -243,7 +245,7 @@ defmodule TarnishTest do
           ] do
         json = %{"type" => "doc", "content" => [paragraph([text("same")]), read]}
         written = %{"type" => "doc", "content" => [paragraph([text("same")]), written]}
-        assert Tarnish.to_json(doc(schema, json)) == written, inspect(read)
+        assert Tarnish.Node.to_json(doc(schema, json)) == written, inspect(read)
       end
     end
   end
@@ -262,19 +264,19 @@ defmodule TarnishTest do
 
       json = %{"type" => "doc", "content" => [quote]}
       doc = doc(schema, json)
-      assert Tarnish.check(doc) == :ok
-      {:ok, same} = Tarnish.apply_steps(doc, [])
-      assert Tarnish.to_json(same) == json
+      assert Tarnish.Node.check(doc) == :ok
+      {:ok, same} = Tarnish.Step.apply(doc, [])
+      assert Tarnish.Node.to_json(same) == json
     end
 
     test "hold attributes that nest as deeply", _ do
       doc_spec = %{content: "text*", attrs: %{data: %{default: nil}}}
-      {:ok, schema} = Tarnish.schema(%{nodes: [doc: doc_spec, text: %{}]})
+      {:ok, schema} = Tarnish.Schema.new(%{nodes: [doc: doc_spec, text: %{}]})
       data = Enum.reduce(1..@depth, [], fn _, inner -> [inner] end)
       json = %{"type" => "doc", "attrs" => %{"data" => data}}
       doc = doc(schema, json)
-      assert Tarnish.check(doc) == :ok
-      assert Tarnish.to_json(doc) == json
+      assert Tarnish.Node.check(doc) == :ok
+      assert Tarnish.Node.to_json(doc) == json
     end
   end
 end
