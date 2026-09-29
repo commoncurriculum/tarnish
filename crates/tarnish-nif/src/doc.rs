@@ -13,7 +13,7 @@ use rustler::{Binary, Encoder, Env, NewBinary, ResourceArc, Term};
 use tarnish::chunk::{Chunk, Header};
 use tarnish::{Node, NodeRef};
 
-use crate::SchemaResource;
+use crate::prosemirror::SchemaResource;
 
 /// The most chunks a document is held in.
 const MOST_CHUNKS: usize = 8;

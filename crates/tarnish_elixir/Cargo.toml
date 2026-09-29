@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false
-description = "The Elixir binding of tarnish: a Rustler NIF that takes and returns Erlang terms."
+description = "The Elixir binding of tarnish: tarnish-nif's ProseMirror functions as the NIF Tarnish.Native loads."
 
 [lib]
 crate-type = ["cdylib"]
@@ -14,5 +14,5 @@ doctest = false
 
 [dependencies]
 mimalloc = { version = "0.1", default-features = false, features = ["v2"] }
-rustler = { version = "0.38", features = ["big_integer"] }
-tarnish = { path = "../tarnish" }
+rustler = "0.38"
+tarnish-nif = { path = "../tarnish-nif" }

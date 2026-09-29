@@ -25,7 +25,12 @@ defmodule Tarnish do
   `ArgumentError`. A part it ignores, such as a key a node doesn't have, isn't read.
   """
 
-  alias Tarnish.{Doc, Native}
+  alias Tarnish.Doc
+
+  # The module that loaded the NIF: Tarnish.Native, or an application's own (Tarnish.NIF), which
+  # is compiled after this package.
+  @native Application.compile_env(:tarnish, :native, Tarnish.Native)
+  @compile {:no_warn_undefined, @native}
 
   @opaque schema :: reference()
   @opaque doc :: %Doc{}
@@ -46,7 +51,7 @@ defmodule Tarnish do
     |> Map.new(fn {key, value} -> {to_string(key), value} end)
     |> in_order("nodes")
     |> in_order("marks")
-    |> Native.schema()
+    |> @native.schema()
   end
 
   defp in_order(spec, key) do
@@ -73,8 +78,8 @@ defmodule Tarnish do
   @spec node_from_json(schema(), json()) :: {:ok, doc()} | error()
   def node_from_json(schema, json) do
     read =
-      with :dirty <- Native.node_from_json(schema, json),
-           do: Native.node_from_json_dirty(schema, json)
+      with :dirty <- @native.node_from_json(schema, json),
+           do: @native.node_from_json_dirty(schema, json)
 
     with {:ok, ref} <- read, do: {:ok, %Doc{ref: ref, json: json}}
   end
@@ -82,20 +87,20 @@ defmodule Tarnish do
   @doc "The document's JSON."
   @spec to_json(doc()) :: json()
   def to_json(%Doc{ref: ref, json: json}) do
-    with :dirty <- Native.to_json(ref, json), do: Native.to_json_dirty(ref, json)
+    with :dirty <- @native.to_json(ref, json), do: @native.to_json_dirty(ref, json)
   end
 
   @doc "Checks that the document conforms to its schema."
   @spec check(doc()) :: :ok | error()
   def check(%Doc{ref: ref}) do
-    with :dirty <- Native.check(ref), do: Native.check_dirty(ref)
+    with :dirty <- @native.check(ref), do: @native.check_dirty(ref)
   end
 
   @doc "Applies steps to the document, in order, and gives the changed document."
   @spec apply_steps(doc(), [json()]) :: {:ok, doc()} | error()
   def apply_steps(%Doc{ref: ref} = doc, steps) do
     applied =
-      with :dirty <- Native.apply_steps(ref, steps), do: Native.apply_steps_dirty(ref, steps)
+      with :dirty <- @native.apply_steps(ref, steps), do: @native.apply_steps_dirty(ref, steps)
 
     with {:ok, ref} <- applied, do: {:ok, %{doc | ref: ref}}
   end
@@ -103,7 +108,7 @@ defmodule Tarnish do
   @doc "The steps that undo `steps`, applied to `doc`, last first."
   @spec invert_steps(doc(), [json()]) :: {:ok, [json()]} | error()
   def invert_steps(%Doc{ref: ref}, steps) do
-    with :dirty <- Native.invert_steps(ref, steps), do: Native.invert_steps_dirty(ref, steps)
+    with :dirty <- @native.invert_steps(ref, steps), do: @native.invert_steps_dirty(ref, steps)
   end
 
   @doc """
@@ -115,8 +120,8 @@ defmodule Tarnish do
   @spec map_position(schema(), [json()], non_neg_integer(), integer()) ::
           {:ok, non_neg_integer()} | error()
   def map_position(schema, steps, pos, assoc \\ 1) do
-    with :dirty <- Native.map_position(schema, steps, pos, assoc),
-         do: Native.map_position_dirty(schema, steps, pos, assoc)
+    with :dirty <- @native.map_position(schema, steps, pos, assoc),
+         do: @native.map_position_dirty(schema, steps, pos, assoc)
   end
 
   @doc """
@@ -148,7 +153,9 @@ defmodule Tarnish do
   """
   @spec transform(doc(), [json()]) :: {:ok, doc(), [json()]} | error()
   def transform(%Doc{ref: ref} = doc, ops) do
-    transformed = with :dirty <- Native.transform(ref, ops), do: Native.transform_dirty(ref, ops)
+    transformed =
+      with :dirty <- @native.transform(ref, ops), do: @native.transform_dirty(ref, ops)
+
     with {:ok, ref, steps} <- transformed, do: {:ok, %{doc | ref: ref}, steps}
   end
 
@@ -166,14 +173,14 @@ defmodule Tarnish do
           String.t() | nil
         ) :: {:ok, String.t()} | error()
   def text_between(%Doc{ref: ref}, from, to, block_separator \\ nil, leaf_text \\ nil) do
-    with :dirty <- Native.text_between(ref, from, to, block_separator, leaf_text),
-         do: Native.text_between_dirty(ref, from, to, block_separator, leaf_text)
+    with :dirty <- @native.text_between(ref, from, to, block_separator, leaf_text),
+         do: @native.text_between_dirty(ref, from, to, block_separator, leaf_text)
   end
 
   @doc "All the text in the document, as `textContent` gives it."
   @spec text_content(doc()) :: String.t()
   def text_content(%Doc{ref: ref}) do
-    {:ok, text} = with :dirty <- Native.text_content(ref), do: Native.text_content_dirty(ref)
+    {:ok, text} = with :dirty <- @native.text_content(ref), do: @native.text_content_dirty(ref)
     text
   end
 end
