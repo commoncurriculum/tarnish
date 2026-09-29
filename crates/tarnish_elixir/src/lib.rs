@@ -6,6 +6,9 @@
 //! and has the call's terms to fetch into another core's cache. So each call runs on a normal
 //! scheduler, where it may take up to about a millisecond, and a call with more work than that
 //! answers `:dirty`, for the Elixir side to make it again on a dirty scheduler.
+//!
+//! Without the `standalone` feature, the functions are linked into another crate's NIF, and
+//! `rustler::init!` there registers them in the module it names.
 
 #![forbid(unsafe_code)]
 
@@ -31,6 +34,7 @@ rustler::atoms! {
     js_error,
 }
 
+#[cfg(feature = "standalone")]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
@@ -376,4 +380,5 @@ fn map_position_dirty<'a>(
     answer(env, map(env, &DIRTY, &schema.0, steps, pos, assoc))
 }
 
+#[cfg(feature = "standalone")]
 rustler::init!("Elixir.Tarnish.Native");

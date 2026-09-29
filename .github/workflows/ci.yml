@@ -16,6 +16,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets -- -D warnings
+      # The NIF's functions as another crate's NIF links them in.
+      - run: cargo clippy -p tarnish_elixir --no-default-features --all-targets -- -D warnings
       - run: cargo test
 
   # ProseMirror's own test suites, unedited: first against the real packages, to show the

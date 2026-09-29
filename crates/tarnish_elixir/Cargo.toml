@@ -9,10 +9,16 @@ publish = false
 description = "The Elixir binding of tarnish: a Rustler NIF that takes and returns Erlang terms."
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 doctest = false
 
+[features]
+default = ["standalone"]
+# The NIF that Tarnish.Native loads, with its own allocator. Without it, the functions are linked
+# into another crate's NIF, whose rustler::init! registers them (Tarnish.NIF).
+standalone = ["dep:mimalloc"]
+
 [dependencies]
-mimalloc = { version = "0.1", default-features = false, features = ["v2"] }
+mimalloc = { version = "0.1", default-features = false, features = ["v2"], optional = true }
 rustler = { version = "0.38", features = ["big_integer"] }
 tarnish = { path = "../tarnish" }

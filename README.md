@@ -164,6 +164,16 @@ text = Tarnish.text_content(doc)
 - **Output.** A document keeps the map it was read from, and `to_json` shares every part of that
   map that is still what ProseMirror writes. After steps or ops, only the nodes they changed are
   new maps. In text, a lone surrogate, where a position splits a pair, is U+FFFD.
+- **In your own NIF.** An application with a Rustler NIF of its own can hold tarnish's functions
+  in that library, so one library loads. Its crate depends on `tarnish_elixir` without the
+  `standalone` feature, and its `rustler::init!` registers tarnish's functions with its own. The
+  module that loads it declares them with `use Tarnish.NIF`, and
+  `config :tarnish, native: MyApp.Native` has `Tarnish` call it. `Tarnish.Native` is then
+  neither built nor loaded.
+
+  ```toml
+  tarnish_elixir = { git = "https://github.com/commoncurriculum/tarnish", default-features = false }
+  ```
 
 ### C, and other languages through it
 
