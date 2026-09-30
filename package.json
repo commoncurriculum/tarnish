@@ -4,12 +4,29 @@
   "type": "module",
   "scripts": {
     "build:bridge": "node harness/build.mjs",
-    "test:js": "TARNISH_TARGET=js node harness/run.mjs && node harness/record-model.mjs && node harness/record-steps.mjs && node harness/record-ops.mjs && node harness/record-dom.mjs",
+    "test:js": "TARNISH_TARGET=js node harness/run.mjs && node harness/record-model.mjs && node harness/record-steps.mjs && node harness/record-ops.mjs && node harness/record-dom.mjs && node harness/record-tiptap.mjs && node harness/record-marked.mjs",
     "test:rust": "npm run build:bridge && TARNISH_TARGET=rust node harness/run.mjs",
     "test:c": "node harness/test-c.mjs",
     "bench": "node bench/document.mjs && node bench/prosemirror.mjs"
   },
   "devDependencies": {
+    "@tiptap/core": "3.30.0",
+    "@tiptap/extension-bold": "3.30.0",
+    "@tiptap/extension-document": "3.30.0",
+    "@tiptap/extension-hard-break": "3.30.0",
+    "@tiptap/extension-heading": "3.30.0",
+    "@tiptap/extension-highlight": "3.30.0",
+    "@tiptap/extension-image": "3.30.0",
+    "@tiptap/extension-italic": "3.30.0",
+    "@tiptap/extension-paragraph": "3.30.0",
+    "@tiptap/extension-strike": "3.30.0",
+    "@tiptap/extension-subscript": "3.30.0",
+    "@tiptap/extension-superscript": "3.30.0",
+    "@tiptap/extension-text": "3.30.0",
+    "@tiptap/extension-text-style": "3.30.0",
+    "@tiptap/extension-underline": "3.30.0",
+    "@tiptap/markdown": "3.30.0",
+    "@tiptap/pm": "3.30.0",
     "ist": "1.1.7",
     "linkedom": "github:commoncurriculum/linkedom#345ef3f3298ae3e3703374f653f80790b0af324b",
     "marked": "17.0.6",
@@ -21,6 +38,7 @@
     "prosemirror-schema-list": "1.5.1",
     "prosemirror-test-builder": "1.1.1",
     "prosemirror-transform": "1.12.0",
+    "tiptap-extension-flat-list": "0.1.1",
     "tsx": "4.19.2"
   }
 }
