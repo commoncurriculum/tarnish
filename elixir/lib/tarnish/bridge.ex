@@ -11,9 +11,10 @@ defmodule Tarnish.Bridge do
   `convert_light/1` (see `Tarnish.NIF`). Put `Tarnish.Bridge` in your supervision tree; it starts
   the pool only for `:node`.
 
-  Each conversion gives `{:ok, value}` or `{:error, message}`. `opts` are the pool's: `timeout:`
-  in milliseconds (30,000 by default), and `pool:` and `size:` for a pool other than the one in
-  your supervision tree. The NIF takes none.
+  Each conversion gives `{:ok, value}` or `{:error, message}`. On `:node`, a worker that exits
+  or passes the timeout raises. `opts` are the pool's: `timeout:` in milliseconds (30,000 by
+  default), and `pool:` and `size:` for a pool other than the one in your supervision tree. The
+  NIF takes none.
   """
 
   alias Tarnish.Bridge.Pool
@@ -21,16 +22,15 @@ defmodule Tarnish.Bridge do
   @native Application.compile_env(:tarnish, :native, Tarnish.Native)
   @compile {:no_warn_undefined, @native}
 
-  @typedoc "A conversion: its operation, its input, and its options when it takes them."
-  @type request :: {String.t(), Tarnish.json()} | {String.t(), Tarnish.json(), map()}
+  @typedoc """
+  A conversion: its operation, its input, and its options when it takes them. The input is read
+  as Jason would encode it.
+  """
+  @type request :: {String.t(), term()} | {String.t(), term(), map() | nil}
   @type result :: {:ok, Tarnish.json()} | {:error, String.t()}
 
-  def child_spec(opts) do
-    case backend() do
-      :node -> Pool.child_spec(opts)
-      :nif -> %{id: __MODULE__, start: {__MODULE__, :start_link, [opts]}}
-    end
-  end
+  def child_spec(opts),
+    do: %{id: Keyword.get(opts, :name, __MODULE__), start: {__MODULE__, :start_link, [opts]}}
 
   # The NIF has no process of its own: the application loads it.
   def start_link(opts) do
@@ -71,6 +71,8 @@ defmodule Tarnish.Bridge do
   """
   @spec each([request()], keyword()) :: [result()]
   def each(requests, opts \\ []) do
+    requests = Enum.map(requests, &without_empty_options/1)
+
     case backend() do
       :node -> Pool.run(requests, opts)
       :nif -> run_in_nif(requests)
@@ -81,6 +83,12 @@ defmodule Tarnish.Bridge do
     [result] = each([request], opts)
     result
   end
+
+  # A worker refuses options for the HTML conversions, so empty options are left out.
+  defp without_empty_options({operation, input, options}) when options in [nil, %{}],
+    do: {operation, input}
+
+  defp without_empty_options(request), do: request
 
   defp backend do
     case Keyword.get(Application.get_env(:tarnish, __MODULE__, []), :backend, :node) do
@@ -123,12 +131,10 @@ defmodule Tarnish.Bridge do
 
   # The request as a worker reads the JSON Jason writes for it, each object's keys in the order
   # written.
-  defp as_encoded({operation, input}), do: as_encoded({operation, input, nil})
+  defp as_encoded({operation, input}), do: {decoded(operation), decoded(input)}
 
-  defp as_encoded({operation, input, options}) do
-    request = {decoded(operation), decoded(input)}
-    if options in [nil, %{}], do: request, else: Tuple.append(request, decoded(options))
-  end
+  defp as_encoded({operation, input, options}),
+    do: {decoded(operation), decoded(input), decoded(options)}
 
   defp decoded(term), do: term |> Jason.encode!() |> Jason.decode!(objects: :ordered_objects)
 end

@@ -14,13 +14,7 @@ defmodule Tarnish.Bridge.Pool do
   @ready_timeout 60_000
   @max_frame_bytes 16 * 1024 * 1024
 
-  def child_spec(opts) do
-    %{
-      id: Keyword.get(opts, :name, __MODULE__),
-      start: {__MODULE__, :start_link, [opts]}
-    }
-  end
-
+  @doc false
   def start_link(opts) do
     [executable | args] = command(opts)
 
@@ -31,9 +25,11 @@ defmodule Tarnish.Bridge.Pool do
     )
   end
 
-  @doc "Sends the requests to the workers, a share to each, and gives their answers in order."
+  # Sends the requests to the workers, a share to each, and gives their answers in order. A
+  # request has options only when they aren't empty, as `Tarnish.Bridge.each` leaves them.
+  @doc false
   @spec run([Tarnish.Bridge.request()], keyword()) :: [Tarnish.Bridge.result()]
-  def run(requests, opts \\ []) do
+  def run(requests, opts) do
     size = Keyword.get(opts, :size, configured(:size, @default_size))
     per_worker = max(ceil(length(requests) / size), 1)
 
@@ -72,18 +68,19 @@ defmodule Tarnish.Bridge.Pool do
     )
   end
 
-  defp encode({operation, input}, id), do: encode({operation, input, %{}}, id)
+  defp encode({operation, input}, id),
+    do: Jason.encode_to_iodata!(%{id: id, operation: operation, input: input})
 
-  defp encode({operation, input, options}, id) do
-    request = %{id: id, operation: operation, input: input}
-    request = if options in [nil, %{}], do: request, else: Map.put(request, :options, options)
-    Jason.encode_to_iodata!(request)
-  end
+  defp encode({operation, input, options}, id),
+    do: Jason.encode_to_iodata!(%{id: id, operation: operation, input: input, options: options})
 
+  # A worker answers a frame it can't read, such as one past its size limit, without an id.
+  # Answers come in order, so it is this request's.
   defp decode(frame, id) do
     case json(frame) do
       %{"id" => ^id, "result" => result} -> {:ok, result}
       %{"id" => ^id, "error" => message} -> {:error, message}
+      %{"id" => nil, "error" => message} -> {:error, message}
       response -> raise "bridge worker answered request #{id} with id #{inspect(response["id"])}"
     end
   end
@@ -146,6 +143,9 @@ defmodule Tarnish.Bridge.Pool do
         end
 
         {:ok, port, state}
+
+      {^port, {:exit_status, status}} ->
+        raise "bridge worker exited with status #{status} before it was ready"
     after
       @ready_timeout ->
         Port.close(port)

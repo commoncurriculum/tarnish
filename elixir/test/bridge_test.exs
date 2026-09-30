@@ -1,6 +1,7 @@
 defmodule Tarnish.BridgeTest do
   # The backend is set for the whole VM, and a test kills a worker.
   use ExUnit.Case, async: false
+  import ExUnit.CaptureLog
 
   @moduletag :bridge
 
@@ -53,6 +54,34 @@ defmodule Tarnish.BridgeTest do
 
     assert Tarnish.Bridge.each(List.duplicate({"parseHTML", "<p>x</p>"}, 4), opts) ==
              List.duplicate({:ok, %{"type" => "doc", "content" => [paragraph("x")]}}, 4)
+  end
+
+  test "gives the error a worker answers without an id to the request it couldn't read",
+       %{opts: opts} do
+    requests = [{"parseHTML", "<p>a</p>"}, {"parseHTML", String.duplicate("x", 5000)}]
+
+    assert [{:ok, _}, {:error, "Request exceeds 4096 bytes"}] =
+             Tarnish.Bridge.each(requests, Keyword.put(opts, :size, 1))
+  end
+
+  test "leaves out empty options, which a worker refuses", %{opts: opts} do
+    assert {:ok, _} = Tarnish.Bridge.parse_html("<p>x</p>", nil, opts)
+    assert [{:ok, _}] = Tarnish.Bridge.each([{"parseHTML", "<p>x</p>", %{}}], opts)
+  end
+
+  test "reports a worker that exits before it is ready" do
+    command = ["node", "-e", "process.exit(3)"]
+
+    # NimblePool logs a worker that fails to start and starts another.
+    log =
+      capture_log(fn ->
+        pool =
+          start_supervised!({Tarnish.Bridge, name: nil, size: 1, command: command}, id: :exits)
+
+        catch_exit(NimblePool.checkout!(pool, :bridge, fn _from, _port -> {:ok, :ok} end, 1_000))
+      end)
+
+    assert log =~ "bridge worker exited with status 3 before it was ready"
   end
 
   test "starts no pool when the NIF converts" do

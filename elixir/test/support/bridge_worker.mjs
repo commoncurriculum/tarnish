@@ -23,8 +23,15 @@ function convert({ operation, input }) {
   }
 }
 
+// A frame past the limit isn't read, so its answer has no id.
+const MAX_FRAME_BYTES = 4096
+
 process.stdout.write(`${JSON.stringify({ ready: true })}\n`)
 for await (const line of createInterface({ input: process.stdin })) {
+  if (Buffer.byteLength(line) > MAX_FRAME_BYTES) {
+    process.stdout.write(`${JSON.stringify({ id: null, error: "Request exceeds 4096 bytes" })}\n`)
+    continue
+  }
   const { id, ...request } = JSON.parse(line)
   let response
   try {
