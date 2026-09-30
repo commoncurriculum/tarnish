@@ -2,8 +2,10 @@
 //! call: terms read as the JSON values Jason encodes them as, and values written as the terms
 //! Jason decodes from their JSON.
 
+use tarnish::chunk::{Kind, ValueRef};
 use tarnish::js::stack;
 use tarnish::json::{Key, Map, Number, Value};
+use tarnish::{Field, Fields};
 
 use tarnish::js::{MAX_SAFE_INTEGER, number_to_string};
 
@@ -409,8 +411,7 @@ fn write_value(out: &mut Vec<u8>, value: &Value) {
         Value::String(text) => binary(out, text),
         Value::Array(items) => {
             if !items.is_empty() {
-                out.push(LIST);
-                out.extend_from_slice(&(items.len() as u32).to_be_bytes());
+                list(out, items.len());
                 for item in items {
                     stack::grow(|| write_value(out, item));
                 }
@@ -426,6 +427,75 @@ fn write_value(out: &mut Vec<u8>, value: &Value) {
             }
         }
     }
+}
+
+/// [`write`] of the JSON `toJSON` writes for a node or mark, written from its fields.
+pub fn write_fields<'c>(fields: impl Fields<'c>) -> Vec<u8> {
+    let mut out = vec![VERSION];
+    write_node(&mut out, fields);
+    out
+}
+
+fn write_node<'c>(out: &mut Vec<u8>, fields: impl Fields<'c>) {
+    out.push(MAP);
+    out.extend_from_slice(&(fields.field_count() as u32).to_be_bytes());
+    fields.fields(|field| {
+        binary(out, field.key());
+        match field {
+            Field::Type(name) => binary(out, name),
+            Field::Attrs(attrs) => write_value_ref(out, attrs),
+            Field::Content(node) => {
+                list(out, node.children().len());
+                for child in node.children() {
+                    stack::grow(|| write_node(out, child));
+                }
+                out.push(NIL);
+            }
+            Field::Marks(marks) => {
+                list(out, marks.len());
+                for mark in marks.iter() {
+                    write_node(out, mark);
+                }
+                out.push(NIL);
+            }
+            // A binary holds UTF-8, which has no lone surrogate.
+            Field::Text(text) => binary(out, &text.to_string_lossy()),
+        }
+    });
+}
+
+/// [`write_value`] of a value a chunk holds.
+fn write_value_ref(out: &mut Vec<u8>, value: ValueRef) {
+    match value.kind() {
+        Kind::Null => atom(out, "nil"),
+        Kind::Bool(true) => atom(out, "true"),
+        Kind::Bool(false) => atom(out, "false"),
+        Kind::Number(number) => write_number(out, &number),
+        Kind::String(text) => binary(out, text),
+        Kind::Array(len) => {
+            if len > 0 {
+                list(out, len as usize);
+                for item in value.items() {
+                    stack::grow(|| write_value_ref(out, item));
+                }
+            }
+            out.push(NIL);
+        }
+        Kind::Object(len) => {
+            out.push(MAP);
+            out.extend_from_slice(&len.to_be_bytes());
+            for (key, item) in value.entries() {
+                binary(out, key);
+                stack::grow(|| write_value_ref(out, item));
+            }
+        }
+    }
+}
+
+/// A list's header, which its items and the empty list that ends it follow.
+fn list(out: &mut Vec<u8>, len: usize) {
+    out.push(LIST);
+    out.extend_from_slice(&(len as u32).to_be_bytes());
 }
 
 fn atom(out: &mut Vec<u8>, name: &str) {
