@@ -1,8 +1,10 @@
 //! The DOM: nodes in an arena that handles share, and the `Dom` the parser and serializer
 //! read and write it through.
 
+use std::cell::{RefCell, RefMut};
 use std::fmt;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::rc::Rc;
+use std::sync::Arc;
 
 use html5ever::{LocalName, Namespace, Prefix, QualName, local_name, ns};
 use tarnish::dom::{Dom, NodeKind};
@@ -28,16 +30,18 @@ use tarnish_css::Declarations;
 ///
 /// - **Lifetime.** The DOM lives while a handle to it or to one of its nodes does, and keeps
 ///   every node made in it until then, so make one per document rather than one per server.
-/// - **Threads.** DOMs and nodes are `Send` and `Sync`, and so is a `DomParser<HtmlNode>`.
+/// - **Threads.** A DOM and its nodes stay on the thread that made them. A `DomParser<HtmlNode>`
+///   and a `DomSerializer<HtmlNode>` are `Send` and `Sync`, and parse into and serialize from
+///   a DOM on any thread.
 /// - **Quirks mode.** A document parsed in quirks mode makes class and id selectors ignore case
 ///   for every node of the DOM.
 #[derive(Clone)]
 pub struct HtmlDom {
-    shared: Arc<Shared>,
+    shared: Rc<Shared>,
 }
 
 struct Shared {
-    tree: Mutex<Tree>,
+    tree: RefCell<Tree>,
 }
 
 /// A node of an [`HtmlDom`]. Handles to the same node are equal.
@@ -72,8 +76,8 @@ impl HtmlDom {
 
     fn from_tree(tree: Tree) -> HtmlDom {
         HtmlDom {
-            shared: Arc::new(Shared {
-                tree: Mutex::new(tree),
+            shared: Rc::new(Shared {
+                tree: RefCell::new(tree),
             }),
         }
     }
@@ -120,11 +124,8 @@ impl HtmlDom {
         }
     }
 
-    pub(crate) fn tree(&self) -> MutexGuard<'_, Tree> {
-        self.shared
-            .tree
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+    pub(crate) fn tree(&self) -> RefMut<'_, Tree> {
+        self.shared.tree.borrow_mut()
     }
 
     pub(crate) fn selectors(&self, selector: &str) -> Result<Arc<Selectors>> {
@@ -138,7 +139,7 @@ impl HtmlDom {
     }
 
     fn own(&self, node: &HtmlNode) -> Result<NodeId> {
-        match Arc::ptr_eq(&self.shared, &node.dom.shared) {
+        match Rc::ptr_eq(&self.shared, &node.dom.shared) {
             true => Ok(node.id),
             false => Err(Error::Other(
                 "WrongDocumentError: The node is in another HtmlDom".into(),
@@ -270,7 +271,7 @@ impl HtmlNode {
 
 impl PartialEq for HtmlNode {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.dom.shared, &other.dom.shared) && self.id == other.id
+        Rc::ptr_eq(&self.dom.shared, &other.dom.shared) && self.id == other.id
     }
 }
 
@@ -404,13 +405,13 @@ impl Dom for HtmlDom {
     }
 
     fn contains(&self, ancestor: &HtmlNode, node: &HtmlNode) -> Result<bool> {
-        Ok(Arc::ptr_eq(&ancestor.dom.shared, &node.dom.shared)
+        Ok(Rc::ptr_eq(&ancestor.dom.shared, &node.dom.shared)
             && ancestor.dom.tree().contains(ancestor.id, node.id))
     }
 
     fn compare_document_position(&self, a: &HtmlNode, b: &HtmlNode) -> Result<u16> {
-        if !Arc::ptr_eq(&a.dom.shared, &b.dom.shared) {
-            let (a, b) = (Arc::as_ptr(&a.dom.shared), Arc::as_ptr(&b.dom.shared));
+        if !Rc::ptr_eq(&a.dom.shared, &b.dom.shared) {
+            let (a, b) = (Rc::as_ptr(&a.dom.shared), Rc::as_ptr(&b.dom.shared));
             let order = if b < a { PRECEDING } else { FOLLOWING };
             return Ok(0x01 | 0x20 | order);
         }
@@ -516,10 +517,10 @@ impl Dom for HtmlDom {
                     .iter_mut()
                     .find(|attr| crate::tree::is_qualified(&attr.name, &name, false));
                 match existing {
-                    Some(attr) => attr.value = value,
+                    Some(attr) => attr.value = value.into(),
                     None => element.attrs.push(Attr {
                         name: QualName::new(None, ns!(), LocalName::from(name)),
-                        value,
+                        value: value.into(),
                     }),
                 }
             }

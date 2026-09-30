@@ -422,7 +422,7 @@ fn attrs(attrs: Vec<Attribute>) -> Vec<Attr> {
         }
         Attr {
             name: attr.name,
-            value: String::from(&*attr.value),
+            value: attr.value,
         }
     });
     attrs.collect()

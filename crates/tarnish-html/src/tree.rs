@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use html5ever::tendril::StrTendril;
 use html5ever::{LocalName, Namespace, QualName, ns};
 use tarnish_css::Declarations;
 
@@ -45,7 +46,7 @@ pub(crate) struct Element {
 
 pub(crate) struct Attr {
     pub(crate) name: QualName,
-    pub(crate) value: String,
+    pub(crate) value: StrTendril,
 }
 
 /// The namespaces whose elements have `style` and are written by their local name.
@@ -91,8 +92,11 @@ impl Element {
     pub(crate) fn set_attr_ns(&mut self, name: QualName, value: String) {
         let mut attrs = self.attrs.iter_mut();
         match attrs.find(|attr| attr.name.ns == name.ns && attr.name.local == name.local) {
-            Some(attr) => attr.value = value,
-            None => self.attrs.push(Attr { name, value }),
+            Some(attr) => attr.value = value.into(),
+            None => self.attrs.push(Attr {
+                name,
+                value: value.into(),
+            }),
         }
     }
 
@@ -109,7 +113,7 @@ impl Element {
             .attrs
             .iter()
             .find(|attr| is_qualified(&attr.name, name, lower));
-        attr.map(|attr| attr.value.as_str())
+        attr.map(|attr| &*attr.value)
     }
 }
 

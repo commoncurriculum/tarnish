@@ -200,8 +200,9 @@ impl AttrSet {
             (Given::Object(given), _) => given,
         };
         let mut built = Vec::with_capacity(self.attrs.len());
+        let mut next = 0;
         for (name, attr) in &self.attrs {
-            let value = match (given.get(name), &attr.default) {
+            let value = match (given.get_from(name, &mut next), &attr.default) {
                 (Some(value), _) | (None, AttributeDefault::Value(value)) => Some(value),
                 (None, AttributeDefault::Undefined) => None,
                 (None, AttributeDefault::Required) => return Err(no_value(name)),

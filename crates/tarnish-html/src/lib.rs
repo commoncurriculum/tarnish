@@ -115,13 +115,11 @@ pub fn to_html(
 mod tests {
     use tarnish::dom::{DomParser, DomSerializer};
 
-    use super::{HtmlDom, HtmlNode};
+    use super::HtmlNode;
 
     #[test]
-    fn doms_and_parsers_can_be_shared_between_threads() {
+    fn parsers_and_serializers_can_be_shared_between_threads() {
         fn shared<T: Send + Sync>() {}
-        shared::<HtmlDom>();
-        shared::<HtmlNode>();
         shared::<DomParser<HtmlNode>>();
         shared::<DomSerializer<HtmlNode>>();
     }

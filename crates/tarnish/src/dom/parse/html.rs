@@ -43,7 +43,15 @@ pub(super) const BLOCK_TAGS: &[&str] = &[
 pub(super) const IGNORE_TAGS: &[&str] = &["head", "noscript", "object", "script", "style", "title"];
 
 pub(super) fn is_list_tag(name: &str) -> bool {
-    name == "ol" || name == "ul"
+    is_tag(&["ol", "ul"], name)
+}
+
+/// Whether `name` in lower case, as JavaScript's `toLowerCase` makes it, is one of the tags.
+pub(super) fn is_tag(tags: &[&str], name: &str) -> bool {
+    match name.is_ascii() {
+        true => tags.iter().any(|tag| tag.eq_ignore_ascii_case(name)),
+        false => tags.contains(&name.to_lowercase().as_str()),
+    }
 }
 
 /// Move lists that are directly inside lists into the item before them, as browsers take them.
