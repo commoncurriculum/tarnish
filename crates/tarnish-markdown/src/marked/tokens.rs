@@ -44,6 +44,16 @@ pub enum TokenData {
     Table(Box<Table>),
 }
 
+impl TokenData {
+    /// A link's or an image's destination with no title.
+    pub fn link(href: impl Into<Vec<u16>>) -> TokenData {
+        TokenData::Link(Box::new(Destination {
+            href: href.into(),
+            title: None,
+        }))
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Destination {
     pub href: Vec<u16>,
