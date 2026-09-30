@@ -11,7 +11,18 @@ description = "The base of an application's Rustler NIF on tarnish: Erlang terms
 [lib]
 doctest = false
 
+[features]
+default = ["mimalloc"]
+# The NIF's global allocator. A NIF that declares its own turns this off.
+mimalloc = ["dep:mimalloc"]
+
 [dependencies]
+mimalloc = { version = "0.1", default-features = false, optional = true }
 rayon = "1"
 rustler = { version = "0.38", features = ["big_integer"] }
 tarnish = { path = "../tarnish" }
+
+# musl can't give a library it loads after start the initial-exec thread-locals mimalloc uses by
+# default, and the VM loads a NIF after start.
+[target.'cfg(target_env = "musl")'.dependencies]
+mimalloc = { version = "0.1", default-features = false, features = ["local_dynamic_tls"], optional = true }

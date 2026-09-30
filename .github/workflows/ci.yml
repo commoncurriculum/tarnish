@@ -48,8 +48,9 @@ jobs:
           done
       - run: npm run test:${{ matrix.target }}
       # The run against the real packages records the fixtures again. The Rust, Elixir and C
-      # tests, and tarnish-html's, expect what it records, so it must be exactly what JavaScript
-      # writes today, and no fixture may be left untracked.
+      # tests, and tarnish-html's, tarnish-markdown's and tarnish-tiptap's, expect what it
+      # records, so it must be exactly what JavaScript writes today, and no fixture may be left
+      # untracked.
       - run: git diff --exit-code fixtures && test -z "$(git status --porcelain fixtures)"
         if: matrix.target == 'js'
 
@@ -84,7 +85,7 @@ jobs:
         with:
           otp-version: "25.3.2.21"
           elixir-version: "1.17.3"
-      # Tarnish.Bridge's tests run a worker on the harness's ProseMirror.
+      # The tests' application converts on the harness's ProseMirror and linkedom in its workers.
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -95,7 +96,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: mix deps.get
       - run: mix format --check-formatted
+      # Builds the tests' NIF, which holds tarnish's functions in place of Tarnish.Native, and
+      # runs Tarnish.Bridge's tests on the Node workers and on that NIF.
       - run: mix test
+      - name: Load Tarnish.Native, which the tests replace
+        run: mix run -e '{:ok, _} = Tarnish.Schema.new(%{"nodes" => [{"doc", %{"content" => "text*"}}, {"text", %{}}]})'
+        env:
+          MIX_ENV: dev
 
   c:
     runs-on: ubuntu-latest
@@ -122,7 +129,8 @@ jobs:
       # Rust links a program statically on musl, which a library can't be.
       RUSTFLAGS: -C target-feature=-crt-static
     steps:
-      - run: apk add --no-cache bash build-base curl git
+      # stylo's build script, which the tests' NIF builds, runs Python.
+      - run: apk add --no-cache bash build-base curl git python3
       - uses: actions/checkout@v4
       - name: Install Rust
         run: |

@@ -126,18 +126,20 @@ This example is `tarnish-html`'s doctest.
   the fork, even in a document without a doctype. Selectors do follow quirks mode. So
   `width: 10` and `color: f00` are dropped where a browser, in quirks mode, would take them.
 - **Proven against the linkedom fork.** `npm run test:js` records to `fixtures/dom.json` what
-  ProseMirror does in the fork with prosemirror-schema-basic and prosemirror-schema-list: 297
-  parses of 287 HTML inputs, as a template's content and as a document, 450 documents written
-  as HTML, 85 inline styles, 42 DOM output specs, and the strings 262 nodes give an attribute
+  ProseMirror does in the fork with prosemirror-schema-basic and prosemirror-schema-list: 320
+  parses of 310 HTML inputs, as a template's content and as a document, 459 documents written
+  as HTML, 85 inline styles, 52 DOM output specs, and the strings 262 nodes give an attribute
   set to them: a link its `href`, resolved against the document's `<base>`, any other node its
   interface. The crate's tests write those schemas' rules and `toDOM`s in Rust, and must build
-  the same trees, documents, HTML and strings. They also check that the fork's `element.style`
-  runs the `tarnish-css` they do, by the `engine()` it recorded.
-- **Where the trees differ.** The tests print both trees for three inputs, where html5ever
+  the same trees, documents, HTML and strings. They render each spec as the value of a node's
+  attribute too, as an application's `toDOM` may hand one over. They also check that the fork's
+  `element.style` runs the `tarnish-css` they do, by the `engine()` it recorded.
+- **Where the trees differ.** The tests print both trees for eight inputs, where html5ever
   follows the HTML standard and parse5 8 doesn't, but for `<isindex>`:
   - elements in a `<select>`, which html5ever keeps, as the standard now does, and parse5
     drops;
-  - a CDATA section in MathML's `<mi>`, text to html5ever and a comment to parse5;
+  - a CDATA section in an element that isn't HTML's, such as MathML's `<mi>` or SVG's `<desc>`,
+    text to html5ever and a comment to parse5;
   - an end tag past an `<isindex>`, which html5ever still treats as special, as the standard
     did before it dropped `<isindex>`.
 
@@ -176,6 +178,15 @@ assert_eq!(markdown.parse("Hello **world**")?, doc.to_json());
 ```
 
 This example is `tarnish-tiptap`'s doctest.
+
+`npm run test:js` records what the JavaScript does, for the tests to hold these crates to:
+`fixtures/marked.json`, the tokens marked, with marked-more-lists, makes of 206 Markdown
+inputs, and `fixtures/tiptap.json`, the documents, Markdown and HTML that `MarkdownManager`,
+`DOMParser` and `DOMSerializer` make with Tiptap's own extensions, among them V8's errors for
+documents holding what the manager can't read. `tarnish_markdown::MARKED` and
+`tarnish_tiptap::TIPTAP` name the versions ported, and the tests check them against the
+versions installed. tarnish-tiptap's `Underline` and `Highlight` leave out Tiptap's Markdown for
+them, which an application writes.
 
 ### Elixir
 
@@ -227,27 +238,44 @@ text = Tarnish.Node.text_content(doc)
 - **Conversions.** `Tarnish.Bridge` converts between a document's JSON and Markdown or HTML
   with your application's own conversions: `parse_markdown`, `serialize_markdown`, `parse_html`,
   `serialize_html`, and `each` for a batch. Each gives `{:ok, value}` or `{:error, message}`.
-  Its backend runs them in Node workers (`config :tarnish, Tarnish.Bridge, backend: :node,
-  command: [...]`, the default) or in your NIF, which implements `convert/1` and
-  `convert_light/1` (`backend: :nif`). Add it to your supervision tree; it starts the workers
-  only for `:node`. A worker writes `{"ready":true}`, then answers each line holding `{"id",
-  "operation", "input", "options"}` with a line holding `{"id", "result"}` or `{"id", "error"}`,
-  in order.
+  Your application makes the four conversions twice, as a JavaScript module and in your NIF, and
+  each refuses a request as the other does. tarnish refuses the rest on both, with `"Unknown
+  operation or invalid input"`: a request whose operation isn't one of the four, or whose input
+  isn't text for a parse and an object for a serialization.
+
+  Its backend runs them in Node workers (`backend: :node`, the default) or in your NIF
+  (`backend: :nif`). Add `Tarnish.Bridge` to your supervision tree: it loads the NIF, so an
+  application whose NIF doesn't load fails to start, and starts the workers only for `:node`.
+  Each worker runs tarnish's `priv/worker.mjs` on your module, which exports `parseMarkdown`,
+  `serializeMarkdown`, `parseHTML` and `serializeHTML`, each taking a request's input and
+  options:
+
+  ```elixir
+  config :tarnish, Tarnish.Bridge,
+    conversions: "/path/to/conversions.mjs",
+    # The defaults:
+    node: "node",
+    size: 2,
+    # Start a worker only once a call needs it.
+    lazy: false
+  ```
 - **In your own NIF.** `tarnish-nif` is the base of any NIF on tarnish, the package's own
   (`tarnish_elixir`) among them. It holds the terms read and written as JSON, the budgets that
-  keep a call on the caller's scheduler or send it to a dirty one, a thread pool for batches, and
-  tarnish's functions. An application with a NIF of its own builds it on `tarnish-nif`, so one
-  library loads and every call reads and writes terms the same way. Its `rustler::init!`
-  registers tarnish's functions with its own, and its load hook starts the pool: pass
-  `tarnish_nif::load`, or call it from a hook of your own, with the count of threads as the load
-  info. The module that loads it declares tarnish's functions with `use Tarnish.NIF`, and
-  `config :tarnish, native: MyApp.Native` has `Tarnish` call it. `Tarnish.Native` is then
-  neither built nor loaded.
+  keep a call on the caller's scheduler or send it to a dirty one, a thread pool for batches,
+  mimalloc as the allocator (the `mimalloc` feature, on by default), and tarnish's functions. An
+  application with a NIF of its own builds it on `tarnish-nif`, so one library loads and every
+  call reads and writes terms the same way. Its `rustler::init!` registers tarnish's functions
+  with its own, and its load hook calls `tarnish_nif::load` with the load info and its
+  conversions. The module that loads it does so with `use Tarnish.NIF`, which takes Rustler's
+  options, passes the count of dirty CPU schedulers as the load info, and declares tarnish's
+  functions. `config :tarnish, native: MyApp.Native` has `Tarnish` call it. `Tarnish.Native` is
+  then neither built nor loaded.
 
   Its `convert/1` and `convert_light/1` are `Tarnish.Bridge`'s `:nif` backend. They answer each
-  request with the application's `tarnish_nif::convert::Conversions`, which the load hook hands
-  `tarnish_nif::convert::serve`: its `check` refuses a request as the application's worker does,
-  with the worker's message, and its four conversions take the request's options as sent.
+  request tarnish doesn't refuse with the application's `tarnish_nif::convert::Conversions`,
+  whose four conversions take the request's options as sent. `serialize_html` gets its document
+  unread, as a `Document`, so that it checks its options before a document that doesn't read
+  fails it.
 
   ```toml
   tarnish-nif = { git = "https://github.com/commoncurriculum/tarnish" }
@@ -255,12 +283,20 @@ text = Tarnish.Node.text_content(doc)
 
   ```rust
   fn load(env: rustler::Env, threads: rustler::Term) -> bool {
-      tarnish_nif::convert::serve(&*MY_CONVERSIONS);
-      tarnish_nif::load(env, threads)
+      tarnish_nif::load(env, threads, Some(&*MY_CONVERSIONS))
   }
 
   rustler::init!("Elixir.MyApp.Native", load = load);
   ```
+
+  ```elixir
+  defmodule MyApp.Native do
+    use Tarnish.NIF, otp_app: :my_app, crate: "my_app_nif"
+  end
+  ```
+
+  tarnish's own tests are such an application: `elixir/test/support` holds its conversions in
+  JavaScript and its NIF, and `Tarnish.Bridge`'s tests run on both backends.
 
 ### C, and other languages through it
 
@@ -377,7 +413,9 @@ The proof doesn't depend on anyone reading the Rust. CI checks it:
    - a step type defined with `Step.jsonID`: applied among ProseMirror's own steps, inverted,
      mapped, merged, and its errors;
    - 273 lists of `Transform` operations, 96 of them failing, and `textBetween` and
-     `textContent`, as the bindings take them.
+     `textContent`, as the bindings take them;
+   - DOM parses and serializations in the linkedom fork, marked's tokens, and Tiptap's
+     conversions, which tarnish-html, tarnish-markdown and tarnish-tiptap are held to.
 
    The Elixir tests apply every recorded transform, invert it and map its positions, and run every
    recorded op list and text read. The C test does the same, and its JSON must equal
@@ -389,9 +427,9 @@ The proof doesn't depend on anyone reading the Rust. CI checks it:
 | prosemirror-model's suite, against tarnish | 309 passing |
 | prosemirror-transform's suite, against tarnish | 238 passing |
 | tarnish's own suite, against JavaScript and tarnish | 38 passing |
-| Elixir (`mix test`) | 522 tests |
+| Elixir (`mix test`) | 545 tests |
 | C (`npm run test:c`) | 148 recorded transforms, 308 op lists and texts, the error cases and a 200,000-deep attribute |
-| Rust (`cargo test`) | the recorded cases, and a 20,000-deep document through every operation on a 256 KB stack |
+| Rust (`cargo test`) | the recorded cases, and a 20,000-deep document through every operation on a 256 KB stack, as are HTML, specs, Markdown and Tiptap's documents nested thousands deep |
 
 ## Speed
 
@@ -488,8 +526,8 @@ hold:
 | `crates/tarnish` | The library: `model/`, `transform/`, `dom/`, `chunk/` (the document format), `api` (what the bindings call). `tarnish::js` is `tarnish-js` |
 | `crates/tarnish-html` | An HTML DOM for `DomParser` and `DomSerializer`: html5ever's parser, the standard's serialization |
 | `crates/tarnish-css`, `crates/tarnish-css-wasm` | Inline styles on stylo, and the same as WebAssembly, which `harness/css-wasm.mjs` writes into the linkedom fork |
-| `elixir/`, `crates/tarnish_elixir` | The Elixir package and the Rustler NIF behind it |
-| `crates/tarnish-nif` | The base of a NIF on tarnish: terms as JSON, budgets, a batch pool, tarnish's functions, and `Tarnish.Bridge`'s conversions |
+| `elixir/`, `crates/tarnish_elixir` | The Elixir package and the Rustler NIF behind it. `elixir/test/support` is the application its tests make: conversions in JavaScript, and a NIF on `tarnish-nif` |
+| `crates/tarnish-nif` | The base of a NIF on tarnish: terms as JSON, budgets, a batch pool, the allocator, tarnish's functions, and `Tarnish.Bridge`'s conversions |
 | `crates/tarnish-tiptap` | Tiptap on the server: extensions, `getSchema`, `@tiptap/html`'s conversions and `@tiptap/markdown`'s `MarkdownManager`, with Tiptap's own extensions |
 | `crates/tarnish-zod` | The parts of zod 4 that attribute schemas use, with zod's output and errors |
 | `crates/tarnish-c` | The C library and its generated header |

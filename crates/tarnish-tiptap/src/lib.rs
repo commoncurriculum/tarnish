@@ -59,3 +59,6 @@ pub use tarnish_html::HtmlNode;
 
 /// A `DOMOutputSpec` that a `renderHTML` returns, borrowing from its node or mark.
 pub type DomSpec<'a> = tarnish::dom::DomSpec<'a, HtmlNode>;
+
+/// The version of `@tiptap/core`, `@tiptap/markdown` and Tiptap's extensions this crate ports.
+pub const TIPTAP: &str = "3.30.0";
