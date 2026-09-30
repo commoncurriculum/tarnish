@@ -1,20 +1,12 @@
 //! A document nested far deeper than a small stack could recurse through, and every operation
 //! on it, on a thread with such a stack: each recursion over nesting has to grow the stack.
 
+use tarnish::js::stack::on_dirty_scheduler_stack;
 use tarnish::json::{self, Value};
 use tarnish::transform::{BlockAttrs, Step, Transform, Wrapper};
 use tarnish::{Fragment, Node, Schema, Slice, api};
 
 const DEPTH: usize = 20_000;
-
-fn on_small_stack(test: impl FnOnce() + Send + 'static) {
-    std::thread::Builder::new()
-        .stack_size(256 << 10)
-        .spawn(test)
-        .expect("a thread")
-        .join()
-        .expect("the test");
-}
 
 fn schema() -> Schema {
     api::schema(&json::from_str(SCHEMA).expect("the spec")).expect("the schema")
@@ -75,7 +67,7 @@ const TEXT: usize = DEPTH + 1;
 
 #[test]
 fn documents_nest_as_deeply_as_memory_allows() {
-    on_small_stack(|| {
+    on_dirty_scheduler_stack(|| {
         let schema = schema();
         let json = deep_json();
         let doc = Node::from_json(&schema, &json).expect("the document");
@@ -217,9 +209,40 @@ fn documents_nest_as_deeply_as_memory_allows() {
     });
 }
 
+/// An attribute's value, as JavaScript turns it into a string or a number, which joins each
+/// array inside it, and as `compareDeep` compares it, arrays and objects alike.
+#[test]
+fn attribute_values_nest_as_deeply_as_memory_allows() {
+    on_dirty_scheduler_stack(|| {
+        let schema = schema();
+        let quote = |data: Value| {
+            let paragraph = object(vec![("type", "paragraph".into())]);
+            let quote = object(vec![
+                ("type", "blockquote".into()),
+                ("attrs", object(vec![("data", data)])),
+                ("content", Value::Array(vec![paragraph])),
+            ]);
+            Node::from_json(&schema, &quote).expect("a quote")
+        };
+        let arrays = quote(nested_array(DEPTH));
+        let data = arrays.attrs_view().get("data").expect("its data");
+        assert_eq!(data.to_js_string().expect("a string"), "");
+        assert_eq!(data.to_number().expect("a number"), 0.0);
+
+        let objects = || {
+            (0..DEPTH).fold(Value::Null, |inner, level| match level % 2 {
+                0 => object(vec![("a", inner)]),
+                _ => Value::Array(vec![inner]),
+            })
+        };
+        assert!(quote(objects()) == quote(objects()));
+        assert!(quote(objects()) != arrays);
+    });
+}
+
 #[test]
 fn content_expressions_nest_as_deeply_as_memory_allows() {
-    on_small_stack(|| {
+    on_dirty_scheduler_stack(|| {
         let content = format!("{}block{}+", "(".repeat(DEPTH), ")".repeat(DEPTH));
         let spec = SCHEMA.replace(
             r#""content": "block+""#,
@@ -239,7 +262,7 @@ fn content_expressions_nest_as_deeply_as_memory_allows() {
 
 #[test]
 fn repetitions_nest_as_deeply_as_memory_allows() {
-    on_small_stack(|| {
+    on_dirty_scheduler_stack(|| {
         let content = format!("{}block{}", "(".repeat(DEPTH), ")*".repeat(DEPTH));
         let spec = SCHEMA.replace(
             r#""content": "block+""#,
@@ -257,7 +280,7 @@ fn repetitions_nest_as_deeply_as_memory_allows() {
 
 #[test]
 fn content_may_hold_as_many_nodes_as_memory_allows() {
-    on_small_stack(|| {
+    on_dirty_scheduler_stack(|| {
         let spec = SCHEMA.replace(
             r#""content": "block+""#,
             &format!(r#""content": "paragraph{{{DEPTH}}}""#),

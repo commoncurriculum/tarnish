@@ -13,6 +13,18 @@ pub fn grow<R>(f: impl FnOnce() -> R) -> R {
     stacker::maybe_grow(RED_ZONE, SEGMENT, f)
 }
 
+/// Runs `f` on a thread whose stack is smaller than a BEAM dirty CPU scheduler's 320 KiB, and
+/// gives what it returns, or carries on its panic: a test runs a deep recursion there to show
+/// that each of its levels goes through [`grow`].
+pub fn on_dirty_scheduler_stack<R: Send + 'static>(f: impl FnOnce() -> R + Send + 'static) -> R {
+    std::thread::Builder::new()
+        .stack_size(256 << 10)
+        .spawn(f)
+        .expect("a thread")
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+}
+
 /// Drops the items of a vector whose items nest, as deeply as they do.
 pub fn drop_nested<T>(items: &mut Vec<T>) {
     if !items.is_empty() {

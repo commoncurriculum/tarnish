@@ -3,6 +3,7 @@
 
 mod delimiters;
 mod helpers;
+mod json;
 mod lexer;
 mod matchers;
 pub mod rules;
