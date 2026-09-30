@@ -8,7 +8,7 @@ use tarnish::json::{Map, Value, json};
 
 use tarnish_js::{Class, Error, MAX_SAFE_INTEGER, json};
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Schema {
     String,
     /// `z.number()`, which rejects non-finite numbers.
@@ -101,6 +101,75 @@ impl Schema {
 
     pub fn catch(self, value: Option<Value>) -> Schema {
         Schema::Catch(Box::new(self), value)
+    }
+
+    /// `schema.shape[key]`, for an object schema.
+    pub fn field(&self, key: &str) -> &Schema {
+        &self.entry(key).1
+    }
+
+    /// `schema.pick(mask)`, for an object schema: the mask's fields, in the mask's order.
+    pub fn pick(&self, mask: &[&str]) -> Schema {
+        Schema::Object(mask.iter().map(|key| self.entry(key).clone()).collect())
+    }
+
+    /// `schema.omit(mask)`, for an object schema: the other fields, in the shape's order.
+    pub fn omit(&self, mask: &[&str]) -> Schema {
+        // Only for the panic: zod throws for a key the shape lacks.
+        for key in mask {
+            self.entry(key);
+        }
+        let kept = self.shape().iter().filter(|(key, _)| !mask.contains(key));
+        Schema::Object(kept.cloned().collect())
+    }
+
+    /// `schema.partial()`, for an object schema: each field `.optional()`.
+    pub fn partial(&self) -> Schema {
+        let fields = self.shape().iter();
+        Schema::Object(
+            fields
+                .map(|(key, field)| (*key, field.clone().optional()))
+                .collect(),
+        )
+    }
+
+    /// `schema.extend(shape)`, for an object schema: `{ ...schema.shape, ...shape }`, where a
+    /// key of both keeps its place with `shape`'s field.
+    pub fn extend(&self, shape: impl IntoIterator<Item = (&'static str, Schema)>) -> Schema {
+        let mut fields = self.shape().to_vec();
+        for (key, field) in shape {
+            match fields.iter_mut().find(|(name, _)| *name == key) {
+                Some((_, replaced)) => *replaced = field,
+                None => fields.push((key, field)),
+            }
+        }
+        Schema::Object(fields)
+    }
+
+    /// `schema.unwrap()` of the schemas that wrap one: optional, nullable, default and catch.
+    pub fn unwrap(&self) -> Option<&Schema> {
+        match self {
+            Schema::Optional(inner)
+            | Schema::Nullable(inner)
+            | Schema::Default(inner, _)
+            | Schema::Catch(inner, _) => Some(inner),
+            _ => None,
+        }
+    }
+
+    fn shape(&self) -> &[(&'static str, Schema)] {
+        match self {
+            Schema::Object(shape) => shape,
+            _ => panic!("only an object schema has a shape"),
+        }
+    }
+
+    /// The shape's entry for `key`, with zod's error where the shape has none.
+    fn entry(&self, key: &str) -> &(&'static str, Schema) {
+        self.shape()
+            .iter()
+            .find(|(name, _)| *name == key)
+            .unwrap_or_else(|| panic!("Unrecognized key: \"{key}\""))
     }
 
     /// `schema.parse(value)` where `None` is `undefined`. `Ok(None)` is an `undefined` result.
@@ -550,6 +619,81 @@ mod tests {
         assert_eq!(parsed, Some(json!(["a", "x", "b"])));
         let unchanged = json!(["a", "b"]);
         assert_eq!(schema.parse(Some(&unchanged)).unwrap(), Some(unchanged));
+    }
+
+    fn object() -> Schema {
+        Schema::Object(vec![
+            ("a", Schema::String),
+            ("b", Schema::Number.nullable()),
+            ("c", Schema::Boolean.default(json!(false))),
+        ])
+    }
+
+    #[test]
+    fn reads_a_field_of_the_shape() {
+        assert_eq!(object().field("b"), &Schema::Number.nullable());
+    }
+
+    #[test]
+    fn picks_fields_in_the_order_of_the_mask() {
+        let picked = object().pick(&["c", "a"]);
+        let expected = Schema::Object(vec![
+            ("c", Schema::Boolean.default(json!(false))),
+            ("a", Schema::String),
+        ]);
+        assert_eq!(picked, expected);
+    }
+
+    #[test]
+    fn omits_fields_keeping_the_order_of_the_shape() {
+        let omitted = object().omit(&["b"]);
+        let expected = Schema::Object(vec![
+            ("a", Schema::String),
+            ("c", Schema::Boolean.default(json!(false))),
+        ]);
+        assert_eq!(omitted, expected);
+    }
+
+    #[test]
+    fn makes_every_field_optional() {
+        let expected = Schema::Object(vec![
+            ("a", Schema::String.optional()),
+            ("b", Schema::Number.nullable().optional()),
+            ("c", Schema::Boolean.default(json!(false)).optional()),
+        ]);
+        assert_eq!(object().partial(), expected);
+    }
+
+    #[test]
+    fn extends_replacing_a_field_in_place_and_adding_the_rest_after() {
+        let extended = object().extend([("b", Schema::String), ("d", Schema::Int)]);
+        let expected = Schema::Object(vec![
+            ("a", Schema::String),
+            ("b", Schema::String),
+            ("c", Schema::Boolean.default(json!(false))),
+            ("d", Schema::Int),
+        ]);
+        assert_eq!(extended, expected);
+    }
+
+    #[test]
+    fn unwraps_only_the_schemas_that_wrap_one() {
+        let wrapped = Schema::String.nullable().optional().catch(None);
+        let inner = wrapped.unwrap().and_then(Schema::unwrap);
+        assert_eq!(inner, Some(&Schema::String.nullable()));
+        assert_eq!(Schema::array(Schema::String).unwrap(), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "Unrecognized key: \"z\"")]
+    fn picks_no_key_the_shape_lacks() {
+        object().pick(&["a", "z"]);
+    }
+
+    #[test]
+    #[should_panic(expected = "Unrecognized key: \"z\"")]
+    fn omits_no_key_the_shape_lacks() {
+        object().omit(&["z"]);
     }
 
     #[test]
