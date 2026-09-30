@@ -1,6 +1,8 @@
 defmodule TarnishTest do
   use ExUnit.Case, async: true
 
+  @native Application.compile_env(:tarnish, :native, Tarnish.Native)
+
   # Transforms prosemirror-transform's own tests make, recorded from the real package by
   # `npm run test:js`: a schema, a starting document, the steps, the document they give, and
   # positions mapped through them.
@@ -159,7 +161,7 @@ defmodule TarnishTest do
 
     test "go to a dirty scheduler, with the same answers", %{schema: schema} do
       for json <- [paragraphs(10_000, "many"), paragraphs(1, String.duplicate("long ", 200_000))] do
-        assert Tarnish.Native.node_from_json(schema, json) == :dirty
+        assert @native.node_from_json(schema, json) == :dirty
         doc = doc(schema, json)
         assert Tarnish.Node.to_json(doc) == json
         assert Tarnish.Node.check(doc) == :ok
@@ -170,7 +172,7 @@ defmodule TarnishTest do
       # Two texts with the same marks are read as one, so every paragraph is written anew.
       split = %{"type" => "paragraph", "content" => [text("ma"), text("ny")]}
       doc = doc(schema, %{"type" => "doc", "content" => List.duplicate(split, 10_000)})
-      assert Tarnish.Native.to_json(doc.ref, doc.json) == :dirty
+      assert @native.to_json(doc.ref, doc.json) == :dirty
       assert Tarnish.Node.to_json(doc) == paragraphs(10_000, "many")
     end
 
@@ -181,7 +183,7 @@ defmodule TarnishTest do
       steps =
         List.duplicate(%{"stepType" => "replace", "from" => 2, "to" => 2, "slice" => slice}, 200)
 
-      assert Tarnish.Native.apply_steps(doc.ref, steps) == :dirty
+      assert @native.apply_steps(doc.ref, steps) == :dirty
       {:ok, applied} = Tarnish.Step.apply(doc, steps)
       %{"content" => [first | _]} = Tarnish.Node.to_json(applied)
       text = "t" <> String.duplicate("x", 200) <> "ext"

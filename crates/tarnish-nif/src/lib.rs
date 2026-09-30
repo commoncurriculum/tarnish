@@ -7,14 +7,15 @@
 //! - [`view`]: terms read in place as that JSON, for a node to be read straight from them into
 //!   its chunk;
 //! - [`convert`]: `Tarnish.Bridge`'s `convert/1` and `convert_light/1`, which answer its requests
-//!   with the conversions the NIF's `load` serves;
+//!   with the conversions an application's NIF serves;
 //! - [`light`] and [`Budget`]: calls on the caller's own scheduler, which answer `:dirty` when
 //!   they have more work than that takes on;
-//! - [`pool`]: threads for a batch's work, one per dirty CPU scheduler, which [`load`] starts;
-//! - tarnish's ProseMirror functions, which `Tarnish` calls.
+//! - tarnish's ProseMirror functions, which `Tarnish` calls;
+//! - mimalloc as the NIF's allocator, unless the `mimalloc` feature is off.
 //!
 //! A crate that depends on this one has its `rustler::init!` register those functions with its
-//! own, so the module that loads its NIF declares them (`use Tarnish.NIF`).
+//! own, so the module that loads its NIF declares them (`use Tarnish.NIF`), and its load hook
+//! calls [`load`].
 
 #![forbid(unsafe_code)]
 
@@ -26,10 +27,11 @@ mod share;
 pub mod term;
 pub mod view;
 
-use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use rustler::{Encoder, Env, Term};
+
+use convert::Conversions;
 
 mod atoms {
     rustler::atoms! {
@@ -75,25 +77,19 @@ pub fn dirty(env: Env) -> Term {
     atoms::dirty().encode(env)
 }
 
-/// The threads a batch's work runs on.
-static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
-
-pub fn pool() -> &'static rayon::ThreadPool {
-    POOL.get().expect("the pool starts when the NIF loads")
-}
-
-/// A NIF's `load`: starts the pool with as many threads as the load info says, which is the
-/// VM's count of dirty CPU schedulers, or with one a core for `0`.
-pub fn load(_env: Env, threads: Term) -> bool {
+/// A NIF's `load`: `use Tarnish.NIF` gives the count of threads a batch of conversions runs on as
+/// the load info, and an application's NIF serves its conversions, which `convert/1` and
+/// `convert_light/1` answer with.
+pub fn load(_env: Env, threads: Term, conversions: Option<&'static dyn Conversions>) -> bool {
     let Ok(threads) = threads.decode::<usize>() else {
         return false;
     };
-    POOL.get_or_init(|| {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(threads)
-            .thread_name(|index| format!("tarnish-{index}"))
-            .build()
-            .expect("the pool's threads start")
-    });
+    if let Some(conversions) = conversions {
+        convert::serve(conversions, threads);
+    }
     true
 }
+
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;

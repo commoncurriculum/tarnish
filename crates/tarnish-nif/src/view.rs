@@ -252,6 +252,15 @@ impl<'a, 'r> Json<'a, 'r> {
         self.text_of(Binary::from_term(self.term).ok()?)
     }
 
+    /// Whether the map is a struct Jason writes as its `Jason.Encoder` does, which can be any
+    /// JSON: every one but `Jason.OrderedObject`. Reading its entries refuses it, as reading it
+    /// only as an object doesn't.
+    fn is_struct(self) -> bool {
+        self.term
+            .map_get(__struct__())
+            .is_ok_and(|name| ordered_object() != name)
+    }
+
     /// [`kind`](Self::kind), finding a string at once, as the term is likeliest to be.
     fn kind_of_string(self) -> Kind<'a> {
         match Binary::from_term(self.term) {
@@ -520,6 +529,7 @@ impl<'a> read::Json<'a> for Json<'a, '_> {
             Kind::Bool(boolean) => boolean,
             Kind::Number(number) => js::truthy(Some(&Value::Number(number))),
             Kind::String(text) => !text.is_empty(),
+            Kind::Object if self.is_struct() => self.refuse(false),
             Kind::Array | Kind::Object => true,
         }
     }
@@ -549,6 +559,7 @@ impl<'a> read::Json<'a> for Json<'a, '_> {
     fn text(self) -> Option<Cow<'a, str>> {
         match self.kind_of_string() {
             Kind::String(text) => Some(text),
+            Kind::Object if self.is_struct() => self.refuse(None),
             _ => None,
         }
     }

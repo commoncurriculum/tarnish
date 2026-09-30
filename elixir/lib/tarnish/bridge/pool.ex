@@ -2,9 +2,12 @@ defmodule Tarnish.Bridge.Pool do
   @moduledoc """
   `Tarnish.Bridge`'s Node backend: a pool of worker processes, one port each.
 
-  A worker writes `{"ready":true}` once it can answer, then answers each line holding
-  `{"id", "operation", "input", "options"}` with a line holding `{"id", "result"}` or
-  `{"id", "error"}`, in the order the requests came.
+  A worker runs tarnish's `priv/worker.mjs` on the application's conversions. It writes
+  `{"ready":true}` once it has loaded them, then answers each line holding `{"id", "operation",
+  "input", "options"}` with a line holding `{"id", "result"}` or `{"id", "error"}`, in the order
+  the requests came. It refuses a request whose operation isn't one of the four, or whose input
+  isn't text for a parse and an object for a serialization, with `"Unknown operation or invalid
+  input"`, and gives any other to the application's conversion, with its options as sent.
   """
 
   @behaviour NimblePool
@@ -12,16 +15,20 @@ defmodule Tarnish.Bridge.Pool do
   @default_size 2
   @default_timeout 30_000
   @ready_timeout 60_000
-  @max_frame_bytes 16 * 1024 * 1024
+  # The most of a line a port delivers in one message; a longer one comes in parts.
+  @read_chunk_bytes 16 * 1024 * 1024
 
   @doc false
   def start_link(opts) do
-    [executable | args] = command(opts)
+    name = Keyword.get(opts, :name, __MODULE__)
+    size = option(opts, :size, @default_size)
+    :persistent_term.put({__MODULE__, name}, size)
 
     NimblePool.start_link(
-      worker: {__MODULE__, %{executable: executable, args: args}},
-      pool_size: Keyword.get(opts, :size, configured(:size, @default_size)),
-      name: Keyword.get(opts, :name, __MODULE__)
+      worker: {__MODULE__, command(opts)},
+      pool_size: size,
+      lazy: option(opts, :lazy, false),
+      name: name
     )
   end
 
@@ -30,12 +37,13 @@ defmodule Tarnish.Bridge.Pool do
   @doc false
   @spec run([Tarnish.Bridge.request()], keyword()) :: [Tarnish.Bridge.result()]
   def run(requests, opts) do
-    size = Keyword.get(opts, :size, configured(:size, @default_size))
+    pool = Keyword.get(opts, :pool, __MODULE__)
+    size = :persistent_term.get({__MODULE__, pool})
     per_worker = max(ceil(length(requests) / size), 1)
 
     requests
     |> Enum.chunk_every(per_worker)
-    |> Task.async_stream(&call_worker(&1, opts),
+    |> Task.async_stream(&call_worker(&1, pool, opts),
       max_concurrency: size,
       ordered: true,
       timeout: :infinity
@@ -43,10 +51,9 @@ defmodule Tarnish.Bridge.Pool do
     |> Enum.flat_map(fn {:ok, answers} -> answers end)
   end
 
-  # A worker takes every frame of its share before it answers any, which saves a round trip per
+  # A worker takes every line of its share before it answers any, which saves a round trip per
   # request.
-  defp call_worker(requests, opts) do
-    pool = Keyword.get(opts, :pool, __MODULE__)
+  defp call_worker(requests, pool, opts) do
     timeout = Keyword.get(opts, :timeout, @default_timeout)
 
     NimblePool.checkout!(
@@ -58,7 +65,7 @@ defmodule Tarnish.Bridge.Pool do
         Enum.each(numbered, fn {request, id} -> Port.command(port, [encode(request, id), ?\n]) end)
 
         results =
-          Enum.map(numbered, fn {_request, id} -> decode(receive_frame(port, timeout), id) end)
+          Enum.map(numbered, fn {_request, id} -> decode(receive_line(port, timeout), id) end)
 
         # Port.connect links the borrower; unlink before its Task exits and closes the worker.
         Process.unlink(port)
@@ -74,33 +81,30 @@ defmodule Tarnish.Bridge.Pool do
   defp encode({operation, input, options}, id),
     do: Jason.encode_to_iodata!(%{id: id, operation: operation, input: input, options: options})
 
-  # A worker answers a frame it can't read, such as one past its size limit, without an id.
-  # Answers come in order, so it is this request's.
-  defp decode(frame, id) do
-    case json(frame) do
+  defp decode(line, id) do
+    case json(line) do
       %{"id" => ^id, "result" => result} -> {:ok, result}
       %{"id" => ^id, "error" => message} -> {:error, message}
-      %{"id" => nil, "error" => message} -> {:error, message}
       response -> raise "bridge worker answered request #{id} with id #{inspect(response["id"])}"
     end
   end
 
   # `JSON.stringify` escapes a lone surrogate, which Jason refuses and an Elixir string can't hold.
   # It reads as U+FFFD, as tarnish writes it. `JSON.stringify` writes a surrogate pair unescaped,
-  # so every surrogate escape in a frame is a lone one.
+  # so every surrogate escape in a line is a lone one.
   @lone_surrogate ~r/(?<!\\)((?:\\\\)*)\\ud[89a-f][0-9a-f]{2}/i
 
-  defp json(frame) do
-    case Jason.decode(frame) do
+  defp json(line) do
+    case Jason.decode(line) do
       {:ok, value} -> value
-      {:error, _} -> @lone_surrogate |> Regex.replace(frame, "\\1\\\\ufffd") |> Jason.decode!()
+      {:error, _} -> @lone_surrogate |> Regex.replace(line, "\\1\\\\ufffd") |> Jason.decode!()
     end
   end
 
-  defp receive_frame(port, timeout) do
+  defp receive_line(port, timeout) do
     receive do
       {^port, {:data, {:eol, line}}} -> line
-      {^port, {:data, {:noeol, part}}} -> part <> receive_frame(port, timeout)
+      {^port, {:data, {:noeol, part}}} -> part <> receive_line(port, timeout)
       {^port, {:exit_status, status}} -> raise "bridge worker exited with status #{status}"
     after
       timeout -> raise "bridge worker timed out after #{timeout}ms"
@@ -108,22 +112,25 @@ defmodule Tarnish.Bridge.Pool do
   end
 
   defp command(opts) do
-    case Keyword.get(opts, :command, configured(:command, nil)) do
-      [executable | args] ->
-        found =
-          System.find_executable(executable) ||
-            raise(ArgumentError, "bridge executable not found: #{executable}")
+    node = option(opts, :node, "node")
 
-        [found | args]
-
-      nil ->
+    conversions =
+      option(opts, :conversions, nil) ||
         raise ArgumentError,
-              "no bridge command: pass :command, or set config :tarnish, Tarnish.Bridge, command: [...]"
-    end
+              "no conversions: pass :conversions, or set config :tarnish, Tarnish.Bridge, conversions: path"
+
+    %{
+      executable:
+        System.find_executable(node) ||
+          raise(ArgumentError, "node executable not found: #{node}"),
+      args: [Application.app_dir(:tarnish, "priv/worker.mjs"), conversions]
+    }
   end
 
-  defp configured(key, default),
-    do: Keyword.get(Application.get_env(:tarnish, Tarnish.Bridge, []), key, default)
+  defp option(opts, key, default) do
+    configured = Application.get_env(:tarnish, Tarnish.Bridge, [])
+    Keyword.get(opts, key, Keyword.get(configured, key, default))
+  end
 
   @impl NimblePool
   def init_worker(%{executable: executable, args: args} = state) do
@@ -132,7 +139,7 @@ defmodule Tarnish.Bridge.Pool do
         :binary,
         :exit_status,
         {:args, args},
-        {:line, @max_frame_bytes}
+        {:line, @read_chunk_bytes}
       ])
 
     receive do
