@@ -4,8 +4,8 @@
 //!
 //! A request is `{operation, input}` or `{operation, input, options}`, read as Jason would encode
 //! it. Its answer is `{:ok, result}` or `{:error, message}`, the result the term Jason would decode
-//! from the JSON the worker writes for it. The worker checks a request as its zod schema does, and
-//! so do these, giving the same messages.
+//! from the JSON the worker writes for it. The application's [`Conversions`] check each request as
+//! its worker does, so a request it refuses gets the worker's message.
 
 use std::any::Any;
 use std::panic::AssertUnwindSafe;
@@ -16,7 +16,7 @@ use std::sync::mpsc;
 use rustler::types::atom;
 use rustler::types::tuple::get_tuple;
 use rustler::{Encoder, Env, Term, TermType};
-use tarnish::js::{self, deadline};
+use tarnish::js::deadline;
 use tarnish::{Error, Node, Schema, Value};
 
 use crate::etf::{self, NotJson};
@@ -29,27 +29,31 @@ mod atoms {
     }
 }
 
-/// An application's conversions of its documents.
+/// An application's conversions of its documents, and its checks of the requests for them. Each
+/// conversion is given the request's options, as they were sent.
 pub trait Conversions: Sync {
     /// The schema of the documents the conversions read and make.
     fn schema(&self) -> &Schema;
 
-    fn parse_markdown(&self, markdown: &str) -> Result<Value, Error>;
+    /// The operation a request names, or the message its worker refuses it with. A checked
+    /// request's input is text for the parses and a document for the serializations.
+    fn check(&self, request: &Request<Value, Input>) -> Result<Operation, String>;
+
+    fn parse_markdown(&self, markdown: &str, options: Option<&Value>) -> Result<Value, Error>;
 
     fn serialize_markdown(
         &self,
         document: &Value,
-        options: &MarkdownOptions,
+        options: Option<&Value>,
     ) -> Result<String, Error>;
 
-    fn parse_html(&self, html: &str) -> Result<Node<'static>, Error>;
+    fn parse_html(&self, html: &str, options: Option<&Value>) -> Result<Node<'static>, Error>;
 
-    fn serialize_html(&self, document: &Node<'static>) -> Result<String, Error>;
-}
-
-/// The options of `parseMarkdown` and `serializeMarkdown`.
-pub struct MarkdownOptions {
-    pub include_attributes: bool,
+    fn serialize_html(
+        &self,
+        document: &Node<'static>,
+        options: Option<&Value>,
+    ) -> Result<String, Error>;
 }
 
 static CONVERSIONS: OnceLock<&'static dyn Conversions> = OnceLock::new();
@@ -65,9 +69,6 @@ fn conversions() -> &'static dyn Conversions {
         .get()
         .expect("the NIF's load serves its conversions")
 }
-
-const MAX_MARKDOWN_LINE_LENGTH: usize = 100_000;
-const INVALID_REQUEST: &str = "Unknown operation or invalid input";
 
 /// A `Tarnish.Bridge.request()`, each part read from a `T`: its operation, its input, and its
 /// options when they aren't empty. The input may be read otherwise, as an [`Input`].
@@ -104,14 +105,15 @@ pub enum Input {
 }
 
 impl Input {
-    fn as_str(&self) -> Option<&str> {
+    pub fn as_str(&self) -> Option<&str> {
         match self {
             Input::Json(json) => json.as_str(),
             Input::Document(_) => None,
         }
     }
 
-    fn is_object(&self) -> bool {
+    /// Whether the input is an object, as a document read from its terms was.
+    pub fn is_object(&self) -> bool {
         match self {
             Input::Json(json) => json.is_object(),
             Input::Document(_) => true,
@@ -119,12 +121,26 @@ impl Input {
     }
 }
 
-/// What a checked request asks for.
-enum Operation {
+/// The conversion a request asks for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Operation {
     ParseMarkdown,
-    SerializeMarkdown(MarkdownOptions),
+    SerializeMarkdown,
     ParseHtml,
     SerializeHtml,
+}
+
+impl Operation {
+    /// The operation `Tarnish.Bridge` names `name`.
+    pub fn named(name: &str) -> Option<Operation> {
+        match name {
+            "parseMarkdown" => Some(Operation::ParseMarkdown),
+            "serializeMarkdown" => Some(Operation::SerializeMarkdown),
+            "parseHTML" => Some(Operation::ParseHtml),
+            "serializeHTML" => Some(Operation::SerializeHtml),
+            _ => None,
+        }
+    }
 }
 
 /// A request's result: its JSON, or the document `parseHTML` made, whose JSON can be written
@@ -148,36 +164,38 @@ pub fn answer(
     conversions: &dyn Conversions,
     request: Request<Value, Input>,
 ) -> Result<Answer, String> {
-    let operation = check(&request)?;
-    let input = request.input;
-    let text = || input.as_str().expect("a checked string input");
+    let operation = conversions.check(&request)?;
+    let (input, options) = (request.input, request.options.as_ref());
+    let text = || input.as_str().expect("a checked parse's input is text");
     let message = |error: Error| error.message().to_string();
     let json = match (operation, &input) {
-        (Operation::ParseMarkdown, _) => conversions.parse_markdown(text()).map_err(message),
-        (Operation::SerializeMarkdown(options), Input::Json(document)) => conversions
-            .serialize_markdown(document, &options)
+        (Operation::ParseMarkdown, _) => {
+            conversions.parse_markdown(text(), options).map_err(message)
+        }
+        (Operation::SerializeMarkdown, Input::Json(document)) => conversions
+            .serialize_markdown(document, options)
             .map(Value::String)
             .map_err(message),
         (Operation::ParseHtml, _) => {
             return conversions
-                .parse_html(text())
+                .parse_html(text(), options)
                 .map(Answer::Document)
                 .map_err(message);
         }
         (Operation::SerializeHtml, Input::Json(document)) => {
             Node::from_json(conversions.schema(), document)
-                .and_then(|document| conversions.serialize_html(&document))
+                .and_then(|document| conversions.serialize_html(&document, options))
                 .map(Value::String)
                 .map_err(message)
         }
         (Operation::SerializeHtml, Input::Document(document)) => match document {
             Ok(document) => conversions
-                .serialize_html(document)
+                .serialize_html(document, options)
                 .map(Value::String)
                 .map_err(message),
             Err(error) => Err(error.message().to_string()),
         },
-        (Operation::SerializeMarkdown(_), Input::Document(_)) => {
+        (Operation::SerializeMarkdown, Input::Document(_)) => {
             unreachable!("only serializeHTML's document is read as one")
         }
     };
@@ -197,102 +215,6 @@ fn answer_json(conversions: &dyn Conversions, request: Request) -> Result<Answer
         options: request.options,
     };
     answer(conversions, request)
-}
-
-// zod checks the fields in order and reports the first failure.
-fn check(request: &Request<Value, Input>) -> Result<Operation, String> {
-    let Value::String(operation) = &request.operation else {
-        return Err(INVALID_REQUEST.into());
-    };
-    let text = || request.input.as_str().ok_or(INVALID_REQUEST);
-    let document = || {
-        request
-            .input
-            .is_object()
-            .then_some(())
-            .ok_or(INVALID_REQUEST)
-    };
-    let options = request.options.as_ref();
-    Ok(match operation.as_str() {
-        "parseMarkdown" => {
-            if text()?.split('\n').any(|line| {
-                js::utf16_len(line.strip_suffix('\r').unwrap_or(line)) > MAX_MARKDOWN_LINE_LENGTH
-            }) {
-                return Err(format!(
-                    "Markdown lines cannot exceed {MAX_MARKDOWN_LINE_LENGTH} characters"
-                ));
-            }
-            parse_markdown_options(options)?;
-            Operation::ParseMarkdown
-        }
-        "serializeMarkdown" => {
-            document()?;
-            Operation::SerializeMarkdown(parse_markdown_options(options)?)
-        }
-        "parseHTML" => {
-            text()?;
-            refuse_options(options)?;
-            Operation::ParseHtml
-        }
-        "serializeHTML" => {
-            document()?;
-            refuse_options(options)?;
-            Operation::SerializeHtml
-        }
-        _ => return Err(INVALID_REQUEST.into()),
-    })
-}
-
-fn parse_markdown_options(options: Option<&Value>) -> Result<MarkdownOptions, String> {
-    let Some(options) = options else {
-        return Ok(MarkdownOptions {
-            include_attributes: false,
-        });
-    };
-    let Value::Object(options) = options else {
-        return Err(format!(
-            "Invalid input: expected object, received {}",
-            js_type_name(options)
-        ));
-    };
-    let unrecognized: Vec<String> = options
-        .keys()
-        .filter(|key| *key != "includeAttributes")
-        .map(|key| format!("\"{key}\""))
-        .collect();
-    let include_attributes = match options.get("includeAttributes") {
-        None => false,
-        Some(Value::Bool(include)) => *include,
-        Some(other) => {
-            return Err(format!(
-                "Invalid input: expected boolean, received {}",
-                js_type_name(other)
-            ));
-        }
-    };
-    match unrecognized.len() {
-        0 => Ok(MarkdownOptions { include_attributes }),
-        1 => Err(format!("Unrecognized key: {}", unrecognized[0])),
-        _ => Err(format!("Unrecognized keys: {}", unrecognized.join(", "))),
-    }
-}
-
-fn refuse_options(options: Option<&Value>) -> Result<(), String> {
-    match options {
-        None => Ok(()),
-        Some(_) => Err("Options are only valid for Markdown operations".into()),
-    }
-}
-
-fn js_type_name(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "null",
-        Value::Bool(_) => "boolean",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
-    }
 }
 
 /// `{:ok, result}` or `{:error, message}` for each `Tarnish.Bridge.request()` of a list, in
@@ -350,7 +272,8 @@ fn read(
 ) -> Result<Request<Value, Input>, Unread> {
     let mut reader = Reader::new(weight);
     let operation = reader.read(parts.operation)?;
-    let input = match operation.as_str() == Some("serializeHTML")
+    let input = match operation.as_str().and_then(Operation::named)
+        == Some(Operation::SerializeHtml)
         && parts.input.get_type() == TermType::Map
     {
         true => Input::Document(view::read(parts.input, weight, |json| {

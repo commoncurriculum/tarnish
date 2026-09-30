@@ -244,10 +244,10 @@ text = Tarnish.Node.text_content(doc)
   `config :tarnish, native: MyApp.Native` has `Tarnish` call it. `Tarnish.Native` is then
   neither built nor loaded.
 
-  Its `convert/1` and `convert_light/1` are `Tarnish.Bridge`'s `:nif` backend. They check each
-  request as the worker does, with the worker's messages, and answer it with the application's
-  conversions: a `tarnish_nif::convert::Conversions`, which the load hook hands
-  `tarnish_nif::convert::serve`.
+  Its `convert/1` and `convert_light/1` are `Tarnish.Bridge`'s `:nif` backend. They answer each
+  request with the application's `tarnish_nif::convert::Conversions`, which the load hook hands
+  `tarnish_nif::convert::serve`: its `check` refuses a request as the application's worker does,
+  with the worker's message, and its four conversions take the request's options as sent.
 
   ```toml
   tarnish-nif = { git = "https://github.com/commoncurriculum/tarnish" }
