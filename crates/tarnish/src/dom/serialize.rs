@@ -68,6 +68,16 @@ impl<N> From<Value> for DomSpec<'_, N> {
     }
 }
 
+/// An array read from JSON nests as deeply as the JSON does, so each level drops on the stack
+/// segments `stack::grow` adds.
+impl<N> Drop for DomSpec<'_, N> {
+    fn drop(&mut self) {
+        if let DomSpec::Array { items, .. } = self {
+            stack::drop_nested(items);
+        }
+    }
+}
+
 impl<'a, N> DomSpec<'a, N> {
     /// `[tag, attrs, ...children]`.
     pub fn element(tag: &'a str, attrs: SpecAttrs<'a>, children: Vec<DomSpec<'a, N>>) -> Self {
