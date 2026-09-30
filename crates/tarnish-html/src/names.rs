@@ -3,6 +3,8 @@
 
 use std::fmt;
 
+use tarnish::js::Class;
+
 /// Which local name a name must be.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NameKind {
@@ -51,9 +53,24 @@ impl fmt::Display for NameError {
 
 impl std::error::Error for NameError {}
 
+/// The `DOMException`s a name the DOM refuses throws, by their names, which `String(error)`
+/// gives before the message.
+pub static INVALID_CHARACTER_ERROR: Class = Class {
+    name: "InvalidCharacterError",
+    message_alone: false,
+};
+pub static NAMESPACE_ERROR: Class = Class {
+    name: "NamespaceError",
+    message_alone: false,
+};
+
 impl From<NameError> for tarnish::Error {
     fn from(error: NameError) -> Self {
-        tarnish::Error::Other(error.to_string())
+        let class = match error.name {
+            "NamespaceError" => &NAMESPACE_ERROR,
+            _ => &INVALID_CHARACTER_ERROR,
+        };
+        tarnish::Error::Of(class, error.message)
     }
 }
 
@@ -71,15 +88,23 @@ fn namespace_error(message: &str) -> NameError {
     }
 }
 
-const FORBIDDEN: [char; 8] = ['\0', '\t', '\n', '\x0c', '\r', ' ', '/', '>'];
+/// Whether a name holds none of the characters no name may hold, all of which are ASCII.
+fn allowed(name: &[u8]) -> bool {
+    !name.iter().any(|byte| {
+        matches!(
+            byte,
+            b'\0' | b'\t' | b'\n' | b'\x0c' | b'\r' | b' ' | b'/' | b'>'
+        )
+    })
+}
 
 /// <https://dom.spec.whatwg.org/#valid-element-local-name>
 pub fn is_element_local_name(name: &str) -> bool {
-    let mut characters = name.chars();
-    match characters.next() {
-        Some(first) if first.is_ascii_alphabetic() => !characters.as_str().contains(FORBIDDEN),
-        Some(first) if matches!(first, ':' | '_') || !first.is_ascii() => {
-            characters.all(|character| {
+    let bytes = name.as_bytes();
+    match bytes.first() {
+        Some(first) if first.is_ascii_alphabetic() => allowed(&bytes[1..]),
+        Some(first) if matches!(first, b':' | b'_') || !first.is_ascii() => {
+            name.chars().skip(1).all(|character| {
                 character.is_ascii_alphanumeric()
                     || matches!(character, '-' | '.' | ':' | '_')
                     || !character.is_ascii()
@@ -91,12 +116,12 @@ pub fn is_element_local_name(name: &str) -> bool {
 
 /// <https://dom.spec.whatwg.org/#valid-attribute-local-name>
 pub fn is_attribute_local_name(name: &str) -> bool {
-    !name.is_empty() && !name.contains(FORBIDDEN) && !name.contains('=')
+    !name.is_empty() && allowed(name.as_bytes()) && !name.contains('=')
 }
 
 /// <https://dom.spec.whatwg.org/#valid-namespace-prefix>
 fn is_namespace_prefix(prefix: &str) -> bool {
-    !prefix.is_empty() && !prefix.contains(FORBIDDEN)
+    !prefix.is_empty() && allowed(prefix.as_bytes())
 }
 
 const XML: &str = "http://www.w3.org/XML/1998/namespace";

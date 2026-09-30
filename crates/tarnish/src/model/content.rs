@@ -7,9 +7,11 @@
 mod compile;
 
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::fmt;
 use std::sync::{Arc, LazyLock, Mutex};
+
+use rustc_hash::FxHashMap;
 
 use super::fragment::Fragment;
 use super::node::Node;
@@ -25,7 +27,7 @@ pub struct Automaton {
 }
 
 /// [`ContentMatch::find_wrapping`]'s answers, by state and target node type.
-type Wrappings = HashMap<(usize, usize), Option<Arc<[usize]>>>;
+type Wrappings = FxHashMap<(usize, usize), Option<Arc<[usize]>>>;
 
 struct State {
     valid_end: bool,
@@ -99,6 +101,13 @@ impl ContentExpr {
     pub fn start<'s>(&'s self, schema: &'s Schema) -> ContentMatch<'s> {
         ContentMatch::start(schema, &self.0)
     }
+}
+
+/// What `fillBefore` fills in front of: a fragment's children from an index, or one node, of
+/// which only the type matters.
+enum After<'f> {
+    Children(&'f Fragment<'f>, usize),
+    Node(&'f NodeType<'f>),
 }
 
 /// A state of a node type's content expression: what may come next, and whether content may end
@@ -256,9 +265,37 @@ impl<'s> ContentMatch<'s> {
         to_end: bool,
         start_index: usize,
     ) -> Result<Option<Fragment<'static>>> {
+        self.fill(&After::Children(after, start_index), to_end)
+    }
+
+    /// [`fill_before`](Self::fill_before) of a fragment of one node of this type: what only a
+    /// node's type decides.
+    pub fn fill_before_type(
+        &self,
+        node_type: &NodeType,
+        to_end: bool,
+    ) -> Result<Option<Fragment<'static>>> {
+        self.fill(&After::Node(node_type), to_end)
+    }
+
+    fn fill(&self, after: &After<'_>, to_end: bool) -> Result<Option<Fragment<'static>>> {
+        if self.fits(after, to_end)? {
+            return Ok(Some(Fragment::empty()));
+        }
         let mut seen = vec![false; self.automaton.states.len()];
         seen[self.state] = true;
-        self.search_fill(self, after, to_end, start_index, &mut Vec::new(), &mut seen)
+        self.search_fill(self, after, to_end, &mut Vec::new(), &mut seen)
+    }
+
+    /// Whether what comes after fits from here, and ends the content where `to_end` asks it to.
+    fn fits(&self, after: &After<'_>, to_end: bool) -> Result<bool> {
+        let finished = match after {
+            After::Children(fragment, start) => {
+                self.match_fragment_range(fragment, *start, fragment.child_count())?
+            }
+            After::Node(node_type) => self.match_type(node_type),
+        };
+        Ok(finished.is_some_and(|finished| !to_end || finished.valid_end()))
     }
 
     /// A node of the type, filled, as `fillBefore` makes each node it inserts.
@@ -291,14 +328,12 @@ impl<'s> ContentMatch<'s> {
     fn search_fill(
         &self,
         current: &ContentMatch<'s>,
-        after: &Fragment,
+        after: &After<'_>,
         to_end: bool,
-        start_index: usize,
         types: &mut Vec<usize>,
         seen: &mut [bool],
     ) -> Result<Option<Fragment<'static>>> {
-        let finished = current.match_fragment_range(after, start_index, after.child_count())?;
-        if finished.is_some_and(|finished| !to_end || finished.valid_end()) {
+        if current.fits(after, to_end)? {
             let nodes = types
                 .iter()
                 .map(|&node| self.generate(node))
@@ -311,7 +346,7 @@ impl<'s> ContentMatch<'s> {
                 seen[next] = true;
                 types.push(node);
                 let found = stack::grow(|| {
-                    self.search_fill(&current.at(next), after, to_end, start_index, types, seen)
+                    self.search_fill(&current.at(next), after, to_end, types, seen)
                 })?;
                 types.pop();
                 if found.is_some() {
@@ -327,6 +362,14 @@ impl<'s> ContentMatch<'s> {
     pub fn find_wrapping(&self, target: &NodeType) -> Option<Vec<NodeType<'s>>> {
         if target.schema != self.schema {
             return None;
+        }
+        if self
+            .state()
+            .next
+            .iter()
+            .any(|&(node, _)| node == target.index)
+        {
+            return Some(Vec::new());
         }
         let key = (self.state, target.index);
         let cached = self

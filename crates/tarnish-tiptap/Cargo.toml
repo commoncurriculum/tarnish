@@ -1,0 +1,17 @@
+[package]
+name = "tarnish-tiptap"
+version = "0.1.0"
+description = "Tiptap on servers: extensions, getSchema, @tiptap/html's conversions and @tiptap/markdown's MarkdownManager, on tarnish"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+indexmap = "2"
+memchr = "2"
+rustc-hash = "2"
+tarnish = { path = "../tarnish", version = "0.1.0" }
+tarnish-html = { path = "../tarnish-html", version = "0.1.0" }
+tarnish-js = { path = "../tarnish-js", version = "0.1.0", features = ["regexp", "collation"] }
+tarnish-markdown = { path = "../tarnish-markdown", version = "0.1.0" }

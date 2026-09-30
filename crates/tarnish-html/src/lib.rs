@@ -2,9 +2,10 @@
 //! documents, and write documents as HTML, as ProseMirror does in a DOM that follows the
 //! standards.
 //!
-//! [`HtmlDom`] parses HTML with html5ever, which follows the HTML standard's parsing algorithm,
-//! and writes it as the standard's `innerHTML` and `outerHTML` do. Elements match CSS
-//! selectors with servo's `selectors`, and hold their inline style in tarnish-css.
+//! [`HtmlDom`] parses HTML with html5gum's tokenizer and html5ever's tree builder, which follow
+//! the HTML standard's parsing algorithm, and writes it as the standard's `innerHTML` and
+//! `outerHTML` do. Elements match CSS selectors with servo's `selectors`, and hold their inline
+//! style in tarnish-css.
 //!
 //! [`parse_html`] parses with a DOM of its own. To parse a whole document, or hand a parser a
 //! node, make the DOM with [`HtmlDom::parse_document`] or [`HtmlDom::parse_fragment`] and pass
@@ -61,11 +62,13 @@
 #![forbid(unsafe_code)]
 
 mod dom;
+mod element;
 mod interface;
 pub mod names;
 mod parse;
 mod select;
 pub mod serialize;
+mod style;
 mod tree;
 mod write;
 

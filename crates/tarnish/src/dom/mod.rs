@@ -36,6 +36,8 @@ pub trait Dom {
     fn kind(&self, node: &Self::Node) -> Result<NodeKind>;
     /// `nodeName`: an HTML element's tag name in upper case, `#text` for text.
     fn node_name(&self, node: &Self::Node) -> Result<String>;
+    /// `localName`: an element's name without its prefix, and `None` for any other node.
+    fn local_name(&self, node: &Self::Node) -> Result<Option<String>>;
     /// A text node's text.
     fn text(&self, node: &Self::Node) -> Result<Text>;
     fn namespace(&self, node: &Self::Node) -> Result<Option<String>>;

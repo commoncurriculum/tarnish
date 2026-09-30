@@ -574,6 +574,27 @@ impl<'a> Chunk<'a> {
         (self.span(STRINGS, start, len), value)
     }
 
+    /// The value of the entry keyed `key` among the entries of object `parent`, `len` of them
+    /// from `start`.
+    pub(crate) fn find_entry(&self, parent: u32, start: u32, len: u32, key: &[u8]) -> Option<u32> {
+        let entries = self.span(ENTRIES, start, len);
+        entries
+            .as_chunks::<{ WIDTHS[ENTRIES] }>()
+            .0
+            .iter()
+            .find_map(|entry| {
+                let (key_start, key_len) = (word(entry, 0), word(entry, 4));
+                if key_len as usize != key.len() || self.span(STRINGS, key_start, key_len) != key {
+                    return None;
+                }
+                let value = word(entry, 8);
+                if value >= parent {
+                    corrupt();
+                }
+                Some(value)
+            })
+    }
+
     #[inline]
     pub(crate) fn string(&self, start: u32, len: u32) -> &str {
         std::str::from_utf8(self.span(STRINGS, start, len)).unwrap_or_else(|_| corrupt())

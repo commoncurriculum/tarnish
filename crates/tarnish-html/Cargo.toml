@@ -10,7 +10,10 @@ repository.workspace = true
 [dependencies]
 cssparser = "0.37"
 html5ever = "0.40"
+html5gum = { version = "0.8", default-features = false }
+memchr = "2"
 precomputed-hash = "0.1"
+rustc-hash = "2"
 selectors = "0.40"
 tarnish = { path = "../tarnish", version = "0.1.0" }
 tarnish-css = { path = "../tarnish-css", version = "0.1.0" }

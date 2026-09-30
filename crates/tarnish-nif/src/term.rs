@@ -61,7 +61,7 @@ impl Reader {
     }
 
     /// Reads `term` into `slot`, which holds `null`: one read where it is kept isn't copied there
-    /// from the stack, which costs a lesson microseconds.
+    /// from the stack, which costs a document microseconds.
     fn read_into(&mut self, term: Term, slot: &mut Value) -> Result<(), Unread> {
         self.weigh(1)?;
         *slot = match term.get_type() {

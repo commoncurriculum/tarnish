@@ -1,7 +1,6 @@
 //! The DOM: nodes in an arena that handles share, and the `Dom` the parser and serializer
 //! read and write it through.
 
-use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -14,6 +13,7 @@ use crate::interface::interface;
 use crate::names::{self, NameKind};
 use crate::select::{self, Selectors};
 use crate::serialize;
+use crate::style;
 use crate::tree::{Attr, Data, Element, FOLLOWING, NodeId, PRECEDING, Space, Tree};
 use crate::write::Content;
 use tarnish_css::Declarations;
@@ -38,14 +38,13 @@ pub struct HtmlDom {
 
 struct Shared {
     tree: Mutex<Tree>,
-    selectors: Mutex<HashMap<String, Option<Arc<Selectors>>>>,
 }
 
 /// A node of an [`HtmlDom`]. Handles to the same node are equal.
 #[derive(Clone)]
 pub struct HtmlNode {
-    dom: HtmlDom,
-    id: NodeId,
+    pub(crate) dom: HtmlDom,
+    pub(crate) id: NodeId,
 }
 
 const DOCUMENT: NodeId = 0;
@@ -75,7 +74,6 @@ impl HtmlDom {
         HtmlDom {
             shared: Arc::new(Shared {
                 tree: Mutex::new(tree),
-                selectors: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -115,38 +113,30 @@ impl HtmlDom {
         Some(self.node(body))
     }
 
-    fn node(&self, id: NodeId) -> HtmlNode {
+    pub(crate) fn node(&self, id: NodeId) -> HtmlNode {
         HtmlNode {
             dom: self.clone(),
             id,
         }
     }
 
-    fn tree(&self) -> MutexGuard<'_, Tree> {
+    pub(crate) fn tree(&self) -> MutexGuard<'_, Tree> {
         self.shared
             .tree
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn selectors(&self, selector: &str) -> Result<Arc<Selectors>> {
-        let mut cache = self
-            .shared
-            .selectors
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        let parsed = match cache.get(selector) {
-            Some(parsed) => parsed.clone(),
-            None => {
-                let parsed = select::parse(selector).map(Arc::new);
-                cache.insert(selector.to_owned(), parsed.clone());
-                parsed
-            }
-        };
-        parsed.ok_or_else(|| Error::Syntax(format!("'{selector}' is not a valid selector")))
+    pub(crate) fn selectors(&self, selector: &str) -> Result<Arc<Selectors>> {
+        select::parsed(selector)
+            .ok_or_else(|| Error::Syntax(format!("'{selector}' is not a valid selector")))
     }
 
     /// The node's id, when it is one of this DOM's.
+    pub(crate) fn own_id(&self, node: &HtmlNode) -> Result<NodeId> {
+        self.own(node)
+    }
+
     fn own(&self, node: &HtmlNode) -> Result<NodeId> {
         match Arc::ptr_eq(&self.shared, &node.dom.shared) {
             true => Ok(node.id),
@@ -177,7 +167,8 @@ impl HtmlDom {
             .map_or_else(|_| href.to_owned(), String::from)
     }
 
-    /// Run `read` on the element's inline style, when it can have one.
+    /// Run `read` on the element's inline style, or give `none` when it has none: it can't have
+    /// one, or it has no `style` attribute, which declares nothing.
     fn with_style<T>(node: &HtmlNode, read: impl FnOnce(&Declarations) -> T, none: T) -> T {
         let mut tree = node.dom.tree();
         let Some(element) = tree
@@ -188,11 +179,13 @@ impl HtmlDom {
         };
         let style = match element.style {
             Some(ref style) => style,
-            None => {
-                let css = element.attr_ns(&ns!(), &local_name!("style"));
-                let style = Declarations::parse(css.map_or("", |attr| &attr.value));
-                element.style.insert(style)
-            }
+            None => match element.attr_ns(&ns!(), &local_name!("style")) {
+                Some(css) => {
+                    let style = style::declarations(&css.value);
+                    element.style.insert(style)
+                }
+                None => return none,
+            },
         };
         read(style)
     }
@@ -258,7 +251,9 @@ impl HtmlNode {
 
     /// `hasAttribute`.
     pub fn has_attribute(&self, name: &str) -> bool {
-        self.attribute(name).is_some()
+        let tree = self.dom.tree();
+        tree.element(self.id)
+            .is_some_and(|element| element.attribute(name).is_some())
     }
 
     /// `style.getPropertyValue(property)`: the value the inline style gives the property, empty
@@ -290,7 +285,9 @@ impl fmt::Debug for HtmlNode {
 fn node_name(tree: &Tree, id: NodeId) -> String {
     match &tree.node(id).data {
         Data::Element(element) if element.is_html() => {
-            element.qualified_name().to_ascii_uppercase()
+            let mut name = element.qualified_name();
+            name.make_ascii_uppercase();
+            name
         }
         Data::Element(element) => element.qualified_name(),
         Data::Text(_) => "#text".into(),
@@ -328,6 +325,10 @@ impl Dom for HtmlDom {
         Ok(node.node_name())
     }
 
+    fn local_name(&self, node: &HtmlNode) -> Result<Option<String>> {
+        Ok(node.local_name())
+    }
+
     fn text(&self, node: &HtmlNode) -> Result<Text> {
         Ok(match &node.dom.tree().node(node.id).data {
             Data::Text(text) | Data::Comment(text) => Text::from(text.as_str()),
@@ -340,7 +341,7 @@ impl Dom for HtmlDom {
         let namespace = tree.element(node.id).map(|element| &element.name.ns);
         Ok(namespace
             .filter(|namespace| **namespace != ns!())
-            .map(|namespace| namespace.to_string()))
+            .map(|namespace| String::from(&**namespace)))
     }
 
     fn parent(&self, node: &HtmlNode) -> Result<Option<HtmlNode>> {
@@ -369,6 +370,12 @@ impl Dom for HtmlDom {
     }
 
     fn matches(&self, node: &HtmlNode, selector: &str) -> Result<bool> {
+        if select::is_lower_type_selector(selector) {
+            let tree = node.dom.tree();
+            return Ok(tree
+                .element(node.id)
+                .is_some_and(|element| &*element.name.local == selector));
+        }
         let selectors = node.dom.selectors(selector)?;
         Ok(select::matches(
             &node.dom.tree(),
@@ -507,7 +514,7 @@ impl Dom for HtmlDom {
                 let existing = element
                     .attrs
                     .iter_mut()
-                    .find(|attr| crate::tree::qualified(&attr.name) == name);
+                    .find(|attr| crate::tree::is_qualified(&attr.name, &name, false));
                 match existing {
                     Some(attr) => attr.value = value,
                     None => element.attrs.push(Attr {
@@ -533,10 +540,10 @@ impl Dom for HtmlDom {
             return Ok(false);
         }
         // The attribute gets the declarations kept, not the text given.
-        let style = Declarations::parse(&js::to_string(css)?);
+        let css = js::to_string(css)?;
         let name = QualName::new(None, ns!(), local_name!("style"));
-        element.set_attr_ns(name, style.css_text());
-        element.style = Some(style);
+        element.set_attr_ns(name, style::css_text(&css).to_string());
+        element.style = Some(style::declarations(&css));
         Ok(true)
     }
 

@@ -109,8 +109,19 @@ impl<'a> Node<'a> {
         content: &Fragment<'a>,
         marks: &Marks<'a>,
     ) -> Node<'a> {
+        Node::with_attrs(node_type, |builder| builder.map(attrs), content, marks)
+    }
+
+    /// A node of this type, with the attributes `write_attrs` writes, and this content and
+    /// marks.
+    pub(crate) fn with_attrs(
+        node_type: &NodeType,
+        write_attrs: impl FnOnce(&mut Builder<'a>) -> u32,
+        content: &Fragment<'a>,
+        marks: &Marks<'a>,
+    ) -> Node<'a> {
         Node::build(node_type.schema(), |builder| {
-            let attrs = builder.map(attrs);
+            let attrs = write_attrs(builder);
             let marks = marks.write(builder);
             let (first, count, size) = content.list(builder);
             builder.element(node_type.index() as u16, marks, attrs, first, count, size)

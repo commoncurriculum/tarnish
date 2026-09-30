@@ -108,8 +108,13 @@ impl<'c> ValueRef<'c> {
         (self.chunk.bytes().as_ptr() as usize, self.index)
     }
 
+    /// The value's tag, read without its contents.
+    fn tag(self) -> Tag {
+        Tag::from_word(self.chunk.value(self.index).0)
+    }
+
     pub fn is_null(self) -> bool {
-        matches!(self.kind(), Kind::Null)
+        self.tag() == Tag::Null
     }
 
     pub fn as_str(self) -> Option<&'c str> {
@@ -142,18 +147,30 @@ impl<'c> ValueRef<'c> {
         JsonView::truthy(self)
     }
 
+    /// `Number(value)`.
+    pub fn to_number(self) -> crate::Result<f64> {
+        Ok(match self.kind() {
+            Kind::Null => 0.0,
+            Kind::Bool(boolean) => f64::from(u8::from(boolean)),
+            Kind::Number(number) => number.as_f64().unwrap_or(f64::NAN),
+            Kind::String(string) => crate::js::string_to_number(string),
+            Kind::Array(_) | Kind::Object(_) => crate::js::string_to_number(&self.to_js_string()?),
+        })
+    }
+
     pub fn is_object(self) -> bool {
-        matches!(self.kind(), Kind::Object(..))
+        self.tag() == Tag::Object
     }
 
     pub fn is_array(self) -> bool {
-        matches!(self.kind(), Kind::Array(..))
+        self.tag() == Tag::Array
     }
 
     /// An array's or object's number of items, and 0 for anything else.
     pub fn len(self) -> usize {
-        match self.kind() {
-            Kind::Array(len) | Kind::Object(len) => len as usize,
+        let (tag, _, len) = self.chunk.value(self.index);
+        match Tag::from_word(tag) {
+            Tag::Array | Tag::Object => len as usize,
             _ => 0,
         }
     }
@@ -209,9 +226,14 @@ impl<'c> ValueRef<'c> {
 
     /// An object's value for `key`.
     pub fn get(self, key: &str) -> Option<ValueRef<'c>> {
-        self.entries_bytes()
-            .find(|(name, _)| *name == key.as_bytes())
-            .map(|(_, value)| value)
+        let (start, len) = self.span(Tag::Object);
+        let index = self
+            .chunk
+            .find_entry(self.index, start, len, key.as_bytes())?;
+        Some(ValueRef {
+            chunk: self.chunk,
+            index,
+        })
     }
 
     pub fn to_value(self) -> Value {

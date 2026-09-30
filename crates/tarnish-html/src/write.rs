@@ -5,7 +5,6 @@
 use tarnish::chunk::ValueRef;
 use tarnish::dom::{DomSpec, SpecAttrs, Target, is_hole, render_spec_of};
 use tarnish::{Error, Result, TextRef};
-use tarnish_css::Declarations;
 
 use crate::dom::{HtmlDom, HtmlNode};
 use crate::names::NameKind;
@@ -129,15 +128,22 @@ impl HtmlWriter {
         mark: bool,
     ) -> Result<Option<Parent>> {
         // A mark whose spec is text puts its content in a text node, which the DOM refuses.
-        let text = matches!(spec, DomSpec::Text(_) | DomSpec::Attr(_));
-        if !direct(&spec) || (mark && text) {
+        if mark && matches!(spec, DomSpec::Text(_) | DomSpec::Attr(_)) {
             return self.render_in_dom(spec, attrs, mark);
         }
         let mut out = std::mem::take(self.sink());
-        let tail = self.tails.len();
+        let (written, tail) = (out.len(), self.tails.len());
         let hole = write_spec(&mut out, &mut self.tails, &spec, self.content, mark);
+        if let Err(Stop::InDom) = hole {
+            out.truncate(written);
+            self.tails.truncate(tail);
+        }
         *self.sink() = out;
-        Ok(hole?.map(|inner| self.open(tail, inner)))
+        match hole {
+            Ok(hole) => Ok(hole.map(|inner| self.open(tail, inner))),
+            Err(Stop::InDom) => self.render_in_dom(spec, attrs, mark),
+            Err(Stop::Error(error)) => Err(error),
+        }
     }
 
     fn render_in_dom(
@@ -216,54 +222,55 @@ impl Target<HtmlNode> for HtmlWriter {
     }
 }
 
-/// Whether the spec's elements are ones [`write_spec`] writes as the DOM would: HTML elements
-/// whose names and attribute names are valid and in lower case.
-fn direct(spec: &DomSpec<'_, HtmlNode>) -> bool {
-    match spec {
-        DomSpec::Text(_) | DomSpec::Hole => true,
-        DomSpec::Attr(value) => value.as_str().is_some() || value.as_f64() == Some(0.0),
-        DomSpec::Wrapping { tag, attrs } => plain(tag, attrs),
-        DomSpec::Element {
-            tag,
-            attrs,
-            children,
-        } => {
-            plain(tag, attrs)
-                && children
-                    .iter()
-                    .all(|child| tarnish::js::stack::grow(|| direct(child)))
-        }
-        DomSpec::Node(_) | DomSpec::Rendered(_) | DomSpec::Array { .. } | DomSpec::Value(_) => {
-            false
-        }
+/// Why [`write_spec`] stopped: the spec holds something it doesn't write as the DOM would, for
+/// the spec to be rendered in a DOM instead, or rendering it failed.
+enum Stop {
+    InDom,
+    Error(Error),
+}
+
+impl From<Error> for Stop {
+    fn from(error: Error) -> Stop {
+        Stop::Error(error)
     }
 }
 
-fn plain(tag: &str, attrs: &SpecAttrs) -> bool {
-    lower_name(tag, NameKind::Element)
-        && attrs
-            .iter()
-            .all(|(name, _)| lower_name(name, NameKind::Attribute))
+/// The bytes of a name the DOM keeps as it is, whatever their place.
+const PLAIN: [bool; 256] = {
+    let mut plain = [false; 256];
+    let mut byte = 0;
+    while byte < 256 {
+        plain[byte] = matches!(byte as u8, b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b':');
+        byte += 1;
+    }
+    plain
+};
+
+/// Whether the DOM would make an element or attribute of this name with the name as it is: a
+/// name of lower-case ASCII letters, digits and `-_.:`, an element's starting with a letter,
+/// which is valid and which nothing lower-cases. Other names go through the DOM.
+fn plain_name(name: &str, kind: NameKind) -> bool {
+    let bytes = name.as_bytes();
+    let starts = match kind {
+        NameKind::Element => bytes.first().is_some_and(u8::is_ascii_lowercase),
+        NameKind::Attribute => !bytes.is_empty(),
+    };
+    starts && bytes.iter().all(|&byte| PLAIN[byte as usize])
 }
 
-fn lower_name(name: &str, kind: NameKind) -> bool {
-    !name
-        .bytes()
-        .any(|byte| byte.is_ascii_uppercase() || byte == b' ')
-        && kind.is_valid(name)
-}
-
-/// Writes a spec [`direct`] allows, as `renderSpec` would build it and `innerHTML` write it:
-/// up to where its content goes to `out`, and what follows the content onto `tails`. Gives how
-/// content shows where it goes: where the spec has a hole, or for a mark's element without one,
-/// at its end.
+/// Writes a spec as `renderSpec` would build it and `innerHTML` write it: up to where its
+/// content goes to `out`, and what follows the content onto `tails`. Gives how content shows
+/// where it goes: where the spec has a hole, or for a mark's element without one, at its end.
+/// It writes HTML elements with valid names in lower case, text and holes, and stops at
+/// anything else, which goes through the DOM, in the order the DOM would make it, so that a
+/// spec fails as the DOM fails it.
 fn write_spec(
     out: &mut String,
     tails: &mut String,
     spec: &DomSpec<'_, HtmlNode>,
     content: Content,
     mark: bool,
-) -> Result<Option<Content>> {
+) -> Result<Option<Content>, Stop> {
     let (tag, attrs, children) = match spec {
         DomSpec::Text(text) => {
             write_text(out, text, content);
@@ -272,7 +279,7 @@ fn write_spec(
         DomSpec::Attr(value) => {
             match value.as_str() {
                 Some(text) => write_text(out, text, content),
-                None => return Err(invalid()),
+                None => return Err(Stop::InDom),
             }
             return Ok(None);
         }
@@ -286,7 +293,11 @@ fn write_spec(
             attrs,
             children,
         } => (*tag, attrs, children),
-        _ => return Err(invalid()),
+        DomSpec::Hole
+        | DomSpec::Node(_)
+        | DomSpec::Rendered(_)
+        | DomSpec::Array { .. }
+        | DomSpec::Value(_) => return Err(Stop::InDom),
     };
     write_start(out, tag, attrs)?;
     let inner = Content::of_html(tag);
@@ -301,9 +312,9 @@ fn write_spec(
     for child in children {
         if is_hole(child) {
             if children.len() > 1 {
-                return Err(tarnish::Error::Range(
+                return Err(Stop::Error(Error::Range(
                     "Content hole must be the only child of its parent node".into(),
-                ));
+                )));
             }
             hole = Some(inner);
             break;
@@ -316,7 +327,7 @@ fn write_spec(
                     write_spec(&mut after, &mut String::new(), child, inner, false)
                 })?;
                 if written.is_some() {
-                    return Err(tarnish::Error::Range("Multiple content holes".into()));
+                    return Err(Stop::Error(Error::Range("Multiple content holes".into())));
                 }
                 body_tails.push_str(&after);
             }
@@ -338,10 +349,6 @@ fn write_spec(
     Ok(hole)
 }
 
-fn invalid() -> tarnish::Error {
-    tarnish::Error::Range("Invalid array passed to renderSpec".into())
-}
-
 fn write_text(out: &mut String, text: &str, content: Content) {
     match content {
         Content::Raw => out.push_str(text),
@@ -351,19 +358,25 @@ fn write_text(out: &mut String, text: &str, content: Content) {
 
 /// The start tag of an HTML element with the spec's attributes that aren't null, in order:
 /// `style` as the CSS engine keeps its declarations, as `style.cssText` sets it.
-fn write_start(out: &mut String, tag: &str, attrs: &SpecAttrs) -> Result<()> {
+fn write_start(out: &mut String, tag: &str, attrs: &SpecAttrs) -> Result<(), Stop> {
+    if !plain_name(tag, NameKind::Element) {
+        return Err(Stop::InDom);
+    }
     out.push('<');
     out.push_str(tag);
     for (name, value) in attrs.iter() {
         if value.is_null() {
             continue;
         }
+        if !plain_name(name, NameKind::Attribute) {
+            return Err(Stop::InDom);
+        }
         out.push(' ');
         out.push_str(name);
         out.push_str("=\"");
         let value = value.to_js_string()?;
         match *name {
-            "style" => escape_attribute(out, &Declarations::parse(&value).css_text()),
+            "style" => escape_attribute(out, &crate::style::css_text(&value)),
             _ => escape_attribute(out, &value),
         }
         out.push('"');

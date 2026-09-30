@@ -483,6 +483,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "html5gum"
+version = "0.8.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "428502d3ec1742c35e015871aef742bc4722a9acfcb616b8ff79b519922e1c36"
+
+[[package]]
 name = "icu_collator"
 version = "2.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1805,6 +1811,7 @@ name = "tarnish"
 version = "0.1.0"
 dependencies = [
  "mimalloc",
+ "rustc-hash",
  "tarnish-js",
 ]
 
@@ -1842,7 +1849,10 @@ version = "0.1.0"
 dependencies = [
  "cssparser",
  "html5ever",
+ "html5gum",
+ "memchr",
  "precomputed-hash",
+ "rustc-hash",
  "selectors",
  "tarnish",
  "tarnish-css",
@@ -1889,6 +1899,27 @@ dependencies = [
  "napi-build",
  "napi-derive",
  "tarnish",
+]
+
+[[package]]
+name = "tarnish-tiptap"
+version = "0.1.0"
+dependencies = [
+ "indexmap",
+ "memchr",
+ "rustc-hash",
+ "tarnish",
+ "tarnish-html",
+ "tarnish-js",
+ "tarnish-markdown",
+]
+
+[[package]]
+name = "tarnish-zod"
+version = "0.1.0"
+dependencies = [
+ "tarnish",
+ "tarnish-js",
 ]
 
 [[package]]

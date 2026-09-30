@@ -360,7 +360,7 @@ impl<'a, 'r> Json<'a, 'r> {
                 false => drop(object.insert(Key::from(key), value)),
             }
         }
-        object
+        object.into_js_order()
     }
 
     /// A list's items, the list being proper.

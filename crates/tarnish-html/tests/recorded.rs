@@ -62,17 +62,14 @@ fn outcome(result: Result<Value>) -> Value {
     }
 }
 
-/// A recorded outcome as tarnish gives it: a `DOMException` is an `Error` whose message starts
-/// with the exception's name.
+/// A recorded outcome as tarnish gives it: a `DOMException` as an error of the class its name
+/// names.
 fn expected(recorded: &Value) -> Value {
     let Some(error) = recorded.get("error") else {
         return recorded.clone();
     };
-    let message = error["message"].as_str().expect("a message");
-    match error.get("name").and_then(Value::as_str) {
-        Some(name) => {
-            json::json!({"error": {"class": "Error", "message": format!("{name}: {message}")}})
-        }
+    match error.get("name") {
+        Some(name) => json::json!({"error": {"class": name, "message": &error["message"]}}),
         None => json::json!({"error": error.clone()}),
     }
 }

@@ -56,9 +56,9 @@ This example is the crate's doctest, so it compiles and runs in CI.
 ### HTML, in Rust
 
 `tarnish-html` is a DOM for `DomParser` and `DomSerializer` to read and write HTML with. It
-parses HTML with html5ever and writes it as the standard's `innerHTML` does. Inline styles are
-`tarnish-css`: stylo, Servo's CSS engine, which parses, changes and writes declarations as
-Firefox does. JavaScript gets the same DOM from
+parses HTML with html5gum's tokenizer and html5ever's tree builder, and writes it as the
+standard's `innerHTML` does. Inline styles are `tarnish-css`: stylo, Servo's CSS engine, which
+parses, changes and writes declarations as Firefox does. JavaScript gets the same DOM from
 [our linkedom fork](https://github.com/commoncurriculum/linkedom), whose `element.style` is
 `tarnish-css` compiled to WebAssembly.
 
@@ -141,6 +141,42 @@ This example is `tarnish-html`'s doctest.
   - an end tag past an `<isindex>`, which html5ever still treats as special, as the standard
     did before it dropped `<isindex>`.
 
+### Tiptap, in Rust
+
+`tarnish-tiptap` is Tiptap on the server: extensions as `@tiptap/core` declares them,
+`getSchema`, `@tiptap/html`'s conversions on `tarnish-html`, and `@tiptap/markdown`'s
+`MarkdownManager` on `tarnish-markdown`, which is marked 17 and marked-more-lists. Tiptap's own
+extensions are in `tarnish_tiptap::extensions`; an application writes its own, or extends
+these, as it would in JavaScript. `tarnish-zod` checks attributes as the zod schemas an
+extension declares them with do, with zod's errors.
+
+```toml
+[dependencies]
+tarnish-markdown = { git = "https://github.com/commoncurriculum/tarnish" }
+tarnish-tiptap = { git = "https://github.com/commoncurriculum/tarnish" }
+```
+
+```rust
+use tarnish_markdown::marked::Marked;
+use tarnish_markdown::marked_more_lists::more_lists;
+use tarnish_tiptap::extensions::{bold::bold, document::document, paragraph::paragraph, text::text};
+use tarnish_tiptap::markdown::MarkdownManager;
+use tarnish_tiptap::{Extension, get_schema, html};
+
+let extensions: Vec<Extension> =
+    vec![document().into(), paragraph().into(), text().into(), bold().into()];
+let schema = get_schema(&extensions)?;
+
+let doc = html::parse(&schema, "<p>Hello <b>world</b></p>")?;
+assert_eq!(html::serialize(&schema, &doc)?, "<p>Hello <strong>world</strong></p>");
+
+let markdown = MarkdownManager::new(&extensions, Marked::new(more_lists()));
+assert_eq!(markdown.serialize(&doc.to_json())?, "Hello **world**");
+assert_eq!(markdown.parse("Hello **world**")?, doc.to_json());
+```
+
+This example is `tarnish-tiptap`'s doctest.
+
 ### Elixir
 
 ```elixir
@@ -208,12 +244,22 @@ text = Tarnish.Node.text_content(doc)
   `config :tarnish, native: MyApp.Native` has `Tarnish` call it. `Tarnish.Native` is then
   neither built nor loaded.
 
+  Its `convert/1` and `convert_light/1` are `Tarnish.Bridge`'s `:nif` backend. They check each
+  request as the worker does, with the worker's messages, and answer it with the application's
+  conversions: a `tarnish_nif::convert::Conversions`, which the load hook hands
+  `tarnish_nif::convert::serve`.
+
   ```toml
   tarnish-nif = { git = "https://github.com/commoncurriculum/tarnish" }
   ```
 
   ```rust
-  rustler::init!("Elixir.MyApp.Native", load = tarnish_nif::load);
+  fn load(env: rustler::Env, threads: rustler::Term) -> bool {
+      tarnish_nif::convert::serve(&*MY_CONVERSIONS);
+      tarnish_nif::load(env, threads)
+  }
+
+  rustler::init!("Elixir.MyApp.Native", load = load);
   ```
 
 ### C, and other languages through it
@@ -443,7 +489,9 @@ hold:
 | `crates/tarnish-html` | An HTML DOM for `DomParser` and `DomSerializer`: html5ever's parser, the standard's serialization |
 | `crates/tarnish-css`, `crates/tarnish-css-wasm` | Inline styles on stylo, and the same as WebAssembly, which `harness/css-wasm.mjs` writes into the linkedom fork |
 | `elixir/`, `crates/tarnish_elixir` | The Elixir package and the Rustler NIF behind it |
-| `crates/tarnish-nif` | The base of a NIF on tarnish: terms as JSON, budgets, a batch pool, and tarnish's functions |
+| `crates/tarnish-nif` | The base of a NIF on tarnish: terms as JSON, budgets, a batch pool, tarnish's functions, and `Tarnish.Bridge`'s conversions |
+| `crates/tarnish-tiptap` | Tiptap on the server: extensions, `getSchema`, `@tiptap/html`'s conversions and `@tiptap/markdown`'s `MarkdownManager`, with Tiptap's own extensions |
+| `crates/tarnish-zod` | The parts of zod 4 that attribute schemas use, with zod's output and errors |
 | `crates/tarnish-c` | The C library and its generated header |
 | `crates/tarnish-js` | JavaScript's values and built-ins as V8 runs them, which every crate here builds on: JSON values and `JSON`, strings as UTF-16, numbers, conversions, errors and `sort`, and as features `RegExp` on regress and `localeCompare` on ICU |
 | `crates/tarnish-markdown` | marked 17.0.6's lexer and marked-more-lists 1.0.1's list tokenizer, on `tarnish-js`. `tools/marked_rules.ts` writes marked's rules into `src/marked/rules.rs` |
