@@ -26,6 +26,8 @@ pub enum Schema {
     Default(Box<Schema>, Value),
     /// `.catch(value)`; `None` catches to `undefined`.
     Catch(Box<Schema>, Option<Value>),
+    /// `.strict()` on an object schema, for which a key its shape lacks is an issue.
+    Strict(Box<Schema>),
 }
 
 /// A zod issue: its fields before `path` and `message`, in zod's order.
@@ -39,6 +41,13 @@ pub struct Issue {
 /// Every issue of a failed parse. Its `Display` is `ZodError.message`.
 #[derive(Debug)]
 pub struct Issues(Vec<Issue>);
+
+impl Issues {
+    /// `error.issues[0].message`.
+    pub fn first_message(&self) -> &str {
+        &self.0[0].message
+    }
+}
 
 impl std::fmt::Display for Issues {
     fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -101,6 +110,16 @@ impl Schema {
 
     pub fn catch(self, value: Option<Value>) -> Schema {
         Schema::Catch(Box::new(self), value)
+    }
+
+    /// `schema.strict()`, for an object schema. Only `parse` reads it: the other parses read the
+    /// object by key.
+    pub fn strict(self) -> Schema {
+        assert!(
+            matches!(self, Schema::Object(_)),
+            "only an object schema is strict"
+        );
+        Schema::Strict(Box::new(self))
     }
 
     /// `schema.shape[key]`, for an object schema.
@@ -277,6 +296,23 @@ impl Schema {
                 } else {
                     caught.as_ref().map(Cow::Borrowed)
                 }
+            }
+            Schema::Strict(object) => {
+                let Schema::Object(shape) = &**object else {
+                    panic!("only an object schema is strict");
+                };
+                let parsed = object.run(value, path, issues);
+                if let Some(Value::Object(entries)) = value {
+                    let unrecognized: Vec<&str> = entries
+                        .keys()
+                        .map(|key| key.as_ref())
+                        .filter(|key| shape.iter().all(|(name, _)| name != key))
+                        .collect();
+                    if !unrecognized.is_empty() {
+                        issues.add(|| unrecognized_keys(&unrecognized, path));
+                    }
+                }
+                parsed
             }
             Schema::String => check_type(value, "string", Value::is_string, path, issues),
             Schema::Boolean => check_type(value, "boolean", Value::is_boolean, path, issues),
@@ -516,6 +552,19 @@ fn check_type<'v>(
     }
 }
 
+fn unrecognized_keys(keys: &[&str], path: &Path) -> Issue {
+    let listed = keys
+        .iter()
+        .map(|key| format!("\"{key}\""))
+        .collect::<Vec<_>>();
+    let plural = if keys.len() > 1 { "s" } else { "" };
+    Issue {
+        fields: vec![("code", json!("unrecognized_keys")), ("keys", json!(keys))],
+        path: path_values(path),
+        message: format!("Unrecognized key{plural}: {}", listed.join(", ")),
+    }
+}
+
 fn type_issue<'v>(
     value: Option<&Value>,
     expected: &str,
@@ -610,7 +659,7 @@ fn path_values(path: &Path) -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::Schema;
-    use tarnish::json::json;
+    use tarnish::json::{Value, json};
 
     #[test]
     fn copies_an_array_from_the_first_item_that_changes() {
@@ -674,6 +723,44 @@ mod tests {
             ("d", Schema::Int),
         ]);
         assert_eq!(extended, expected);
+    }
+
+    #[test]
+    fn a_strict_object_refuses_the_keys_its_shape_lacks_after_its_fields() {
+        let schema = Schema::Object(vec![("flag", Schema::Boolean.optional())]).strict();
+        let first = |value: Value| {
+            schema
+                .parse(Some(&value))
+                .unwrap_err()
+                .first_message()
+                .to_string()
+        };
+        assert_eq!(
+            schema.parse(Some(&json!({"flag": true}))).unwrap(),
+            Some(json!({"flag": true}))
+        );
+        assert_eq!(
+            first(json!({"flag": true, "a": 1})),
+            "Unrecognized key: \"a\""
+        );
+        assert_eq!(
+            first(json!({"a": 1, "b": 2})),
+            "Unrecognized keys: \"a\", \"b\""
+        );
+        assert_eq!(
+            first(json!({"flag": 1, "a": 1})),
+            "Invalid input: expected boolean, received number"
+        );
+        assert_eq!(
+            first(json!(null)),
+            "Invalid input: expected object, received null"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "only an object schema is strict")]
+    fn makes_only_an_object_schema_strict() {
+        Schema::Object(Vec::new()).optional().strict();
     }
 
     #[test]

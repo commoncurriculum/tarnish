@@ -84,7 +84,7 @@ defmodule Tarnish.Bridge do
     result
   end
 
-  # A worker refuses options for the HTML conversions, so empty options are left out.
+  # Empty options are no options, which a conversion that takes none accepts.
   defp without_empty_options({operation, input, options}) when options in [nil, %{}],
     do: {operation, input}
 
