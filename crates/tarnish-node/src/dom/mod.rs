@@ -130,6 +130,10 @@ impl Dom for JsDom<'_> {
         js::host(|env| String::from_unknown(node.get(env, "nodeName")?))
     }
 
+    fn local_name(&self, node: &JsNode) -> tarnish::Result<Option<String>> {
+        js::host(|env| js::get_string(&node.object(env)?, "localName"))
+    }
+
     fn text(&self, node: &JsNode) -> tarnish::Result<Text> {
         js::host(|env| js::text_from_js(node.get(env, "nodeValue")?))
     }

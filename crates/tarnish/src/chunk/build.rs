@@ -2,9 +2,10 @@
 //! parents, and sealing packs them behind a header.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::hash::BuildHasher;
 use std::sync::Arc;
+
+use rustc_hash::FxHashMap;
 
 use super::value::{JsonView, Kind, Tag};
 use super::{
@@ -31,11 +32,13 @@ pub(crate) struct Builder<'a> {
 struct Scratch {
     sections: [Vec<u8>; SECTIONS],
     /// Each import's slot, by the address of its chunk, once there are too many to search.
-    import_slots: HashMap<usize, u32>,
+    import_slots: FxHashMap<usize, u32>,
     /// Keys written to `strings`, to write each once.
     keys: Vec<(u32, u32)>,
     /// Each node type's default attributes, once written.
     defaults: Vec<Option<u32>>,
+    /// The keys of each type's attributes, by their slot, once written.
+    attr_keys: Vec<Vec<(u32, u32)>>,
     /// Each mark type's mark with its defaults, and the set of just that mark, once written.
     instances: Vec<Option<(u32, u32)>>,
     /// Items of the arrays and objects being written, the innermost's last.
@@ -70,6 +73,7 @@ fn recycle(mut scratch: Box<Scratch>) {
     scratch.import_slots.clear();
     scratch.keys.clear();
     scratch.defaults.clear();
+    scratch.attr_keys.clear();
     scratch.instances.clear();
     scratch.items.clear();
     scratch.entries.clear();
@@ -94,6 +98,11 @@ impl<'a> Builder<'a> {
         let empty_object = builder.push_value(Tag::Object, 0, 0);
         debug_assert_eq!((empty_set, empty_object), (EMPTY_SET, EMPTY_OBJECT));
         builder
+    }
+
+    /// The schema of the nodes it writes.
+    pub fn schema(&self) -> &Schema {
+        &self.schema
     }
 
     fn push(&mut self, section: usize, bytes: &[u8]) -> u32 {
@@ -357,6 +366,39 @@ impl<'a> Builder<'a> {
             let (start, len) = self.key(key);
             self.scratch.entries.push((start, len, value));
         }
+        self.entries_from(base)
+    }
+
+    /// An object of a type's attributes that have values: `names` are the type's attributes,
+    /// and `values` each one's value. `slot` names the type's attributes, whose keys are
+    /// written once.
+    pub(crate) fn attrs<'k, 'v, V: JsonView<'v>>(
+        &mut self,
+        slot: usize,
+        names: impl Iterator<Item = &'k str>,
+        values: impl Iterator<Item = Option<V>>,
+    ) -> u32 {
+        if self.scratch.attr_keys.len() <= slot {
+            self.scratch.attr_keys.resize_with(slot + 1, Vec::new);
+        }
+        if self.scratch.attr_keys[slot].is_empty() {
+            let keys = names.map(|name| self.key(name)).collect();
+            self.scratch.attr_keys[slot] = keys;
+        }
+        let base = self.scratch.entries.len();
+        for (index, value) in values.enumerate() {
+            let Some(value) = value else {
+                continue;
+            };
+            let value = self.write(value);
+            let (start, len) = self.scratch.attr_keys[slot][index];
+            self.scratch.entries.push((start, len, value));
+        }
+        self.entries_from(base)
+    }
+
+    /// An object of the entries pushed from `base` on.
+    fn entries_from(&mut self, base: usize) -> u32 {
         let start = self.counts[ENTRIES];
         let len = (self.scratch.entries.len() - base) as u32;
         let mut bytes = std::mem::take(&mut self.scratch.sections[ENTRIES]);
@@ -368,11 +410,6 @@ impl<'a> Builder<'a> {
         self.scratch.sections[ENTRIES] = bytes;
         self.counts[ENTRIES] += len;
         self.push_value(Tag::Object, start, len)
-    }
-
-    /// An object of these entries, each a key and a value written before.
-    pub fn object_of<'k>(&mut self, entries: impl IntoIterator<Item = (&'k str, u32)>) -> u32 {
-        self.object(entries, |_, value| value)
     }
 
     /// The value of a node type's default attributes, written once.

@@ -105,15 +105,20 @@ impl<'a> Marks<'a> {
             return Marks::default();
         };
         let mut builder = Builder::new(first.chunk.schema());
-        let members: Vec<u32> = marks
-            .iter()
-            .map(|mark| builder.external(&mark.chunk, mark.index))
-            .collect();
-        let set = builder.set(&members);
+        let set = Marks::write_list(&mut builder, marks);
         Marks {
             chunk: Some(builder.seal()),
             set,
         }
+    }
+
+    /// Writes a set of these marks, in this order, into a chunk being built: a ref to it.
+    pub(crate) fn write_list(builder: &mut Builder<'a>, marks: &[Mark<'a>]) -> u32 {
+        let members: Vec<u32> = marks
+            .iter()
+            .map(|mark| builder.external(&mark.chunk, mark.index))
+            .collect();
+        builder.set(&members)
     }
 
     /// Writes a ref to this set into a chunk being built.

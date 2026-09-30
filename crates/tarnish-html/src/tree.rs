@@ -1,5 +1,7 @@
 //! The arena a DOM's nodes live in, linked to each other by index.
 
+use std::sync::Arc;
+
 use html5ever::{LocalName, Namespace, QualName, ns};
 use tarnish_css::Declarations;
 
@@ -38,7 +40,7 @@ pub(crate) struct Element {
     pub(crate) template_contents: Option<NodeId>,
     pub(crate) integration_point: bool,
     /// The declarations of the `style` attribute, read when first asked for.
-    pub(crate) style: Option<Declarations>,
+    pub(crate) style: Option<Arc<Declarations>>,
 }
 
 pub(crate) struct Attr {
@@ -102,11 +104,11 @@ impl Element {
     /// `getAttribute`: the first attribute of this qualified name, lower-cased on an HTML
     /// element.
     pub(crate) fn attribute(&self, name: &str) -> Option<&str> {
-        let name = match self.is_html() {
-            true => name.to_ascii_lowercase(),
-            false => name.to_owned(),
-        };
-        let attr = self.attrs.iter().find(|attr| qualified(&attr.name) == name);
+        let lower = self.is_html();
+        let attr = self
+            .attrs
+            .iter()
+            .find(|attr| is_qualified(&attr.name, name, lower));
         attr.map(|attr| attr.value.as_str())
     }
 }
@@ -114,7 +116,29 @@ impl Element {
 pub(crate) fn qualified(name: &QualName) -> String {
     match &name.prefix {
         Some(prefix) => format!("{prefix}:{}", name.local),
-        None => name.local.to_string(),
+        None => String::from(&*name.local),
+    }
+}
+
+/// Whether `name`, in lower case when `lower`, is `qualified`'s qualified name.
+pub(crate) fn is_qualified(qualified: &QualName, name: &str, lower: bool) -> bool {
+    let same = |part: &[u8], of: &[u8]| {
+        part.len() == of.len()
+            && part.iter().zip(of).all(|(&part, &of)| match lower {
+                true => part == of.to_ascii_lowercase(),
+                false => part == of,
+            })
+    };
+    let (name, local) = (name.as_bytes(), qualified.local.as_bytes());
+    match &qualified.prefix {
+        None => same(local, name),
+        Some(prefix) => {
+            let prefix = prefix.as_bytes();
+            name.len() == prefix.len() + 1 + local.len()
+                && same(prefix, &name[..prefix.len()])
+                && name[prefix.len()] == b':'
+                && same(local, &name[prefix.len() + 1..])
+        }
     }
 }
 

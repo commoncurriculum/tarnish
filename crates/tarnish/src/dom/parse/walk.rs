@@ -3,17 +3,18 @@
 use std::borrow::Cow;
 
 use super::Matched;
-use super::context::ParseContext;
+use super::context::{Inserted, ParseContext};
 use super::html::{
     BLOCK_TAGS, IGNORE_TAGS, collapse_spaces, has_non_space, is_html_space, is_list_tag,
     normalize_list,
 };
+use super::node_context::Item;
 use super::rule::{Content, ContentElement, ElementRule, PreserveWhitespace, Skip};
 use crate::dom::{Dom, NodeKind};
 use crate::js::stack;
 use crate::js::text::{Text, is_blank, line_breaks, replace_line_breaks, split_lines};
 use crate::js::{self, value::Nullish};
-use crate::model::{Fragment, Mark, MarkType, Node, NodeType};
+use crate::model::{Mark, MarkType, NodeType};
 use crate::{Error, Result};
 
 /// A text to add: a DOM text node's, or the newline a `<br>` stands for.
@@ -24,6 +25,7 @@ struct TextSource<'n, N> {
 
 impl<'p, D: Dom> ParseContext<'p, D> {
     fn add_dom(&mut self, node: &D::Node, marks: &[Mark<'static>]) -> Result<()> {
+        self.deadline.turn(marks.len() + self.open)?;
         match self.dom.kind(node)? {
             NodeKind::Text => {
                 let value = self.dom.text(node)?;
@@ -76,19 +78,16 @@ impl<'p, D: Dom> ParseContext<'p, D> {
             PreserveWhitespace::Yes => match schema.linebreak_replacement() {
                 Some(linebreak)
                     if line_breaks(text).next().is_some()
-                        && self
-                            .top_mut()
-                            .find_wrapping(&linebreak.create(None, Fragment::empty(), &[])?)?
-                            .is_some() =>
+                        && linebreak.check_create(None).map(|()| true)?
+                        && self.top_mut().find_wrapping(&linebreak)?.is_some() =>
                 {
                     for (index, line) in split_lines(text).enumerate() {
                         if index > 0 {
-                            let created = linebreak.create(None, Fragment::empty(), &[])?;
-                            self.insert_node(created, marks, true)?;
+                            self.insert_node(Inserted::Leaf(linebreak.clone(), None), marks, true)?;
                         }
                         if !line.is_empty() {
                             let blank = is_blank(&line);
-                            self.insert_node(schema.text(line, &[])?, marks, blank)?;
+                            self.insert_node(Inserted::Text(line), marks, blank)?;
                         }
                     }
                     Text::default()
@@ -98,7 +97,7 @@ impl<'p, D: Dom> ParseContext<'p, D> {
         };
         if !value.is_empty() {
             let blank = is_blank(&value);
-            self.insert_node(schema.text(value, &[])?, marks, blank)?;
+            self.insert_node(Inserted::Text(value), marks, blank)?;
         }
         if let Some(dom) = source.dom {
             self.find_in_text(dom, text)?;
@@ -138,8 +137,7 @@ impl<'p, D: Dom> ParseContext<'p, D> {
         if name == "PRE" || dom.style_value(node, "white-space")?.contains("pre") {
             self.local_preserve_ws = true;
         }
-        let lower_name = name.to_lowercase();
-        if is_list_tag(&lower_name) && parser.normalize_lists {
+        if parser.normalize_lists && is_list_tag(&name.to_lowercase()) {
             normalize_list(dom, node)?;
         }
         let from_node = match self.options.rule_from_node {
@@ -152,7 +150,7 @@ impl<'p, D: Dom> ParseContext<'p, D> {
         };
         let ignore = match &matched {
             Some(matched) => matched.ignore,
-            None => IGNORE_TAGS.contains(&lower_name.as_str()),
+            None => IGNORE_TAGS.contains(&name.to_lowercase().as_str()),
         };
         match matched {
             _ if ignore => {
@@ -168,7 +166,7 @@ impl<'p, D: Dom> ParseContext<'p, D> {
             }
             matched => {
                 let rule = matched.map(|matched| matched.element);
-                self.add_element_content(node, &name, &lower_name, marks, rule)?;
+                self.add_element_content(node, &name, marks, rule)?;
             }
         }
         self.local_preserve_ws = outer_ws;
@@ -181,7 +179,6 @@ impl<'p, D: Dom> ParseContext<'p, D> {
         &mut self,
         node: &D::Node,
         name: &str,
-        lower_name: &str,
         marks: &[Mark<'static>],
         rule: Option<&ElementRule<D::Node>>,
     ) -> Result<()> {
@@ -202,8 +199,8 @@ impl<'p, D: Dom> ParseContext<'p, D> {
         let content = replaced.unwrap_or(node);
         let mut sync = None;
         let old_needs_block = self.needs_block;
-        if BLOCK_TAGS.contains(&lower_name) {
-            if self.nodes[top].content.first().is_some_and(Node::is_inline) && self.open > 0 {
+        if BLOCK_TAGS.contains(&name.to_lowercase().as_str()) {
+            if self.nodes[top].content.first().is_some_and(Item::is_inline) && self.open > 0 {
                 self.open -= 1;
                 top = self.open;
             }
@@ -261,8 +258,9 @@ impl<'p, D: Dom> ParseContext<'p, D> {
                 .as_ref()
                 .is_some_and(NodeType::inline_content)
         {
-            let dash = self.schema().text("-", &[])?;
-            self.find_place(&dash, marks.to_vec(), true)?;
+            // A place for the text "-".
+            let text = self.schema().text_type();
+            self.find_place(&text, marks.to_vec(), true)?;
         }
         Ok(())
     }
@@ -341,8 +339,9 @@ impl<'p, D: Dom> ParseContext<'p, D> {
         };
         match &node_type {
             Some(node_type) if node_type.is_leaf() => {
-                let created = node_type.create(matched.attrs.as_ref(), Fragment::empty(), &[])?;
-                if !self.insert_node(created, &marks, name == "BR")? {
+                node_type.check_create(matched.attrs.as_ref())?;
+                let leaf = Inserted::Leaf(node_type.clone(), matched.attrs.clone());
+                if !self.insert_node(leaf, &marks, name == "BR")? {
                     self.leaf_fallback(name, &marks)?;
                 }
             }
@@ -371,7 +370,7 @@ impl<'p, D: Dom> ParseContext<'p, D> {
                     self.find_inside(node)?;
                     let content = get_content(node, self.schema())?;
                     for child in content.children() {
-                        self.insert_node(child, &marks, false)?;
+                        self.insert_node(Inserted::Node(child), &marks, false)?;
                     }
                     None
                 }

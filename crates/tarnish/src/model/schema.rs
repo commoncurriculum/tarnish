@@ -12,6 +12,7 @@ use super::node::Node;
 use super::read::Given;
 use super::view::NodeRef;
 use crate::Text;
+use crate::chunk::Builder;
 use crate::json::Map;
 use crate::{Error, Result};
 
@@ -196,14 +197,15 @@ impl Schema {
         let mut nodes: Vec<NodeTypeData> = spec
             .nodes
             .into_iter()
-            .map(|(name, spec)| NodeTypeData {
+            .enumerate()
+            .map(|(index, (name, spec))| NodeTypeData {
                 groups: match &spec.group {
                     Some(group) if !group.is_empty() => {
                         group.split(' ').map(str::to_owned).collect()
                     }
                     _ => Vec::new(),
                 },
-                attrs: AttrSet::new("node", &name, &spec.attrs),
+                attrs: AttrSet::new("node", &name, &spec.attrs, 2 * index),
                 is_block: !(spec.inline || name == "text"),
                 is_text: name == "text",
                 content: Automaton::empty(),
@@ -236,8 +238,9 @@ impl Schema {
         let mut marks: Vec<MarkTypeData> = spec
             .marks
             .into_iter()
-            .map(|(name, spec)| MarkTypeData {
-                attrs: AttrSet::new("mark", &name, &spec.attrs),
+            .enumerate()
+            .map(|(index, (name, spec))| MarkTypeData {
+                attrs: AttrSet::new("mark", &name, &spec.attrs, 2 * index + 1),
                 excluded: Vec::new(),
                 name: Arc::from(name),
                 spec,
@@ -592,13 +595,37 @@ impl<'s> NodeType<'s> {
         content: Fragment<'a>,
         marks: &[Mark<'a>],
     ) -> Result<Node<'a>> {
-        if self.is_text() {
-            return Err(Error::Other(
+        self.refuse_text()?;
+        self.create_unchecked(attrs, &content, marks)
+    }
+
+    /// Writes the attributes [`create`](Self::create) makes of `attrs` into a chunk being
+    /// built, sharing the type's defaults: a ref to them.
+    pub(crate) fn write_attrs(
+        &self,
+        builder: &mut Builder<'_>,
+        attrs: Option<&Map>,
+    ) -> Result<u32> {
+        let set = &self.data().attrs;
+        let given = attrs.into();
+        let computed = set.resolve(&given)?;
+        Ok(set.write(builder, self.index(), &computed))
+    }
+
+    /// Fail as [`create`](Self::create) would with these attributes, without making the node:
+    /// on a text type, or a required attribute left out.
+    pub fn check_create(&self, attrs: Option<&Map>) -> Result<()> {
+        self.refuse_text()?;
+        self.data().attrs.check_given(&attrs.into())
+    }
+
+    fn refuse_text(&self) -> Result<()> {
+        match self.is_text() {
+            true => Err(Error::Other(
                 "NodeType.create can't construct text nodes".into(),
-            ));
+            )),
+            false => Ok(()),
         }
-        let attrs = self.compute_attrs(attrs)?;
-        Ok(Node::new(self, &attrs, &content, &Mark::set_from(marks)))
     }
 
     /// [`create`](Self::create), checking the content fits the type.
@@ -609,8 +636,27 @@ impl<'s> NodeType<'s> {
         marks: &[Mark<'a>],
     ) -> Result<Node<'a>> {
         self.check_content(&content)?;
-        let attrs = self.compute_attrs(attrs)?;
-        Ok(Node::new(self, &attrs, &content, &Mark::set_from(marks)))
+        self.create_unchecked(attrs, &content, marks)
+    }
+
+    /// A node of this type, its attributes computed from `attrs` and written as they are
+    /// resolved, sharing the type's defaults.
+    fn create_unchecked<'a>(
+        &self,
+        attrs: Option<&Map>,
+        content: &Fragment<'a>,
+        marks: &[Mark<'a>],
+    ) -> Result<Node<'a>> {
+        let set = &self.data().attrs;
+        let given = attrs.into();
+        let computed = set.resolve(&given)?;
+        let write = |builder: &mut Builder<'a>| set.write(builder, self.index(), &computed);
+        Ok(Node::with_attrs(
+            self,
+            write,
+            content,
+            &Mark::set_from(marks),
+        ))
     }
 
     /// [`create`](Self::create), adding nodes at the start or end of the content where it needs

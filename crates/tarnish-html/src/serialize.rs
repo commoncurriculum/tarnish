@@ -9,11 +9,27 @@ use crate::tree::{Data, Element, NodeId, Space, Tree};
 
 /// Whether an HTML element of this local name is void: written without content or an end tag.
 pub fn is_void(local: &str) -> bool {
-    const VOID: [&str; 18] = [
-        "area", "base", "basefont", "bgsound", "br", "col", "embed", "frame", "hr", "img", "input",
-        "keygen", "link", "meta", "param", "source", "track", "wbr",
-    ];
-    VOID.contains(&local)
+    matches!(
+        local,
+        "area"
+            | "base"
+            | "basefont"
+            | "bgsound"
+            | "br"
+            | "col"
+            | "embed"
+            | "frame"
+            | "hr"
+            | "img"
+            | "input"
+            | "keygen"
+            | "link"
+            | "meta"
+            | "param"
+            | "source"
+            | "track"
+            | "wbr"
+    )
 }
 
 /// Whether the text in an HTML element of this local name is written as it is. With scripting

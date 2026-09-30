@@ -4,6 +4,10 @@
 //! - [`term`]: terms read as the JSON values Jason encodes them as, and values and nodes made into
 //!   the terms Jason decodes from their JSON, with [`etf`] for the terms the VM reads and makes
 //!   whole;
+//! - [`view`]: terms read in place as that JSON, for a node to be read straight from them into
+//!   its chunk;
+//! - [`convert`]: `Tarnish.Bridge`'s `convert/1` and `convert_light/1`, which answer its requests
+//!   with the conversions the NIF's `load` serves;
 //! - [`light`] and [`Budget`]: calls on the caller's own scheduler, which answer `:dirty` when
 //!   they have more work than that takes on;
 //! - [`pool`]: threads for a batch's work, one per dirty CPU scheduler, which [`load`] starts;
@@ -14,12 +18,13 @@
 
 #![forbid(unsafe_code)]
 
+pub mod convert;
 mod doc;
 pub mod etf;
 mod prosemirror;
 mod share;
 pub mod term;
-mod view;
+pub mod view;
 
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};

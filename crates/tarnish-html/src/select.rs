@@ -1,10 +1,13 @@
 //! Matching CSS selectors, with servo's `selectors`.
 
+use std::cell::RefCell;
 use std::fmt;
+use std::sync::Arc;
 
 use cssparser::ToCss;
 use html5ever::{LocalName, Namespace, local_name, ns};
 use precomputed_hash::PrecomputedHash;
+use rustc_hash::FxHashMap;
 use selectors::attr::{AttrSelectorOperation, CaseSensitivity, NamespaceConstraint};
 use selectors::bloom::BloomFilter;
 use selectors::matching::{
@@ -18,10 +21,44 @@ use crate::tree::{Data, NodeId, Tree};
 
 pub(crate) type Selectors = SelectorList<Impl>;
 
-pub(crate) fn parse(selector: &str) -> Option<Selectors> {
+fn parse(selector: &str) -> Option<Selectors> {
     let mut input = cssparser::ParserInput::new(selector);
     let mut input = cssparser::Parser::new(&mut input);
     SelectorList::parse(&SelectorParser, &mut input, ParseRelative::No).ok()
+}
+
+thread_local! {
+    /// The selectors parsed on this thread, by their text, `None` for one that doesn't parse:
+    /// parse rules match the same few against every element of every document.
+    static PARSED: RefCell<FxHashMap<Box<str>, Option<Arc<Selectors>>>> = RefCell::default();
+}
+
+/// The most selectors a thread keeps before it starts over, as selectors from elsewhere can be
+/// any number.
+const KEPT: usize = 256;
+
+/// The selector list, parsed once a thread.
+pub(crate) fn parsed(selector: &str) -> Option<Arc<Selectors>> {
+    PARSED.with_borrow_mut(|parsed| {
+        if let Some(selectors) = parsed.get(selector) {
+            return selectors.clone();
+        }
+        if parsed.len() >= KEPT {
+            parsed.clear();
+        }
+        let selectors = parse(selector).map(Arc::new);
+        parsed.insert(selector.into(), selectors.clone());
+        selectors
+    })
+}
+
+/// Whether the selector is a type selector in lower case, which an element matches when its
+/// local name is the selector, whatever its namespace: an HTML element's name is compared in
+/// lower case, and any other's as it is.
+pub(crate) fn is_lower_type_selector(selector: &str) -> bool {
+    let mut bytes = selector.bytes();
+    bytes.next().is_some_and(|first| first.is_ascii_lowercase())
+        && bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
 /// Whether the element matches, with `scope` as `:scope`.

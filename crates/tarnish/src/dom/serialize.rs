@@ -6,10 +6,13 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use rustc_hash::FxHashMap;
+
 use super::{Dom, NodeKind};
 use crate::chunk::{Kind, ValueRef};
 use crate::js;
 use crate::js::stack;
+use crate::js::value::Nullish;
 use crate::json::{Map, Value};
 use crate::model::{Fragment, Mark, Node, TextRef};
 use crate::{Error, Result};
@@ -78,22 +81,6 @@ impl<'a, N> DomSpec<'a, N> {
     /// `[tag, attrs, 0]`.
     pub fn wrapping(tag: &'a str, attrs: SpecAttrs<'a>) -> Self {
         DomSpec::Wrapping { tag, attrs }
-    }
-
-    /// A value from the attributes as `renderSpec` takes it: a string as text, an array as an
-    /// array spec with that value as its origin.
-    pub fn of_attr(value: ValueRef<'a>) -> Self {
-        match value.kind() {
-            Kind::String(text) => DomSpec::Text(Cow::Borrowed(text)),
-            Kind::Array(_) => DomSpec::Array {
-                items: value
-                    .items()
-                    .map(|item| stack::grow(|| DomSpec::of_attr(item)))
-                    .collect(),
-                origin: Some(value.id()),
-            },
-            _ => DomSpec::Value(value.to_value()),
-        }
     }
 }
 
@@ -271,15 +258,18 @@ pub trait Target<N> {
 
 /// Serializes nodes and marks with each type's `toDOM`.
 pub struct DomSerializer<N> {
-    nodes: HashMap<String, NodeToDom<N>>,
-    marks: HashMap<String, MarkToDom<N>>,
+    nodes: FxHashMap<String, NodeToDom<N>>,
+    marks: FxHashMap<String, MarkToDom<N>>,
 }
 
 impl<N: Clone> DomSerializer<N> {
     /// A serializer of the node types and mark types named. A mark type left out isn't
     /// serialized.
     pub fn new(nodes: HashMap<String, NodeToDom<N>>, marks: HashMap<String, MarkToDom<N>>) -> Self {
-        DomSerializer { nodes, marks }
+        DomSerializer {
+            nodes: nodes.into_iter().collect(),
+            marks: marks.into_iter().collect(),
+        }
     }
 
     /// Serialize the fragment's nodes into `target`, or a new document fragment.
@@ -484,6 +474,104 @@ fn hole_not_alone() -> Error {
     Error::Range("Content hole must be the only child of its parent node".into())
 }
 
+fn suspicious() -> Error {
+    Error::Range(
+        "Using an array from an attribute object as a DOM spec. This may be an attempted cross site scripting attack.".into(),
+    )
+}
+
+/// `renderSpec` of a value from a node's or mark's attributes, which JSON can make anything: a
+/// string renders as text, and an array, or an object read as one by its indices and `length`,
+/// as an element. No JSON object is a DOM node, so one `renderSpec` takes for a node is refused
+/// as `appendChild` refuses it.
+fn render_attr<D: Dom>(
+    dom: &D,
+    structure: ValueRef,
+    xml_ns: Option<&str>,
+    block_arrays_in: Option<ValueRef>,
+) -> Result<Rendered<D::Node>> {
+    let array = match structure.kind() {
+        Kind::String(string) => return text(dom, string),
+        Kind::Null => return Err(js::value::cannot_read(Nullish::Null, "nodeType")),
+        Kind::Array(_) => true,
+        Kind::Object(_) => false,
+        Kind::Bool(_) | Kind::Number(_) => return Err(invalid()),
+    };
+    let is_node = |value: ValueRef| -> Result<bool> {
+        Ok(value.is_object()
+            && value
+                .get("nodeType")
+                .map_or(Ok(f64::NAN), ValueRef::to_number)?
+                == 1.0)
+    };
+    if is_node(structure)? || structure.get("dom").map_or(Ok(false), is_node)? {
+        return Err(Error::Type(
+            "Failed to execute 'appendChild' on 'Node': parameter 1 is not of type 'Node'.".into(),
+        ));
+    }
+    let item = |index: usize| match array {
+        true => structure.items().nth(index),
+        false => structure.get(&index.to_string()),
+    };
+    let Some(tag) = item(0).and_then(ValueRef::as_str) else {
+        return Err(invalid());
+    };
+    if array
+        && let Some(attrs) = block_arrays_in
+        && holds_spec_array(attrs, structure.id())
+    {
+        return Err(suspicious());
+    }
+    let (namespace, tag) = qualified(tag, xml_ns);
+    let element = dom.create_element(namespace, tag)?;
+    let mut start = 1;
+    if let Some(attrs) = item(1)
+        && attrs.is_object()
+        && attrs.get("nodeType").is_none_or(ValueRef::is_null)
+    {
+        start = 2;
+        for (name, value) in attrs.entries() {
+            if !value.is_null() {
+                set_attribute(dom, &element, name, &value.to_value())?;
+            }
+        }
+    }
+    let length = match array {
+        true => structure.len() as f64,
+        false => structure
+            .get("length")
+            .map_or(Ok(f64::NAN), ValueRef::to_number)?,
+    };
+    let mut content_dom = None;
+    let mut index = start;
+    while (index as f64) < length {
+        let child =
+            item(index).ok_or_else(|| js::value::cannot_read(Nullish::Undefined, "nodeType"))?;
+        if child.as_f64() == Some(0.0) {
+            if (index as f64) < length - 1.0 || index > start {
+                return Err(hole_not_alone());
+            }
+            return Ok(Rendered {
+                dom: element.clone(),
+                content_dom: Some(element),
+            });
+        }
+        let inner = stack::grow(|| render_attr(dom, child, namespace, block_arrays_in))?;
+        dom.append_child(&element, &inner.dom)?;
+        if let Some(inner_content) = inner.content_dom {
+            if content_dom.is_some() {
+                return Err(Error::Range("Multiple content holes".into()));
+            }
+            content_dom = Some(inner_content);
+        }
+        index += 1;
+    }
+    Ok(Rendered {
+        dom: element,
+        content_dom,
+    })
+}
+
 fn text<D: Dom>(dom: &D, text: &str) -> Result<Rendered<D::Node>> {
     Ok(Rendered {
         dom: dom.create_text(&text.into())?,
@@ -509,9 +597,7 @@ fn render<D: Dom>(
         }
         DomSpec::Text(string) => return text(dom, string),
         DomSpec::Value(Value::String(string)) => return text(dom, string),
-        DomSpec::Attr(value) => {
-            return render(dom, &DomSpec::of_attr(*value), xml_ns, block_arrays_in);
-        }
+        DomSpec::Attr(value) => return render_attr(dom, *value, xml_ns, block_arrays_in),
         DomSpec::Element {
             tag,
             attrs,
@@ -545,9 +631,7 @@ fn render<D: Dom>(
     if let (Some(attrs), Some(origin)) = (block_arrays_in, origin)
         && holds_spec_array(attrs, origin)
     {
-        return Err(Error::Range(
-            "Using an array from an attribute object as a DOM spec. This may be an attempted cross site scripting attack.".into(),
-        ));
+        return Err(suspicious());
     }
     let (namespace, tag) = qualified(tag, xml_ns);
     let element = dom.create_element(namespace, tag)?;

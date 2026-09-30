@@ -118,6 +118,8 @@ pub(crate) struct AttrSet {
     checked: bool,
     /// The type, as an error names it: `node of type paragraph`.
     owner: String,
+    /// Where the type's attributes are among the schema's, for a builder to keep their keys by.
+    slot: usize,
 }
 
 /// The attributes computed from what a type is given: its defaults, or each attribute's value,
@@ -129,7 +131,12 @@ pub(crate) enum Computed<'g> {
 
 impl AttrSet {
     /// A type's attributes, `kind` being `node` or `mark`.
-    pub fn new(kind: &str, type_name: &str, specs: &[(String, AttributeSpec)]) -> AttrSet {
+    pub fn new(
+        kind: &str,
+        type_name: &str,
+        specs: &[(String, AttributeSpec)],
+        slot: usize,
+    ) -> AttrSet {
         let attrs: Vec<(Key, Attribute)> = specs
             .iter()
             .map(|(name, spec)| {
@@ -160,6 +167,7 @@ impl AttrSet {
             checked: attrs.iter().any(|(_, attr)| attr.check.is_some()),
             attrs,
             owner: format!("{kind} of type {type_name}"),
+            slot,
         }
     }
 
@@ -196,15 +204,28 @@ impl AttrSet {
             let value = match (given.get(name), &attr.default) {
                 (Some(value), _) | (None, AttributeDefault::Value(value)) => Some(value),
                 (None, AttributeDefault::Undefined) => None,
-                (None, AttributeDefault::Required) => {
-                    return Err(Error::Range(format!(
-                        "No value supplied for attribute {name}"
-                    )));
-                }
+                (None, AttributeDefault::Required) => return Err(no_value(name)),
             };
             built.push((name, value));
         }
         Ok(Computed::Values(built))
+    }
+
+    /// Fail as [`resolve`](Self::resolve) would, without computing the attributes.
+    pub fn check_given(&self, given: &Given) -> Result<()> {
+        let Given::Object(given) = given else {
+            return Ok(());
+        };
+        if !self.has_required() {
+            return Ok(());
+        }
+        let missing = self.attrs.iter().find(|(name, attr)| {
+            matches!(attr.default, AttributeDefault::Required) && given.get(name).is_none()
+        });
+        match missing {
+            Some((name, _)) => Err(no_value(name)),
+            None => Ok(()),
+        }
     }
 
     /// [`resolve`](Self::resolve), as an object.
@@ -255,11 +276,8 @@ impl AttrSet {
                 if values.iter().all(|(_, value)| value.is_none()) {
                     return EMPTY_OBJECT;
                 }
-                let written: Vec<(&str, u32)> = values
-                    .iter()
-                    .filter_map(|(name, value)| Some((name.as_str(), builder.write((*value)?))))
-                    .collect();
-                builder.object_of(written)
+                let names = self.attrs.iter().map(|(name, _)| name.as_str());
+                builder.attrs(self.slot, names, values.iter().map(|&(_, value)| value))
             }
         }
     }
@@ -341,6 +359,11 @@ fn check_value<'v>(attr: &Attribute, value: Option<impl JsonView<'v>>) -> Result
 #[cold]
 fn wrong_type(expected: &str, type_of: TypeOf) -> Error {
     Error::Range(format!("{expected}, got {}", type_of.name()))
+}
+
+#[cold]
+fn no_value(name: &str) -> Error {
+    Error::Range(format!("No value supplied for attribute {name}"))
 }
 
 /// The attributes' defaults, when every attribute has one.

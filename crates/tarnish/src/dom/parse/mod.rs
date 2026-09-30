@@ -8,12 +8,13 @@ mod rule;
 mod rule_context;
 mod walk;
 
+use std::collections::BTreeMap;
+
 use super::Dom;
 use crate::Result;
 use crate::json::Map;
 use crate::model::{ContentMatch, Node, ResolvedPos, Schema, Slice};
 use context::ParseContext;
-use node_context::NodeContext;
 
 pub use rule::{
     AttrsHook, ClearMarkHook, Content, ContentElement, ContentElementHook, ElementRule,
@@ -70,6 +71,12 @@ impl<N> Default for ParseOptions<'_, N> {
 pub struct DomParser<N> {
     schema: Schema,
     tags: Vec<Rule<TagRule<N>>>,
+    /// For each element name a tag rule's selector requires, in lower case and sorted by it, the
+    /// indices of the tag rules an element of that name can match, in order: those that require
+    /// its name, and those that require none.
+    tags_by_element: Vec<(String, Vec<usize>)>,
+    /// The indices of the tag rules that require no element name.
+    tags_for_any_element: Vec<usize>,
     styles: Vec<Rule<StyleRule>>,
     /// The properties the style rules match, each once.
     matched_styles: Vec<String>,
@@ -106,9 +113,30 @@ impl<N: Clone> DomParser<N> {
                 }
             }
         }
+        let mut by_element: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        let mut tags_for_any_element = Vec::new();
+        for (index, rule) in tags.iter().enumerate() {
+            match required_element(&rule.kind.tag) {
+                Some(name) => by_element
+                    .entry(name.to_ascii_lowercase())
+                    .or_default()
+                    .push(index),
+                None => tags_for_any_element.push(index),
+            }
+        }
+        let tags_by_element = by_element
+            .into_iter()
+            .map(|(name, mut indices)| {
+                indices.extend(&tags_for_any_element);
+                indices.sort_unstable();
+                (name, indices)
+            })
+            .collect();
         Ok(DomParser {
             schema,
             tags,
+            tags_by_element,
+            tags_for_any_element,
             styles,
             matched_styles,
             normalize_lists,
@@ -164,19 +192,18 @@ impl<N: Clone> DomParser<N> {
         Ok(Slice::max_open(content, true))
     }
 
-    /// Parse the node's children, and give back the top context, with every node above it
-    /// closed.
+    /// Parse the node's children, and give back the parse, for its top to be finished.
     fn run<'p, D: Dom<Node = N>>(
         &'p self,
         dom: &'p D,
         node: &N,
         options: ParseOptions<'p, N>,
         is_open: bool,
-    ) -> Result<NodeContext<'p>> {
+    ) -> Result<ParseContext<'p, D>> {
         let (from, to) = (options.from, options.to);
         let mut context = ParseContext::new(self, dom, options, is_open);
         context.add_all(node, &[], from, to)?;
-        context.finish()
+        Ok(context)
     }
 
     /// The first tag rule after the one at `after` that matches the element.
@@ -188,7 +215,17 @@ impl<N: Clone> DomParser<N> {
         after: Option<usize>,
     ) -> Result<Option<Matched<'_, N>>> {
         let start = after.map_or(0, |after| after + 1);
-        for (index, rule) in self.tags.iter().enumerate().skip(start) {
+        let mut name = dom.local_name(node)?.unwrap_or_default();
+        name.make_ascii_lowercase();
+        let candidates = match self
+            .tags_by_element
+            .binary_search_by(|(element, _)| element.as_str().cmp(&name))
+        {
+            Ok(at) => &self.tags_by_element[at].1,
+            Err(_) => &self.tags_for_any_element,
+        };
+        for &index in candidates.iter().filter(|&&index| index >= start) {
+            let rule = &self.tags[index];
             let tag = &rule.kind;
             if !dom.matches(node, &tag.tag)? {
                 continue;
@@ -287,6 +324,71 @@ impl<'r, N> Matched<'r, N> {
             ignore: rule.ignore,
             attrs: rule.attrs.clone(),
             continue_after: None,
+        }
+    }
+}
+
+/// The element name a tag rule's selector requires, when the selector is a name followed only by
+/// attribute selectors, `[name]` or `[name=value]`. Such a selector is valid CSS, so an element
+/// of another name neither matches it nor makes matching it throw, and the rule goes untried.
+fn required_element(selector: &str) -> Option<&str> {
+    /// The length of the identifier at the start, which starts with a letter.
+    fn identifier(text: &str) -> Option<usize> {
+        if !text.as_bytes().first()?.is_ascii_alphabetic() {
+            return None;
+        }
+        let end = text
+            .bytes()
+            .position(|byte| !(byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')));
+        Some(end.unwrap_or(text.len()))
+    }
+    let name = identifier(selector)?;
+    let mut rest = &selector[name..];
+    while !rest.is_empty() {
+        rest = rest.strip_prefix('[')?;
+        rest = &rest[identifier(rest)?..];
+        if let Some(value) = rest.strip_prefix('=') {
+            rest = match value.as_bytes().first()? {
+                quote @ (b'"' | b'\'') => {
+                    let close = value[1..].find(|c| {
+                        c == char::from(*quote) || matches!(c, '\\' | '\n' | '\r' | '\x0c')
+                    })?;
+                    value[1..][close..].strip_prefix(char::from(*quote))?
+                }
+                _ => &value[identifier(value)?..],
+            };
+        }
+        rest = rest.strip_prefix(']')?;
+    }
+    Some(&selector[..name])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::required_element;
+
+    #[test]
+    fn requires_the_name_of_a_selector_of_a_name_and_attributes() {
+        for (selector, name) in [
+            ("p", Some("p")),
+            ("H1", Some("H1")),
+            ("my-element", Some("my-element")),
+            (r#"div[data-content-type="standard"]"#, Some("div")),
+            ("img[src][alt='a b']", Some("img")),
+            ("span[data-type=mention]", Some("span")),
+            ("*", None),
+            ("b, strong", None),
+            ("p.lead", None),
+            ("ul > li", None),
+            ("a[href^=http]", None),
+            ("p[", None),
+            ("p[x", None),
+            ("p[data-x=1]", None),
+            (r#"p[x="a\"b"]"#, None),
+            ("1p", None),
+            ("svg|rect", None),
+        ] {
+            assert_eq!(required_element(selector), name, "{selector}");
         }
     }
 }

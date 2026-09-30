@@ -1,7 +1,8 @@
 //! Writing a node again into a chunk of its own: whole, or all but what some chunks hold.
 
-use std::collections::HashMap;
 use std::sync::Arc;
+
+use rustc_hash::FxHashMap;
 
 use super::node::Node;
 use super::schema::Schema;
@@ -13,8 +14,8 @@ use crate::js::stack;
 /// so that what nodes share stays shared.
 struct Copier<'k, 'a> {
     builder: Builder<'a>,
-    values: HashMap<(usize, u32), u32>,
-    sets: HashMap<(usize, u32), u32>,
+    values: FxHashMap<(usize, u32), u32>,
+    sets: FxHashMap<(usize, u32), u32>,
     /// Chunks whose nodes, values, sets and text are referred to rather than copied.
     kept: &'k [Arc<Chunk<'a>>],
 }
@@ -27,8 +28,8 @@ impl<'k, 'a> Copier<'k, 'a> {
     fn new(schema: &Schema, kept: &'k [Arc<Chunk<'a>>]) -> Copier<'k, 'a> {
         Copier {
             builder: Builder::new(schema),
-            values: HashMap::new(),
-            sets: HashMap::new(),
+            values: FxHashMap::default(),
+            sets: FxHashMap::default(),
             kept,
         }
     }
