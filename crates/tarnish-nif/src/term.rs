@@ -345,7 +345,10 @@ impl<'a, 'v> Writer<'a, 'v> {
 
     /// A binary for a key or a type's name, one binary serving each time it's made.
     pub fn name(&mut self, name: &'v str) -> Term<'a> {
-        let text = Text::new(name);
+        self.made(Text::new(name))
+    }
+
+    fn made(&mut self, text: Text<'v>) -> Term<'a> {
         let slot = &mut self.made[text.slot()];
         match *slot {
             Some((made, term)) if made == text => term,
@@ -378,7 +381,7 @@ impl<'a, 'v> Writer<'a, 'v> {
 
     pub fn entry(&mut self, key: &'v str, term: Term<'a>) {
         let key = Text::new(key);
-        let name = self.name(key.text);
+        let name = self.made(key);
         self.entries.push((key, name, term));
     }
 

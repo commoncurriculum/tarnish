@@ -63,6 +63,15 @@ fn scratch() -> Box<Scratch> {
     spare.ok().flatten().unwrap_or_default()
 }
 
+/// Up to three words, as a chunk's sections hold them.
+fn le_words(words: &[u32]) -> [u8; 12] {
+    let mut bytes = [0; 12];
+    for (at, word) in words.iter().enumerate() {
+        bytes[at * 4..at * 4 + 4].copy_from_slice(&word.to_le_bytes());
+    }
+    bytes
+}
+
 fn recycle(mut scratch: Box<Scratch>) {
     for section in &mut scratch.sections {
         section.clear();
@@ -117,11 +126,7 @@ impl<'a> Builder<'a> {
     }
 
     fn push_words(&mut self, section: usize, words: &[u32]) -> u32 {
-        let mut bytes = [0; 12];
-        for (at, word) in words.iter().enumerate() {
-            bytes[at * 4..at * 4 + 4].copy_from_slice(&word.to_le_bytes());
-        }
-        self.push(section, &bytes[..words.len() * 4])
+        self.push(section, &le_words(words)[..words.len() * 4])
     }
 
     fn push_value(&mut self, tag: Tag, a: u32, b: u32) -> u32 {
@@ -400,14 +405,15 @@ impl<'a> Builder<'a> {
     /// An object of the entries pushed from `base` on.
     fn entries_from(&mut self, base: usize) -> u32 {
         let start = self.counts[ENTRIES];
-        let len = (self.scratch.entries.len() - base) as u32;
-        let mut bytes = std::mem::take(&mut self.scratch.sections[ENTRIES]);
-        for (key, key_len, value) in self.scratch.entries.drain(base..) {
-            for word in [key, key_len, value] {
-                bytes.extend_from_slice(&word.to_le_bytes());
-            }
+        let Scratch {
+            sections, entries, ..
+        } = &mut *self.scratch;
+        let len = (entries.len() - base) as u32;
+        let bytes = &mut sections[ENTRIES];
+        bytes.reserve(len as usize * super::WIDTHS[ENTRIES]);
+        for (key, key_len, value) in entries.drain(base..) {
+            bytes.extend_from_slice(&le_words(&[key, key_len, value]));
         }
-        self.scratch.sections[ENTRIES] = bytes;
         self.counts[ENTRIES] += len;
         self.push_value(Tag::Object, start, len)
     }

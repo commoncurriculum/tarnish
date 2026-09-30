@@ -186,12 +186,17 @@ pub fn answer(
 
 /// [`answer`] of a request read as JSON, its result as JSON.
 pub fn handle(conversions: &dyn Conversions, request: Request) -> Result<Value, String> {
+    answer_json(conversions, request).map(Answer::into_json)
+}
+
+/// [`answer`] of a request read as JSON.
+fn answer_json(conversions: &dyn Conversions, request: Request) -> Result<Answer, String> {
     let request = Request {
         operation: request.operation,
         input: Input::Json(request.input),
         options: request.options,
     };
-    answer(conversions, request).map(Answer::into_json)
+    answer(conversions, request)
 }
 
 // zod checks the fields in order and reports the first failure.
@@ -405,7 +410,7 @@ fn convert_on_pool<'a>(env: Env<'a>, requests: &[Term<'a>]) -> Vec<Term<'a>> {
                 } else {
                     let converted = std::panic::catch_unwind(AssertUnwindSafe(move || {
                         let request = parts.read(|part| etf::read(&part))?;
-                        Ok(handle(conversions, request).map(Sent::of))
+                        Ok(answer_json(conversions, request).map(Sent::of))
                     }));
                     match converted {
                         Ok(Ok(handled)) => Outcome::Converted(handled),
@@ -489,10 +494,13 @@ enum Sent {
 }
 
 impl Sent {
-    fn of(result: Value) -> Sent {
-        match result {
-            Value::String(_) => Sent::Text(result.into_string().expect("a string")),
-            other => Sent::Term(etf::write(&other)),
+    fn of(answer: Answer) -> Sent {
+        match answer {
+            Answer::Json(Value::String(_)) => {
+                Sent::Text(answer.into_json().into_string().expect("a string"))
+            }
+            Answer::Json(json) => Sent::Term(etf::write(&json)),
+            Answer::Document(document) => Sent::Term(etf::write_fields(document.view())),
         }
     }
 }
