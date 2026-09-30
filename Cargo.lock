@@ -1886,6 +1886,7 @@ dependencies = [
 name = "tarnish-nif"
 version = "0.1.0"
 dependencies = [
+ "mimalloc",
  "rayon",
  "rustler",
  "tarnish",
@@ -1926,7 +1927,6 @@ dependencies = [
 name = "tarnish_elixir"
 version = "0.1.0"
 dependencies = [
- "mimalloc",
  "rustler",
  "tarnish-nif",
 ]

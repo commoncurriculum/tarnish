@@ -11,7 +11,8 @@
 //! - [`light`] and [`Budget`]: calls on the caller's own scheduler, which answer `:dirty` when
 //!   they have more work than that takes on;
 //! - [`pool`]: threads for a batch's work, one per dirty CPU scheduler, which [`load`] starts;
-//! - tarnish's ProseMirror functions, which `Tarnish` calls.
+//! - tarnish's ProseMirror functions, which `Tarnish` calls;
+//! - mimalloc as the NIF's allocator, unless the `mimalloc` feature is off.
 //!
 //! A crate that depends on this one has its `rustler::init!` register those functions with its
 //! own, so the module that loads its NIF declares them (`use Tarnish.NIF`).
@@ -97,3 +98,7 @@ pub fn load(_env: Env, threads: Term) -> bool {
     });
     true
 }
+
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;

@@ -5,7 +5,4 @@
 
 use tarnish_nif as _;
 
-#[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
-
 rustler::init!("Elixir.Tarnish.Native", load = tarnish_nif::load);
