@@ -6,15 +6,15 @@ use tarnish::dom::{
     Content, ContentElement, ElementRule, GetAttrsResult, Namespace, ParseRule, Rule,
     StyleRule as DomStyleRule, TagRule as DomTagRule,
 };
-use tarnish::{Map, Value, js};
+use tarnish::{Map, Result, Value, js};
 use tarnish_html::HtmlNode;
 
 use super::attributes::ExtensionAttribute;
 
 /// A tag rule's `getAttrs`, given the element: `None` for `false`.
-pub type TagAttrs = Arc<dyn Fn(&HtmlNode) -> Option<Map> + Send + Sync>;
+pub type TagAttrs = Arc<dyn Fn(&HtmlNode) -> Result<Option<Map>> + Send + Sync>;
 /// A tag rule's `contentElement`, given the element.
-pub type ContentHook = Arc<dyn Fn(&HtmlNode) -> HtmlNode + Send + Sync>;
+pub type ContentHook = Arc<dyn Fn(&HtmlNode) -> Result<HtmlNode> + Send + Sync>;
 /// A style rule's `getAttrs`, given the style's value.
 pub type StyleAttrs = fn(&str) -> GetAttrs;
 
@@ -95,7 +95,7 @@ impl TagRule {
 
     pub fn get_attrs(
         mut self,
-        get_attrs: impl Fn(&HtmlNode) -> Option<Map> + Send + Sync + 'static,
+        get_attrs: impl Fn(&HtmlNode) -> Result<Option<Map>> + Send + Sync + 'static,
     ) -> Self {
         self.get_attrs = Some(Arc::new(get_attrs));
         self
@@ -103,7 +103,7 @@ impl TagRule {
 
     pub fn content_element(
         mut self,
-        content_element: impl Fn(&HtmlNode) -> HtmlNode + Send + Sync + 'static,
+        content_element: impl Fn(&HtmlNode) -> Result<HtmlNode> + Send + Sync + 'static,
     ) -> Self {
         self.content_element = Some(Arc::new(content_element));
         self
@@ -162,7 +162,7 @@ pub(crate) fn parse_rules(
                 let attributes = Arc::clone(attributes);
                 let injected = move |element: &HtmlNode| {
                     let mut result = match &get_attrs {
-                        Some(get_attrs) => match get_attrs(element) {
+                        Some(get_attrs) => match get_attrs(element)? {
                             Some(attrs) => attrs,
                             None => return Ok(GetAttrsResult::Reject),
                         },
@@ -180,9 +180,7 @@ pub(crate) fn parse_rules(
                     Ok(GetAttrsResult::Attrs(result))
                 };
                 let content = match content_element {
-                    Some(hook) => Content::Element(ContentElement::Hook(Arc::new(
-                        move |element: &HtmlNode| Ok(hook(element)),
-                    ))),
+                    Some(hook) => Content::Element(ContentElement::Hook(hook)),
                     None => Content::Children,
                 };
                 ParseRule::Tag(Rule {

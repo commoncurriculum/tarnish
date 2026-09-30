@@ -6,10 +6,15 @@
 use std::sync::Arc;
 
 use super::attributes::{ExtensionAttribute, GlobalAttributes};
-use super::markdown::{MarkdownTokenizer, ParseMarkdown, RenderMarkdown};
+use super::markdown::{
+    MarkdownTokenizer, ParseHelpers, ParseMarkdown, Parsed, RenderContext, RenderHelpers,
+    RenderMarkdown,
+};
 use super::parse_html::ParseHtml;
 use crate::{DomSpec, SpecAttrs};
+use tarnish::json::Value;
 use tarnish::{Error, Mark, Node};
+use tarnish_markdown::marked::Token;
 
 /// A node's `renderHTML`, given the node and its rendered attributes.
 pub type RenderNode = Arc<
@@ -130,6 +135,22 @@ impl<K> Extension<K> {
         self
     }
 
+    /// `{ ...attributes, [name]: { ...attributes[name], ...changes } }`, of the attribute named
+    /// `name`, which the extension has.
+    pub fn update_attribute(
+        mut self,
+        name: &str,
+        update: impl FnOnce(ExtensionAttribute) -> ExtensionAttribute,
+    ) -> Self {
+        let attribute = self
+            .attributes
+            .iter_mut()
+            .find(|attribute| attribute.name == name)
+            .unwrap_or_else(|| panic!("{} has no attribute {name}", self.name));
+        *attribute = update(attribute.clone());
+        self
+    }
+
     pub fn add_global_attributes(mut self, global_attributes: Vec<GlobalAttributes>) -> Self {
         self.global_attributes = global_attributes;
         self
@@ -156,13 +177,22 @@ impl<K> Extension<K> {
         self
     }
 
-    pub fn parse_markdown(mut self, parse: ParseMarkdown) -> Self {
-        self.markdown.parse = Some(parse);
+    pub fn parse_markdown(
+        mut self,
+        parse: impl Fn(&Token, &dyn ParseHelpers) -> Result<Parsed, Error> + Send + Sync + 'static,
+    ) -> Self {
+        self.markdown.parse = Some(Arc::new(parse));
         self
     }
 
-    pub fn render_markdown(mut self, render: RenderMarkdown) -> Self {
-        self.markdown.render = Some(render);
+    pub fn render_markdown(
+        mut self,
+        render: impl Fn(&Value, &dyn RenderHelpers, &RenderContext) -> Result<String, Error>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        self.markdown.render = Some(Arc::new(render));
         self
     }
 

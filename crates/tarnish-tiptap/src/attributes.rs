@@ -1,6 +1,7 @@
 //! Attributes as `addAttributes` and `addGlobalAttributes` declare them, and
 //! `getRenderedAttributes`.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use tarnish::chunk::ValueRef;
@@ -17,24 +18,18 @@ pub type RenderAttribute =
 /// An attribute's `parseHTML`, given the element: `None` for `null` or `undefined`.
 pub type ParseAttribute = Arc<dyn Fn(&HtmlNode) -> Option<Value> + Send + Sync>;
 
-/// A [`RenderAttribute`] of a closure.
-pub fn render_attribute(
-    render: impl for<'a> Fn(ValueRef<'a>, &mut Rendered<'a>) -> Result<(), Error>
-    + Send
-    + Sync
-    + 'static,
-) -> RenderAttribute {
-    Arc::new(render)
-}
-
 /// The HTML attributes `getRenderedAttributes` has merged so far.
 pub struct Rendered<'a>(SpecAttrs<'a>);
 
 impl<'a> Rendered<'a> {
     /// Merges an entry of an attribute's rendering as `mergeAttributes` does. An attribute's
     /// rendering is an object, whose keys are distinct.
-    pub fn merge(&mut self, key: &'a str, value: impl Into<AttrValue<'a>>) -> Result<(), Error> {
-        merge_entry(&mut self.0, key, value.into())
+    pub fn merge(
+        &mut self,
+        key: impl Into<Cow<'a, str>>,
+        value: impl Into<AttrValue<'a>>,
+    ) -> Result<(), Error> {
+        merge_entry(&mut self.0, key.into(), value.into())
     }
 }
 
@@ -57,6 +52,11 @@ impl ExtensionAttribute {
             render_html: None,
             parse_html: None,
         }
+    }
+
+    pub fn default(mut self, default: Value) -> Self {
+        self.default = Some(default);
+        self
     }
 
     pub fn not_rendered(mut self) -> Self {

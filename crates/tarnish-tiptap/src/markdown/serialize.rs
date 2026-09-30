@@ -114,7 +114,7 @@ impl MarkdownManager {
         let Some(render) = kind
             .and_then(Value::as_str)
             .and_then(|kind| self.handler_for_token(kind))
-            .and_then(|spec| spec.render)
+            .and_then(|spec| spec.render.as_ref())
         else {
             return Ok(String::new());
         };
@@ -389,7 +389,7 @@ impl MarkdownManager {
             .to_string());
         }
         let Some((kind, render)) = kind.as_str().and_then(|kind| {
-            let render = self.handler_for_node_type(kind)?.render?;
+            let render = self.handler_for_node_type(kind)?.render.as_ref()?;
             Some((kind, render))
         }) else {
             return Ok(String::new());

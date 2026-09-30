@@ -375,7 +375,7 @@ fn write_start(out: &mut String, tag: &str, attrs: &SpecAttrs) -> Result<(), Sto
         out.push_str(name);
         out.push_str("=\"");
         let value = value.to_js_string()?;
-        match *name {
+        match name {
             "style" => escape_attribute(out, &crate::style::css_text(&value)),
             _ => escape_attribute(out, &value),
         }
