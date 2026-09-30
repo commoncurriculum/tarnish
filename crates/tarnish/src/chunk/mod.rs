@@ -278,6 +278,31 @@ pub struct Chunk<'a> {
     /// Where each section starts in `bytes`.
     starts: [u32; SECTIONS],
     counts: [u32; SECTIONS],
+    /// The strings and text sections, checked as UTF-8 once so that a read only slices them.
+    strings: Box<str>,
+    text: Box<str>,
+}
+
+/// A section of UTF-8, or `None` when it isn't.
+fn utf8_section(
+    bytes: &[u8],
+    (starts, counts): (&[u32; SECTIONS], &[u32; SECTIONS]),
+    section: usize,
+) -> Option<Box<str>> {
+    let start = starts[section] as usize;
+    let end = start + counts[section] as usize * WIDTHS[section];
+    std::str::from_utf8(bytes.get(start..end)?)
+        .ok()
+        .map(Box::from)
+}
+
+/// `len` bytes of a section of UTF-8 from `start`.
+#[inline]
+fn str_span(section: &str, start: u32, len: u32) -> &str {
+    let start = start as usize;
+    section
+        .get(start..start + len as usize)
+        .unwrap_or_else(|| corrupt())
 }
 
 /// What a chunk's header says: its id and the ids of the chunks it imports, which a binding
@@ -365,6 +390,13 @@ impl<'a> Chunk<'a> {
         {
             return Err(invalid());
         }
+        let sections = (&starts, &counts);
+        let (Some(strings), Some(text)) = (
+            utf8_section(&bytes, sections, STRINGS),
+            utf8_section(&bytes, sections, TEXT),
+        ) else {
+            return Err(invalid());
+        };
         Ok(Chunk {
             id: double_word(&bytes, 16),
             bytes,
@@ -372,6 +404,8 @@ impl<'a> Chunk<'a> {
             imports,
             starts,
             counts,
+            strings,
+            text,
         })
     }
 
@@ -383,6 +417,9 @@ impl<'a> Chunk<'a> {
         starts: [u32; SECTIONS],
         counts: [u32; SECTIONS],
     ) -> Chunk<'a> {
+        let sections = (&starts, &counts);
+        let utf8 = |section| utf8_section(&bytes, sections, section).unwrap_or_else(|| corrupt());
+        let (strings, text) = (utf8(STRINGS), utf8(TEXT));
         Chunk {
             id: double_word(&bytes, 16),
             bytes: Cow::Owned(bytes),
@@ -390,6 +427,8 @@ impl<'a> Chunk<'a> {
             imports,
             starts,
             counts,
+            strings,
+            text,
         }
     }
 
@@ -552,16 +591,20 @@ impl<'a> Chunk<'a> {
     /// Entry `index` of an object value `parent`: its key and value.
     #[inline]
     pub(crate) fn entry(&self, parent: u32, index: u32) -> (&str, u32) {
-        let (key, value) = self.entry_bytes(parent, index);
-        (
-            std::str::from_utf8(key).unwrap_or_else(|_| corrupt()),
-            value,
-        )
+        let (start, len, value) = self.entry_words(parent, index);
+        (self.string(start, len), value)
     }
 
-    /// [`entry`](Self::entry), its key as bytes, which comparing needn't check are UTF-8.
+    /// [`entry`](Self::entry), its key as bytes.
     #[inline(always)]
     pub(crate) fn entry_bytes(&self, parent: u32, index: u32) -> (&[u8], u32) {
+        let (start, len, value) = self.entry_words(parent, index);
+        (self.span(STRINGS, start, len), value)
+    }
+
+    /// Where an entry's key starts and how long it is, and its value.
+    #[inline(always)]
+    fn entry_words(&self, parent: u32, index: u32) -> (u32, u32, u32) {
         let at = self.at(ENTRIES, index);
         let (start, len, value) = (
             word(&self.bytes, at),
@@ -571,7 +614,7 @@ impl<'a> Chunk<'a> {
         if value >= parent {
             corrupt();
         }
-        (self.span(STRINGS, start, len), value)
+        (start, len, value)
     }
 
     /// The value of the entry keyed `key` among the entries of object `parent`, `len` of them
@@ -597,12 +640,12 @@ impl<'a> Chunk<'a> {
 
     #[inline]
     pub(crate) fn string(&self, start: u32, len: u32) -> &str {
-        std::str::from_utf8(self.span(STRINGS, start, len)).unwrap_or_else(|_| corrupt())
+        str_span(&self.strings, start, len)
     }
 
     #[inline]
     pub(crate) fn text(&self, start: u32, len: u32) -> &str {
-        std::str::from_utf8(self.span(TEXT, start, len)).unwrap_or_else(|_| corrupt())
+        str_span(&self.text, start, len)
     }
 
     /// The UTF-16 units from `start`, `len` of them, as little-endian bytes.
@@ -736,5 +779,30 @@ impl Drop for Chunk<'_> {
 impl std::fmt::Debug for Chunk<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "Chunk({:016x}, {} nodes)", self.id, self.counts[NODES])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::borrow::Cow;
+
+    use super::{Chunk, STRINGS, layout};
+    use crate::{Node, api, json};
+
+    /// A chunk's strings are checked as it loads, so one whose strings aren't UTF-8 is refused
+    /// then rather than on the read that would come across them.
+    #[test]
+    fn refuses_a_chunk_whose_strings_are_not_utf8() {
+        let spec = r#"{"nodes": {"doc": {"content": "text*", "attrs": {"a": {"default": "x"}}},
+                                 "text": {}}}"#;
+        let schema = api::schema(&json::from_str(spec).expect("JSON")).expect("a schema");
+        let doc = json::from_str(r#"{"type": "doc", "attrs": {"a": "é"}}"#).expect("JSON");
+        let doc = Node::from_json(&schema, &doc).expect("a document");
+        let mut bytes = doc.chunk().bytes().to_vec();
+        let (starts, counts) = layout(&bytes).expect("a layout");
+        assert!(counts[STRINGS] > 0);
+        assert!(Chunk::load(Cow::Borrowed(&bytes), &schema, Vec::new()).is_ok());
+        bytes[starts[STRINGS] as usize] = 0xff;
+        assert!(Chunk::load(Cow::Owned(bytes), &schema, Vec::new()).is_err());
     }
 }
