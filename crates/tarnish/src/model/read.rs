@@ -4,7 +4,7 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use super::attrs::Computed;
+use super::attrs::{Computed, PropertyRef};
 use super::fields::field_count;
 use super::schema::Schema;
 use crate::chunk::{
@@ -21,6 +21,15 @@ pub enum Given<'a> {
     Falsy(Value),
     /// An object's properties. A truthy value that isn't an object has none.
     Object(Cow<'a, Map>),
+    /// An object's properties named as the type's attributes, each in its attribute's place,
+    /// as a reader that is told the names finds them.
+    Named(Vec<Option<Property<'a>>>),
+}
+
+/// A property's value as a reader found it: text it borrows from what it read, or any value.
+pub enum Property<'a> {
+    Text(&'a str),
+    Value(Value),
 }
 
 impl<'a> From<Option<&'a Map>> for Given<'a> {
@@ -58,8 +67,9 @@ pub trait Json<'a>: Copy {
     /// An array's items; `None` for a value that isn't an array.
     fn items(self) -> Option<impl Iterator<Item = Self>>;
 
-    /// The value as attributes a type is given, as [`attrs`] reads them.
-    fn attrs(self) -> Given<'a>;
+    /// The value as attributes a type is given, as [`attrs`] reads them, the type's attributes
+    /// being `names`.
+    fn attrs(self, names: &[Key]) -> Given<'a>;
 
     /// Told what was read from the value as a node, after the nodes and marks read from its
     /// parts: whether to set the node's binding flag, which [`NodeRef::flagged`] reads.
@@ -101,7 +111,7 @@ pub struct AttrKeys<'r>(pub(crate) Keys<'r>);
 pub(crate) enum Keys<'r> {
     Map(&'r Map),
     /// Each attribute's value, `None` for one `toJSON` leaves out.
-    Values(&'r [(&'r Key, Option<&'r Value>)]),
+    Values(&'r [(&'r Key, Option<PropertyRef<'r>>)]),
 }
 
 impl<'r> AttrKeys<'r> {
@@ -148,7 +158,7 @@ impl<'a> Json<'a> for &'a Value {
         Some(self.as_array()?.iter())
     }
 
-    fn attrs(self) -> Given<'a> {
+    fn attrs(self, _names: &[Key]) -> Given<'a> {
         attrs(self)
     }
 }
@@ -233,8 +243,10 @@ impl<'s, 'a> Reader<'s, 'a> {
                 return Err(error);
             }
         };
-        let given = attrs.map_or(Given::Falsy(Value::Null), Json::attrs);
         let attr_set = &node_type.data().attrs;
+        let given = attrs.map_or(Given::Falsy(Value::Null), |attrs| {
+            attrs.attrs(attr_set.names())
+        });
         let computed = attr_set.resolve(&given).and_then(|computed| {
             attr_set.check_computed(&computed)?;
             Ok(computed)
@@ -367,8 +379,10 @@ impl<'s, 'a> Reader<'s, 'a> {
             .mark_type(&name)
             .ok_or_else(|| Error::Range(format!("There is no mark type {name} in this schema")))?;
         let rank = mark_type.rank();
-        let given = attrs.map_or(Given::Falsy(Value::Null), Json::attrs);
         let attr_set = &mark_type.data().attrs;
+        let given = attrs.map_or(Given::Falsy(Value::Null), |attrs| {
+            attrs.attrs(attr_set.names())
+        });
         let computed = attr_set.resolve(&given)?;
         attr_set.check_computed(&computed)?;
         let (mark, attrs) = match (&computed, mark_type.default_attrs()) {

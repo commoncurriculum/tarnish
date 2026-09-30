@@ -10,7 +10,6 @@ use napi::bindgen_prelude::{
 };
 use napi::{Env, Error, JsString, JsValue, Result, Status, ValueType};
 use tarnish::chunk::ValueRef;
-use tarnish::model::read::Given;
 use tarnish::{Attrs, Map, Text, TextRef, Value};
 
 thread_local! {
@@ -253,11 +252,11 @@ pub fn json_from_js(value: Unknown) -> Result<Value> {
 
 /// Attributes as a type's `create` reads them from a value, a falsy value as `null`.
 pub fn attrs_from_js(value: Unknown) -> Result<Option<Map>> {
-    let value = value_from_js(value)?;
-    Ok(match value.as_ref().map(tarnish::model::read::attrs) {
-        Some(Given::Object(attrs)) => Some(attrs.into_owned()),
-        Some(Given::Falsy(_)) | None => None,
-    })
+    let value = value_from_js(value)?.filter(|value| tarnish::js::truthy(Some(value)));
+    Ok(value.map(|mut value| match &mut value {
+        Value::Object(attrs) => std::mem::take(attrs),
+        _ => Map::new(),
+    }))
 }
 
 pub fn value_to_js<'env>(env: &'env Env, value: &Value) -> Result<Unknown<'env>> {
