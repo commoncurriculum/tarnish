@@ -1932,6 +1932,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tarnish_test_native"
+version = "0.1.0"
+dependencies = [
+ "rustler",
+ "tarnish",
+ "tarnish-html",
+ "tarnish-nif",
+]
+
+[[package]]
 name = "tendril"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

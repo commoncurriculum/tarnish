@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["crates/*", "elixir/test/support/test_native"]
 # A path dependency under the root is otherwise a member, and regress is vendored as published.
 exclude = ["vendor/regress"]
 

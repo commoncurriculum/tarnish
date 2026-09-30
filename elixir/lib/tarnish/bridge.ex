@@ -3,18 +3,29 @@ defmodule Tarnish.Bridge do
   Converts documents between Markdown, HTML and ProseMirror JSON with the application's own
   conversions, in its NIF or in Node workers. Both give the same answers.
 
-      config :tarnish, Tarnish.Bridge, backend: :node, command: ["node", "worker.mjs"], size: 2
+      config :tarnish, Tarnish.Bridge, backend: :node, conversions: "/path/to/conversions.mjs"
       config :tarnish, Tarnish.Bridge, backend: :nif
 
-  `:node`, the default, sends the requests to a pool of workers, `Tarnish.Bridge.Pool`. `:nif`
-  calls the NIF that `config :tarnish, native:` names, which implements `convert/1` and
-  `convert_light/1` (see `Tarnish.NIF`). Put `Tarnish.Bridge` in your supervision tree; it starts
-  the pool only for `:node`.
+  An application makes its four conversions twice, in a JavaScript module and in its NIF (see
+  `Tarnish.NIF`), and each refuses a request as the other does. tarnish refuses the rest on
+  both: a request whose operation isn't one of the four, or whose input isn't text for a parse
+  and an object for a serialization, gets `"Unknown operation or invalid input"`.
+
+  `:node`, the default, sends the requests to a pool of workers, `Tarnish.Bridge.Pool`, which
+  run the module that `conversions:` names. It exports `parseMarkdown`, `serializeMarkdown`,
+  `parseHTML` and `serializeHTML`, each taking a request's input and its options. The pool also
+  takes `node:`, the executable (`"node"` by default), `size:`, its count of workers (2 by
+  default), and `lazy: true` to start a worker only once a call needs it. `:nif` calls the NIF
+  that `config :tarnish, native:` names.
+
+  Put `Tarnish.Bridge` in your supervision tree. It loads the NIF, so that an application whose
+  NIF doesn't load fails to start, and it starts the pool only for `:node`. `start_link/1` takes
+  the pool's options, over the configured ones, and `name:`.
 
   Each conversion gives `{:ok, value}` or `{:error, message}`. On `:node`, a worker that exits
   or passes the timeout raises. `opts` are the pool's: `timeout:` in milliseconds (30,000 by
-  default), and `pool:` and `size:` for a pool other than the one in your supervision tree. The
-  NIF takes none.
+  default), and `pool:`, the name of a pool other than the one in your supervision tree. The NIF
+  takes none.
   """
 
   alias Tarnish.Bridge.Pool
@@ -32,8 +43,9 @@ defmodule Tarnish.Bridge do
   def child_spec(opts),
     do: %{id: Keyword.get(opts, :name, __MODULE__), start: {__MODULE__, :start_link, [opts]}}
 
-  # The NIF has no process of its own: the application loads it.
   def start_link(opts) do
+    Code.ensure_loaded!(@native)
+
     case backend() do
       :node -> Pool.start_link(opts)
       :nif -> :ignore
@@ -79,6 +91,19 @@ defmodule Tarnish.Bridge do
     end
   end
 
+  @doc "The backend `config :tarnish, Tarnish.Bridge, backend:` names: `:node`, the default, or `:nif`."
+  @spec backend() :: :node | :nif
+  def backend do
+    case Keyword.get(Application.get_env(:tarnish, __MODULE__, []), :backend, :node) do
+      backend when backend in [:node, :nif] ->
+        backend
+
+      other ->
+        raise ArgumentError,
+              "config :tarnish, Tarnish.Bridge, backend: must be :node or :nif, not #{inspect(other)}"
+    end
+  end
+
   defp one(request, opts) do
     [result] = each([request], opts)
     result
@@ -89,17 +114,6 @@ defmodule Tarnish.Bridge do
     do: {operation, input}
 
   defp without_empty_options(request), do: request
-
-  defp backend do
-    case Keyword.get(Application.get_env(:tarnish, __MODULE__, []), :backend, :node) do
-      backend when backend in [:node, :nif] ->
-        backend
-
-      other ->
-        raise ArgumentError,
-              "config :tarnish, Tarnish.Bridge, backend: must be :node or :nif, not #{inspect(other)}"
-    end
-  end
 
   defp run_in_nif(requests) do
     answers = convert_in_nif(requests)

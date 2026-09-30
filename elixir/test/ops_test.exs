@@ -1,6 +1,8 @@
 defmodule Tarnish.OpsTest do
   use ExUnit.Case, async: true
 
+  @native Application.compile_env(:tarnish, :native, Tarnish.Native)
+
   # Op lists, textBetween and textContent as the real ProseMirror packages ran them, recorded by
   # `npm run test:js`: the starting document, and what came of it or the error thrown.
   @fixtures Path.expand("../../fixtures/ops.json", __DIR__)
@@ -114,7 +116,7 @@ defmodule Tarnish.OpsTest do
       {:ok, doc} = Tarnish.Node.from_json(schema, paragraphs(200, "text"))
       insert = %{"op" => "insert", "pos" => 2, "content" => [%{"type" => "text", "text" => "x"}]}
       ops = List.duplicate(insert, 200)
-      assert Tarnish.Native.transform(doc.ref, ops) == :dirty
+      assert @native.transform(doc.ref, ops) == :dirty
       {:ok, %Tarnish.Transform{doc: changed, steps: steps}} = Tarnish.Transform.new(doc, ops)
       assert length(steps) == 200
       %{"content" => [first | _]} = Tarnish.Node.to_json(changed)
@@ -122,7 +124,7 @@ defmodule Tarnish.OpsTest do
 
       mark = %{"type" => "strong"}
       whole = [%{"op" => "addMark", "from" => 0, "to" => 1200, "mark" => mark}]
-      assert Tarnish.Native.transform(doc.ref, whole) == :dirty
+      assert @native.transform(doc.ref, whole) == :dirty
       assert {:ok, %Tarnish.Transform{steps: [_ | _]}} = Tarnish.Transform.new(doc, whole)
     end
   end
@@ -134,9 +136,9 @@ defmodule Tarnish.OpsTest do
       long = String.duplicate("long ", 200_000)
       json = %{"type" => "doc", "content" => [paragraph(long)]}
       {:ok, doc} = Tarnish.Node.from_json(schema, json)
-      assert Tarnish.Native.text_content(doc.ref) == :dirty
+      assert @native.text_content(doc.ref) == :dirty
       assert Tarnish.Node.text_content(doc) == long
-      assert Tarnish.Native.text_between(doc.ref, 0, 1_000_002, "\n", nil) == :dirty
+      assert @native.text_between(doc.ref, 0, 1_000_002, "\n", nil) == :dirty
       assert Tarnish.Node.text_between(doc, 0, 1_000_002, "\n") == {:ok, long}
     end
 
