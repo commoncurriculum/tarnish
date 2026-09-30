@@ -505,3 +505,30 @@ fn fill(tokens: &mut [Token], lexed: &mut [Option<Vec<Token>>]) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Lexer;
+    use crate::marked::Marked;
+    use crate::marked_more_lists::more_lists;
+    use tarnish_js::utf16;
+
+    /// Each level of a nested blockquote lexes a slice of the source, as V8's substrings are, so
+    /// the source is held once however deep it nests.
+    #[test]
+    fn nested_blockquotes_share_the_source() {
+        let marked = Marked::new(more_lists());
+        let source = utf16::from(&format!("{} {}", ">".repeat(50), "a".repeat(1_000)));
+        let tokens = Lexer::new(&marked).lex(&source).expect("tokens");
+        let outer = &tokens[0];
+        let mut token = outer;
+        let mut depth = 0;
+        while let Some(inner) = token.tokens.as_deref().and_then(<[_]>::first) {
+            assert!(inner.raw.shares(&outer.raw), "at depth {depth}");
+            token = inner;
+            depth += 1;
+        }
+        // 49 blockquotes inside the first, the paragraph, and its text.
+        assert_eq!(depth, 51);
+    }
+}
