@@ -18,8 +18,8 @@ use context::ParseContext;
 
 pub use rule::{
     AttrsHook, ClearMarkHook, Content, ContentElement, ContentElementHook, ElementRule,
-    GetAttrsResult, GetContentHook, Namespace, ParseRule, PreserveWhitespace, Rule, RuleField,
-    RuleFromNode, SchemaRule, Skip, StyleAttrsHook, StyleRule, TagRule, schema_rules,
+    GetAttrsResult, GetContentHook, Namespace, NodeRule, ParseRule, PreserveWhitespace, Rule,
+    RuleField, RuleFromNode, SchemaRule, StyleAttrsHook, StyleRule, TagRule, schema_rules,
 };
 
 /// A DOM position to find the document position of: the offset into `node`. Parsing sets `pos`
@@ -259,6 +259,8 @@ impl<N: Clone> DomParser<N> {
                 ignore: rule.ignore,
                 attrs,
                 continue_after: (!rule.consuming).then_some(index),
+                skip_to: None,
+                content_element: None,
             }));
         }
         Ok(None)
@@ -314,17 +316,29 @@ struct Matched<'r, N> {
     /// The index of the parser's rule, when it isn't consuming, for the rules after it to match
     /// the element too.
     continue_after: Option<usize>,
+    /// The nodes a rule from `ruleFromNode` names, as [`NodeRule`] has them.
+    skip_to: Option<&'r N>,
+    content_element: Option<&'r N>,
 }
 
 impl<'r, N> Matched<'r, N> {
-    fn from_node(rule: &'r Rule<ElementRule<N>>) -> Self {
+    fn from_node(from_node: &'r NodeRule<N>) -> Self {
+        let rule = &from_node.rule;
         Matched {
             element: &rule.kind,
             mark: rule.mark.as_deref(),
             ignore: rule.ignore,
             attrs: rule.attrs.clone(),
             continue_after: None,
+            skip_to: from_node.skip_to.as_ref(),
+            content_element: from_node.content_element.as_ref(),
         }
+    }
+
+    /// Whether the rule makes nothing of the element, parsing only its content or another
+    /// node's.
+    fn skips(&self) -> bool {
+        self.element.skip || self.skip_to.is_some()
     }
 }
 

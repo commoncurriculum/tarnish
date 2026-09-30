@@ -8,8 +8,8 @@ use napi_derive::napi;
 use tarnish::Mark;
 use tarnish::dom::{
     AttrsHook, ClearMarkHook, Content, ContentElement, DomParser, ElementRule, FindPosition,
-    GetAttrsResult, GetContentHook, Namespace, ParseOptions, PreserveWhitespace, Rule, RuleField,
-    RuleFromNode, SchemaRule, Skip, StyleAttrsHook, StyleRule, TagRule,
+    GetAttrsResult, GetContentHook, Namespace, NodeRule, ParseOptions, PreserveWhitespace, Rule,
+    RuleField, RuleFromNode, SchemaRule, StyleAttrsHook, StyleRule, TagRule,
 };
 
 use super::{JsDom, JsNode, dom_node};
@@ -96,10 +96,28 @@ fn tag_rule(object: &Object, tag: String) -> Result<Rule<TagRule<JsNode>>> {
     rule_of(object, kind)
 }
 
-fn element_rule(rule: &Object) -> Result<ElementRule<JsNode>> {
-    let skip = js::get(rule, "skip")?;
-    let content_element = js::get(rule, "contentElement")?;
-    let content = match Hook::method(rule, "getContent")? {
+/// A parser's rule for the elements it matches, which names no DOM node.
+fn element_rule(object: &Object) -> Result<ElementRule<JsNode>> {
+    let NodeRule {
+        rule,
+        skip_to,
+        content_element,
+    } = node_rule(object)?;
+    if skip_to.is_some() || content_element.is_some() {
+        return Err(napi::Error::from_reason(
+            "Only a rule from ruleFromNode can name a DOM node",
+        ));
+    }
+    Ok(rule.kind)
+}
+
+/// A rule's fields for the element it matches, and the DOM nodes its `skip` and
+/// `contentElement` may be, which only a rule from `ruleFromNode` can have.
+fn node_rule(object: &Object) -> Result<NodeRule<JsNode>> {
+    let skip = js::get(object, "skip")?;
+    let content_element = js::get(object, "contentElement")?;
+    let mut content_node = None;
+    let content = match Hook::method(object, "getContent")? {
         Some(hook) => Content::Get(Arc::new(move |node: &JsNode, _: &tarnish::Schema| {
             js::host(|env| {
                 let content = hook.call(env, node.value(env)?)?;
@@ -112,7 +130,7 @@ fn element_rule(rule: &Object) -> Result<ElementRule<JsNode>> {
             ValueType::String => Content::Element(ContentElement::Selector(String::from_unknown(
                 content_element,
             )?)),
-            ValueType::Function => match Hook::method(rule, "contentElement")? {
+            ValueType::Function => match Hook::method(object, "contentElement")? {
                 Some(hook) => {
                     Content::Element(ContentElement::Hook(Arc::new(move |node: &JsNode| {
                         js::host(|env| JsNode::new(hook.call(env, node.value(env)?)?))
@@ -121,21 +139,23 @@ fn element_rule(rule: &Object) -> Result<ElementRule<JsNode>> {
                 None => Content::Children,
             },
             _ if content_element.coerce_to_bool()? => {
-                Content::Element(ContentElement::Node(JsNode::new(content_element)?))
+                content_node = Some(JsNode::new(content_element)?);
+                Content::Children
             }
             _ => Content::Children,
         },
     };
-    Ok(ElementRule {
-        node: truthy_string(rule, "node")?,
-        skip: match dom_node(skip)? {
-            Some(node) => Skip::Node(node),
-            None if skip.coerce_to_bool()? => Skip::Yes,
-            None => Skip::No,
-        },
-        close_parent: truthy(rule, "closeParent")?,
+    let element = ElementRule {
+        node: truthy_string(object, "node")?,
+        skip: skip.coerce_to_bool()?,
+        close_parent: truthy(object, "closeParent")?,
         content,
-        preserve_whitespace: preserve_whitespace(js::get(rule, "preserveWhitespace")?)?,
+        preserve_whitespace: preserve_whitespace(js::get(object, "preserveWhitespace")?)?,
+    };
+    Ok(NodeRule {
+        rule: rule_of(object, element)?,
+        skip_to: dom_node(skip)?,
+        content_element: content_node,
     })
 }
 
@@ -245,14 +265,13 @@ fn with_options<T>(
         });
     }
     let rule_from_node = set("ruleFromNode")?.map(|function| {
-        move |node: &JsNode| -> tarnish::Result<Option<Rule<ElementRule<JsNode>>>> {
+        move |node: &JsNode| -> tarnish::Result<Option<NodeRule<JsNode>>> {
             js::host(|env| {
                 let found = js::call(function, node.value(env)?)?;
                 if !found.coerce_to_bool()? {
                     return Ok(None);
                 }
-                let found = Object::from_unknown(found)?;
-                rule_of(&found, element_rule(&found)?).map(Some)
+                node_rule(&Object::from_unknown(found)?).map(Some)
             })
         }
     });

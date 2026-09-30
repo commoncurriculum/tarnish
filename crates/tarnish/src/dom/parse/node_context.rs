@@ -1,7 +1,7 @@
 //! A node being parsed into, and the nodes it holds until it is written.
 
 use super::PreserveWhitespace;
-use super::html::{BLOCK_TAGS, trailing_spaces};
+use super::html::{BLOCK_TAGS, is_tag, trailing_spaces};
 use crate::Result;
 use crate::chunk::{Builder, Kid, LOCAL};
 use crate::dom::Dom;
@@ -237,10 +237,7 @@ impl<'s> NodeContext<'s> {
             return Ok(first.is_inline());
         }
         match text.map(|text| dom.parent(text)).transpose()?.flatten() {
-            Some(parent) => {
-                let name = dom.node_name(&parent)?.to_lowercase();
-                Ok(!BLOCK_TAGS.contains(&name.as_str()))
-            }
+            Some(parent) => Ok(!is_tag(BLOCK_TAGS, &dom.node_name(&parent)?)),
             None => Ok(false),
         }
     }

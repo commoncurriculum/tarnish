@@ -5,11 +5,11 @@ use std::borrow::Cow;
 use super::Matched;
 use super::context::{Inserted, ParseContext};
 use super::html::{
-    BLOCK_TAGS, IGNORE_TAGS, collapse_spaces, has_non_space, is_html_space, is_list_tag,
+    BLOCK_TAGS, IGNORE_TAGS, collapse_spaces, has_non_space, is_html_space, is_list_tag, is_tag,
     normalize_list,
 };
 use super::node_context::Item;
-use super::rule::{Content, ContentElement, ElementRule, PreserveWhitespace, Skip};
+use super::rule::{Content, ContentElement, PreserveWhitespace};
 use crate::dom::{Dom, NodeKind};
 use crate::js::stack;
 use crate::js::text::{Text, is_blank, line_breaks, replace_line_breaks, split_lines};
@@ -137,7 +137,7 @@ impl<'p, D: Dom> ParseContext<'p, D> {
         if name == "PRE" || dom.style_value(node, "white-space")?.contains("pre") {
             self.local_preserve_ws = true;
         }
-        if parser.normalize_lists && is_list_tag(&name.to_lowercase()) {
+        if parser.normalize_lists && is_list_tag(&name) {
             normalize_list(dom, node)?;
         }
         let from_node = match self.options.rule_from_node {
@@ -150,24 +150,19 @@ impl<'p, D: Dom> ParseContext<'p, D> {
         };
         let ignore = match &matched {
             Some(matched) => matched.ignore,
-            None => IGNORE_TAGS.contains(&name.to_lowercase().as_str()),
+            None => is_tag(IGNORE_TAGS, &name),
         };
         match matched {
             _ if ignore => {
                 self.find_inside(node)?;
                 self.ignore_fallback(&name, marks)?;
             }
-            Some(matched)
-                if matches!(matched.element.skip, Skip::No) && !matched.element.close_parent =>
-            {
+            Some(matched) if !matched.skips() && !matched.element.close_parent => {
                 if let Some(inner_marks) = self.read_styles(node, marks)? {
                     self.add_element_by_rule(node, &name, &matched, &inner_marks)?;
                 }
             }
-            matched => {
-                let rule = matched.map(|matched| matched.element);
-                self.add_element_content(node, &name, marks, rule)?;
-            }
+            matched => self.add_element_content(node, &name, marks, matched.as_ref())?,
         }
         self.local_preserve_ws = outer_ws;
         Ok(())
@@ -180,26 +175,23 @@ impl<'p, D: Dom> ParseContext<'p, D> {
         node: &D::Node,
         name: &str,
         marks: &[Mark<'static>],
-        rule: Option<&ElementRule<D::Node>>,
+        matched: Option<&Matched<'_, D::Node>>,
     ) -> Result<()> {
         // The context open when the element came, which closing its parent leaves on the stack.
         let mut top = self.open;
-        let skip = rule.is_some_and(|rule| !matches!(rule.skip, Skip::No));
-        let replaced = match rule {
-            Some(rule) if rule.close_parent => {
+        let skip = matched.is_some_and(Matched::skips);
+        let replaced = match matched {
+            Some(matched) if matched.element.close_parent => {
                 self.open = self.open.saturating_sub(1);
                 None
             }
-            Some(ElementRule {
-                skip: Skip::Node(skip),
-                ..
-            }) => Some(skip),
-            _ => None,
+            Some(matched) => matched.skip_to,
+            None => None,
         };
         let content = replaced.unwrap_or(node);
         let mut sync = None;
         let old_needs_block = self.needs_block;
-        if BLOCK_TAGS.contains(&name.to_lowercase().as_str()) {
+        if is_tag(BLOCK_TAGS, name) {
             if self.nodes[top].content.first().is_some_and(Item::is_inline) && self.open > 0 {
                 self.open -= 1;
                 top = self.open;
@@ -365,8 +357,8 @@ impl<'p, D: Dom> ParseContext<'p, D> {
         } else if let Some(after) = matched.continue_after {
             self.add_element(node, &marks, Some(after))?;
         } else {
-            let content_dom = match &rule.content {
-                Content::Get(get_content) => {
+            let content_dom = match (&rule.content, matched.content_element) {
+                (Content::Get(get_content), _) => {
                     self.find_inside(node)?;
                     let content = get_content(node, self.schema())?;
                     for child in content.children() {
@@ -374,15 +366,15 @@ impl<'p, D: Dom> ParseContext<'p, D> {
                     }
                     None
                 }
-                Content::Children => Some(node.clone()),
-                Content::Element(ContentElement::Selector(selector)) => {
+                (_, Some(content)) => Some(content.clone()),
+                (Content::Children, None) => Some(node.clone()),
+                (Content::Element(ContentElement::Selector(selector)), None) => {
                     let found = self.dom.query_selector(node, selector)?;
                     let found = found
                         .ok_or_else(|| Error::Other(format!("No element matches {selector}")))?;
                     Some(found)
                 }
-                Content::Element(ContentElement::Hook(hook)) => Some(hook(node)?),
-                Content::Element(ContentElement::Node(content)) => Some(content.clone()),
+                (Content::Element(ContentElement::Hook(hook)), None) => Some(hook(node)?),
             };
             if let Some(content_dom) = content_dom {
                 self.find_around(node, &content_dom, true)?;

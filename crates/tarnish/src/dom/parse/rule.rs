@@ -23,7 +23,7 @@ pub type ContentElementHook<N> = Arc<dyn Fn(&N) -> Result<N> + Send + Sync>;
 
 /// The `ruleFromNode` parse option: a rule to use for an element instead of the parser's. As it
 /// matches nothing, its `priority`, `context` and `consuming` go unread.
-pub type RuleFromNode<'a, N> = &'a dyn Fn(&N) -> Result<Option<Rule<ElementRule<N>>>>;
+pub type RuleFromNode<'a, N> = &'a dyn Fn(&N) -> Result<Option<NodeRule<N>>>;
 
 /// Whether to keep whitespace: collapse it, keep it but turn newlines into spaces, or keep it
 /// all. Each keeps more than the one before.
@@ -55,11 +55,10 @@ pub enum Namespace {
 }
 
 /// Which element holds a tag rule's content: the first in the matched one that matches a
-/// selector, the one a hook finds, or this one.
+/// selector, or the one a hook finds.
 #[derive(Clone)]
 pub enum ContentElement<N> {
     Selector(String),
-    Node(N),
     Hook(ContentElementHook<N>),
 }
 
@@ -72,14 +71,6 @@ pub enum Content<N> {
     Element(ContentElement<N>),
     /// `getContent`, which a rule's `contentElement` gives way to.
     Get(GetContentHook<N>),
-}
-
-/// A rule's `skip`: whether to parse only the element's content, or another element's.
-#[derive(Clone)]
-pub enum Skip<N> {
-    No,
-    Yes,
-    Node(N),
 }
 
 /// A parse rule, as a node's or mark's `parseDOM` holds it: the fields tag and style rules
@@ -144,7 +135,8 @@ impl<N> TagRule<N> {
 pub struct ElementRule<N> {
     /// The node type to make.
     pub node: Option<String>,
-    pub skip: Skip<N>,
+    /// `skip`: whether to parse only the element's content, making nothing of the element.
+    pub skip: bool,
     /// Whether a match closes the node being parsed into.
     pub close_parent: bool,
     pub content: Content<N>,
@@ -156,10 +148,30 @@ impl<N> Default for ElementRule<N> {
     fn default() -> Self {
         ElementRule {
             node: None,
-            skip: Skip::No,
+            skip: false,
             close_parent: false,
             content: Content::Children,
             preserve_whitespace: None,
+        }
+    }
+}
+
+/// What `ruleFromNode` gives for an element: a rule, and the DOM nodes JavaScript lets its `skip`
+/// and `contentElement` be. A parser's own rules serve every DOM it parses, so they name none.
+pub struct NodeRule<N> {
+    pub rule: Rule<ElementRule<N>>,
+    /// `skip` as a node: make nothing of the element, and parse this node's content instead.
+    pub skip_to: Option<N>,
+    /// `contentElement` as a node: the element whose children are the content.
+    pub content_element: Option<N>,
+}
+
+impl<N> From<Rule<ElementRule<N>>> for NodeRule<N> {
+    fn from(rule: Rule<ElementRule<N>>) -> Self {
+        NodeRule {
+            rule,
+            skip_to: None,
+            content_element: None,
         }
     }
 }
