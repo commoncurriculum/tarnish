@@ -103,6 +103,15 @@ pub fn trim_end(string: &str) -> &str {
     }
 }
 
+/// Makes room in `string` for `additional` more bytes of a string built in one go, as long as
+/// memory allows, or fails before any of them is built.
+pub fn reserve(string: &mut String, additional: usize) -> Result<()> {
+    deadline::build(additional)?;
+    string
+        .try_reserve_exact(additional)
+        .map_err(|_| invalid_string_length())
+}
+
 /// `string.repeat(count)`, as long as memory allows.
 pub fn repeat(string: &str, count: f64) -> Result<String> {
     let times = if count.is_nan() { 0.0 } else { count.trunc() };
@@ -118,11 +127,8 @@ pub fn repeat(string: &str, count: f64) -> Result<String> {
     let length = (times as usize)
         .checked_mul(string.len())
         .ok_or_else(invalid_string_length)?;
-    deadline::build(length)?;
     let mut repeated = String::new();
-    repeated
-        .try_reserve_exact(length)
-        .map_err(|_| invalid_string_length())?;
+    reserve(&mut repeated, length)?;
     repeated.push_str(string);
     while repeated.len() < length {
         repeated.extend_from_within(..repeated.len().min(length - repeated.len()));
@@ -185,5 +191,15 @@ mod tests {
         assert_eq!(repeat("ab", -0.5).unwrap(), "");
         assert_eq!(repeat("", 2f64.powi(40)).unwrap(), "");
         assert_eq!(repeat("ab", 2.9).unwrap(), "abab");
+    }
+
+    #[test]
+    fn reserves_what_memory_and_a_deadline_allow() {
+        let thrown = reserve(&mut String::new(), usize::MAX).unwrap_err();
+        assert_eq!(thrown.to_string(), "RangeError: Invalid string length");
+        let late = crate::deadline::within(std::time::Duration::from_secs(60), || {
+            reserve(&mut String::new(), 2 << 20)
+        });
+        assert!(late.is_none());
     }
 }
