@@ -14,7 +14,8 @@ defmodule Tarnish.NIF do
 
   A NIF that is `Tarnish.Bridge`'s `:nif` backend also implements `convert/1`, which takes a
   list of requests on a dirty scheduler, and `convert_light/1`, which takes one on the caller's
-  and gives `:dirty` when it is too heavy for that. Each answer is `{:ok, value}`,
+  and gives `:dirty` when it is too heavy for that. A request is `{operation, input}`, or
+  `{operation, input, options}` when the options aren't empty. Each answer is `{:ok, value}`,
   `{:error, message}`, or `:not_json` for a request holding a term the NIF doesn't read.
   """
 
