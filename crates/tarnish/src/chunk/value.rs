@@ -518,7 +518,7 @@ mod tests {
         let strings = [None, Some(null), Some(text)].map(|value| ValueRef::string(value).unwrap());
         assert_eq!(strings, ["undefined", "null", "t"]);
 
-        let child = |value| match DomSpec::<()>::attr_or(value, "fallback") {
+        let child = |value| match &DomSpec::<()>::attr_or(value, "fallback") {
             DomSpec::Attr(value) => value.to_js_string().unwrap().into_owned(),
             DomSpec::Text(text) => format!("text {text}"),
             _ => unreachable!("an attribute or text"),
