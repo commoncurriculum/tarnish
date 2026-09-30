@@ -2,13 +2,16 @@
 //! extension's `renderMarkdown`, `parseMarkdown` and `markdownTokenizer` take and return.
 //! `@tiptap/markdown`'s `MarkdownManager` provides the helpers.
 
+use std::sync::Arc;
+
 use tarnish::json::{Map, Value};
 use tarnish_js::Error;
 use tarnish_js::units::Units;
 use tarnish_markdown::marked::Token;
 
 /// An extension's `renderMarkdown(node, helpers, context)`.
-pub type RenderMarkdown = fn(&Value, &dyn RenderHelpers, &RenderContext) -> Result<String, Error>;
+pub type RenderMarkdown =
+    Arc<dyn Fn(&Value, &dyn RenderHelpers, &RenderContext) -> Result<String, Error> + Send + Sync>;
 
 /// `MarkdownRendererHelpers`.
 pub trait RenderHelpers {
@@ -25,7 +28,8 @@ pub struct RenderContext<'a> {
 }
 
 /// An extension's `parseMarkdown(token, helpers)`.
-pub type ParseMarkdown = fn(&Token, &dyn ParseHelpers) -> Result<Parsed, Error>;
+pub type ParseMarkdown =
+    Arc<dyn Fn(&Token, &dyn ParseHelpers) -> Result<Parsed, Error> + Send + Sync>;
 
 /// `MarkdownParseHelpers`.
 pub trait ParseHelpers {

@@ -42,7 +42,6 @@ mod utilities;
 
 pub use attributes::{
     ExtensionAttribute, GlobalAttributes, ParseAttribute, RenderAttribute, Rendered,
-    render_attribute,
 };
 pub use extension::{
     Extension, Kind, MarkConfig, MarkExtension, NodeConfig, NodeExtension, PlainExtension,

@@ -673,7 +673,7 @@ impl Lexer<'_> {
 /// An autolink's or URL's token, whose one child is its text.
 fn link_token(raw: Units, text: Units, href: Vec<u16>) -> Token {
     Token {
-        data: TokenData::Link(Box::new(Destination { href, title: None })),
+        data: TokenData::link(href),
         tokens: Some(
             vec![Token {
                 text: Some(text.clone()),

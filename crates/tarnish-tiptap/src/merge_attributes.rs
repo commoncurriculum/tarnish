@@ -1,5 +1,7 @@
 //! `mergeAttributes`.
 
+use std::borrow::Cow;
+
 use indexmap::IndexMap;
 
 use crate::{AttrValue, SpecAttrs};
@@ -11,7 +13,7 @@ pub fn merge_attributes<'a, const N: usize>(
     extra: [(&'a str, AttrValue<'a>); N],
 ) -> Result<SpecAttrs<'a>, Error> {
     for (key, value) in extra {
-        merge_entry(&mut html, key, value)?;
+        merge_entry(&mut html, Cow::Borrowed(key), value)?;
     }
     Ok(html)
 }
@@ -20,12 +22,12 @@ pub fn merge_attributes<'a, const N: usize>(
 /// falsy one, and a `class` or `style` joins the one there.
 pub(super) fn merge_entry<'a>(
     merged: &mut SpecAttrs<'a>,
-    key: &'a str,
+    key: Cow<'a, str>,
     value: AttrValue<'a>,
 ) -> Result<(), Error> {
-    match merged.get_mut(key) {
+    match merged.get_mut(&key) {
         Some(existing) if existing.truthy() => {
-            *existing = joined(key, existing, value)?;
+            *existing = joined(&key, existing, value)?;
         }
         Some(existing) => *existing = value,
         None => merged.push(key, value),

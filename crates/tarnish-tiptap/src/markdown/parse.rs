@@ -138,7 +138,7 @@ impl Helpers<'_> {
     /// The first result of the token's handlers that holds something.
     fn parse_with_handlers(&self, token: &Token) -> Result<Option<Vec<Value>>, Error> {
         for handler in self.manager.handlers_for_token(token.kind) {
-            let Some(parse) = handler.parse else {
+            let Some(parse) = &handler.parse else {
                 continue;
             };
             let nodes = match parse(token, self)? {
@@ -166,7 +166,7 @@ impl Helpers<'_> {
         let parse = self
             .manager
             .handler_for_token(kind)
-            .and_then(|spec| spec.parse);
+            .and_then(|spec| spec.parse.as_ref());
         Ok(match parse {
             Some(parse) => match parse(token, self)? {
                 Parsed::Mark {

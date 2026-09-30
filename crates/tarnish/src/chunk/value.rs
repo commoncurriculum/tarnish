@@ -7,6 +7,7 @@ use super::{Chunk, Holder, corrupt};
 use crate::js::TypeOf;
 use crate::js::json::{write_number, write_string};
 use crate::js::stack;
+use crate::js::value::{Nullish, cannot_read};
 use crate::json::{EMPTY, Key, Map, Number, Value};
 use crate::model::compare_deep::entries_equal;
 
@@ -143,8 +144,34 @@ impl<'c> ValueRef<'c> {
         JsonView::to_js_string(self)
     }
 
+    /// `String(value)`, `None` being `undefined`.
+    pub fn string(value: Option<ValueRef<'c>>) -> crate::Result<Cow<'c, str>> {
+        match value {
+            Some(value) => value.to_js_string(),
+            None => Ok(Cow::Borrowed(Nullish::Undefined.name())),
+        }
+    }
+
     pub fn truthy(self) -> bool {
         JsonView::truthy(self)
+    }
+
+    /// `value ?? otherwise`, `None` being `undefined`.
+    pub fn coalesce(value: impl Into<Option<ValueRef<'c>>>, otherwise: ValueRef<'c>) -> Self {
+        value
+            .into()
+            .filter(|value| !value.is_null())
+            .unwrap_or(otherwise)
+    }
+
+    /// `value.key`: the own property, as no value inherits one of the names read here, or the
+    /// `TypeError` of reading a property of `null`.
+    pub fn read(self, key: &str) -> crate::Result<Option<ValueRef<'c>>> {
+        debug_assert!(key != "length" && key.parse::<usize>().is_err());
+        match self.is_null() {
+            true => Err(cannot_read(Nullish::Null, key)),
+            false => Ok(self.get(key)),
+        }
     }
 
     /// `Number(value)`.
@@ -451,5 +478,53 @@ impl fmt::Debug for ValueRef<'_> {
         let mut out = String::new();
         self.write_json(&mut out);
         f.write_str(&out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ValueRef;
+    use crate::dom::DomSpec;
+    use crate::{Node, api, json};
+
+    /// `attrs.object.b`, `attrs.a ?? attrs.b`, `${attrs.a}` and `attrs.a ?? ""` as a spec's
+    /// child, as JavaScript reads them.
+    #[test]
+    fn reads_as_javascript_does() {
+        let spec = r#"{"nodes": {"doc": {"attrs": {"object": {}, "null": {}, "text": {}}},
+                                 "text": {}}}"#;
+        let schema = api::schema(&json::from_str(spec).expect("JSON")).expect("a schema");
+        let doc = r#"{"type": "doc", "attrs": {"object": {"b": 1}, "null": null, "text": "t"}}"#;
+        let doc = Node::from_json(&schema, &json::from_str(doc).expect("JSON")).expect("a doc");
+        let attrs = doc.attrs_view();
+        let [object, null, text] =
+            ["object", "null", "text"].map(|name| attrs.get(name).expect("an attribute"));
+
+        assert_eq!(
+            object.read("b").unwrap().and_then(ValueRef::as_f64),
+            Some(1.0)
+        );
+        assert!(object.read("c").unwrap().is_none());
+        assert!(text.read("b").unwrap().is_none());
+        assert_eq!(
+            null.read("b").unwrap_err().to_string(),
+            "TypeError: Cannot read properties of null (reading 'b')"
+        );
+
+        assert!(ValueRef::coalesce(null, text).ptr_eq(text));
+        assert!(ValueRef::coalesce(None::<ValueRef>, text).ptr_eq(text));
+        assert!(ValueRef::coalesce(object, text).ptr_eq(object));
+
+        let strings = [None, Some(null), Some(text)].map(|value| ValueRef::string(value).unwrap());
+        assert_eq!(strings, ["undefined", "null", "t"]);
+
+        let child = |value| match &DomSpec::<()>::attr_or(value, "fallback") {
+            DomSpec::Attr(value) => value.to_js_string().unwrap().into_owned(),
+            DomSpec::Text(text) => format!("text {text}"),
+            _ => unreachable!("an attribute or text"),
+        };
+        assert_eq!(child(Some(text)), "t");
+        assert_eq!(child(Some(null)), "text fallback");
+        assert_eq!(child(None), "text fallback");
     }
 }

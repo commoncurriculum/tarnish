@@ -1,8 +1,10 @@
 //! `@tiptap/extension-text-style`: `TextStyle` and `Color`.
 
 use tarnish::Map as Attrs;
+use tarnish::Result;
 use tarnish::json::Value;
 use tarnish_html::HtmlNode;
+use tarnish_js::value::nullable_string;
 
 use crate::DomSpec;
 use crate::{
@@ -18,10 +20,10 @@ pub fn text_style() -> MarkExtension {
                 .not_consuming()
                 .get_attrs(|span| {
                     if !span.has_attribute("style") {
-                        return None;
+                        return Ok(None);
                     }
-                    merge_nested_span_styles(span);
-                    Some(Attrs::new())
+                    merge_nested_span_styles(span)?;
+                    Ok(Some(Attrs::new()))
                 })
                 .into(),
         ])
@@ -50,25 +52,26 @@ pub fn color() -> PlainExtension {
 
 /// `mergeNestedSpanStyles`: each span inside `element`, down to the first span on each path,
 /// gets the style of the closest span above it put ahead of its own.
-fn merge_nested_span_styles(element: &HtmlNode) {
+fn merge_nested_span_styles(element: &HtmlNode) -> Result<()> {
     if element.children().is_empty() {
-        return;
+        return Ok(());
     }
     for span in find_child_spans(element, 0) {
         let child_style = span.attribute("style");
         let parent_style = span
             .parent_element()
-            .and_then(|parent| parent.closest("span").expect("a selector"))
+            .map(|parent| parent.closest("span"))
+            .transpose()?
+            .flatten()
             .map(|parent| parent.attribute("style"));
-        let text = |value: Option<Option<String>>| match value {
-            None => "undefined".to_string(),
-            Some(None) => "null".to_string(),
-            Some(Some(style)) => style,
-        };
-        let style = format!("{};{}", text(parent_style), text(Some(child_style)));
-        span.set_attribute("style", &style)
-            .expect("an element takes an attribute");
+        let style = format!(
+            "{};{}",
+            nullable_string(&parent_style),
+            nullable_string(&Some(child_style))
+        );
+        span.set_attribute("style", &style)?;
     }
+    Ok(())
 }
 
 fn find_child_spans(element: &HtmlNode, depth: usize) -> Vec<HtmlNode> {

@@ -12,7 +12,7 @@ pub fn italic() -> MarkExtension {
         .parse_html(vec![
             ParseHtml::tag("em").into(),
             ParseHtml::tag("i")
-                .get_attrs(|i| (i.style_value("font-style") != "normal").then(Attrs::new))
+                .get_attrs(|i| Ok((i.style_value("font-style") != "normal").then(Attrs::new)))
                 .into(),
             ParseHtml::style("font-style=normal").clears_mark().into(),
             ParseHtml::style("font-style=italic").into(),

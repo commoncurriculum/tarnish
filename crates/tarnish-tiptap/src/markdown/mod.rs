@@ -28,7 +28,7 @@ impl TokenizerHelpers for LexerHelpers<'_, '_> {
 }
 
 /// What `registerExtension` keeps of an extension.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Spec {
     parse: Option<ParseMarkdown>,
     render: Option<RenderMarkdown>,
@@ -67,8 +67,8 @@ impl MarkdownManager {
         let markdown = &extension.markdown;
         let token_name = markdown.token_name.unwrap_or(extension.name);
         let spec = Spec {
-            parse: markdown.parse,
-            render: markdown.render,
+            parse: markdown.parse.clone(),
+            render: markdown.render.clone(),
             html_reopen: markdown.html_reopen,
         };
         if spec.parse.is_some() {
@@ -76,7 +76,10 @@ impl MarkdownManager {
                 token_name, "taskList",
                 "parseListToken's task list grouping isn't ported"
             );
-            self.registry.entry(token_name).or_default().push(spec);
+            self.registry
+                .entry(token_name)
+                .or_default()
+                .push(spec.clone());
         }
         if spec.render.is_some() {
             self.node_type_registry

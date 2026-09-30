@@ -13,7 +13,7 @@ pub fn bold() -> MarkExtension {
         .parse_html(vec![
             ParseHtml::tag("strong").into(),
             ParseHtml::tag("b")
-                .get_attrs(|b| (b.style_value("font-weight") != "normal").then(Attrs::new))
+                .get_attrs(|b| Ok((b.style_value("font-weight") != "normal").then(Attrs::new)))
                 .into(),
             ParseHtml::style("font-weight=400").clears_mark().into(),
             ParseHtml::style("font-weight")

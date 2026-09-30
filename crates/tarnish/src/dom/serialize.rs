@@ -92,6 +92,14 @@ impl<'a, N> DomSpec<'a, N> {
     pub fn wrapping(tag: &'a str, attrs: SpecAttrs<'a>) -> Self {
         DomSpec::Wrapping { tag, attrs }
     }
+
+    /// `value ?? fallback`, `None` being `undefined`.
+    pub fn attr_or(value: impl Into<Option<ValueRef<'a>>>, fallback: &'a str) -> Self {
+        match value.into().filter(|value| !value.is_null()) {
+            Some(value) => DomSpec::Attr(value),
+            None => DomSpec::Text(Cow::Borrowed(fallback)),
+        }
+    }
 }
 
 /// A rendered spec: its element, and the element to put the content in, if it has a hole.
@@ -163,9 +171,10 @@ impl From<String> for AttrValue<'_> {
     }
 }
 
-/// A spec's attributes, in the order they were first set.
+/// A spec's attributes, in the order they were first set. A name the spec can't borrow, such as
+/// one an attribute's rendering makes, is its own.
 #[derive(Clone, Default)]
-pub struct SpecAttrs<'a>(Vec<(&'a str, AttrValue<'a>)>);
+pub struct SpecAttrs<'a>(Vec<(Cow<'a, str>, AttrValue<'a>)>);
 
 impl<'a> SpecAttrs<'a> {
     pub fn new() -> Self {
@@ -175,34 +184,35 @@ impl<'a> SpecAttrs<'a> {
     pub fn get(&self, name: &str) -> Option<&AttrValue<'a>> {
         self.0
             .iter()
-            .find(|(set, _)| *set == name)
+            .find(|(set, _)| set == name)
             .map(|(_, value)| value)
     }
 
     pub fn get_mut(&mut self, name: &str) -> Option<&mut AttrValue<'a>> {
         self.0
             .iter_mut()
-            .find(|(set, _)| *set == name)
+            .find(|(set, _)| set == name)
             .map(|(_, value)| value)
     }
 
     /// `attrs[name] = value`.
-    pub fn set(&mut self, name: &'a str, value: impl Into<AttrValue<'a>>) {
-        let value = value.into();
-        match self.get_mut(name) {
+    pub fn set(&mut self, name: impl Into<Cow<'a, str>>, value: impl Into<AttrValue<'a>>) {
+        let (name, value) = (name.into(), value.into());
+        match self.get_mut(&name) {
             Some(set) => *set = value,
             None => self.0.push((name, value)),
         }
     }
 
     /// Sets an attribute not yet set.
-    pub fn push(&mut self, name: &'a str, value: AttrValue<'a>) {
-        debug_assert!(self.get(name).is_none(), "{name} is set");
+    pub fn push(&mut self, name: impl Into<Cow<'a, str>>, value: AttrValue<'a>) {
+        let name = name.into();
+        debug_assert!(self.get(&name).is_none(), "{name} is set");
         self.0.push((name, value));
     }
 
-    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &(&'a str, AttrValue<'a>)> {
-        self.0.iter()
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = (&str, &AttrValue<'a>)> {
+        self.0.iter().map(|(name, value)| (name.as_ref(), value))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -212,7 +222,12 @@ impl<'a> SpecAttrs<'a> {
 
 impl<'a, const N: usize> From<[(&'a str, AttrValue<'a>); N]> for SpecAttrs<'a> {
     fn from(entries: [(&'a str, AttrValue<'a>); N]) -> Self {
-        SpecAttrs(entries.into())
+        SpecAttrs(
+            entries
+                .into_iter()
+                .map(|(name, value)| (Cow::Borrowed(name), value))
+                .collect(),
+        )
     }
 }
 
