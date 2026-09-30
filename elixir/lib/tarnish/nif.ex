@@ -34,7 +34,17 @@ defmodule Tarnish.NIF do
   defmacro __using__(opts) do
     quote do
       use Rustler, unquote(Keyword.put(opts, :load_data_fun, {__MODULE__, :load_data}))
+      Tarnish.NIF.declare_functions()
+    end
+  end
 
+  @doc """
+  Declares the functions a library on `tarnish-nif` registers, each raising until it loads.
+  `use Tarnish.NIF` declares them. A module that loads the library with `:erlang.load_nif/2`
+  itself, where Rustler isn't installed, requires `Tarnish.NIF` and declares them with this.
+  """
+  defmacro declare_functions do
+    quote do
       @doc false
       def schema(_spec), do: :erlang.nif_error(:nif_not_loaded)
       @doc false
