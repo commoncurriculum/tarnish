@@ -11,23 +11,33 @@ use tarnish_html::{HtmlDom, HtmlNode, parse_html, parse_html_slice, to_html};
 
 /// Inputs html5ever builds another tree from than the fork's parse5 8 does, and why. The test
 /// prints both trees, and fails when they come to match.
-const DIFFERENT_TREES: &[(&str, &str)] = &[
+const DIFFERENT_TREES: &[(&[&str], &str)] = &[
     (
-        "<select><option>a<b>x</b></option></select>",
+        &[
+            "<select><option>a<b>x</b></option></select>",
+            "<select><option>a<p>b</p></select>",
+        ],
         "html5ever 0.40 parses <select> as the standard now does, keeping the elements inside \
          it. parse5 8 predates that, and drops their tags.",
     ),
     (
-        "<p><span>a<isindex>b</span>c</p>",
+        &["<p><span>a<isindex>b</span>c</p>"],
         "html5ever still counts <isindex> among the special elements, which an end tag doesn't \
          close past, as the standard did before it dropped <isindex>. parse5 knows no \
          <isindex>, so </span> closes it.",
     ),
     (
-        "<math><mi><![CDATA[x<y]]></mi></math>",
+        &[
+            "<math><mi><![CDATA[x<y]]></mi></math>",
+            "<math><mi><![CDATA[x]]></mi></math>",
+            "<svg><desc><![CDATA[x]]></desc></svg>",
+            "<svg><foreignObject><![CDATA[x]]></foreignObject></svg>",
+            "<math><annotation-xml encoding=text/html><![CDATA[x]]></annotation-xml></math>",
+        ],
         "The standard reads a CDATA section as text wherever the current element isn't HTML's, \
-         <mi> among them. parse5 reads one as a comment in a MathML text integration point \
-         such as <mi>, as it does in HTML.",
+         the integration points among them. parse5 reads one as a comment in a MathML text \
+         integration point such as <mi> and in an HTML integration point such as <desc>, as it \
+         does in HTML.",
     ),
 ];
 
@@ -101,7 +111,9 @@ impl Check<'_> {
 
     /// Whether the trees match. Where they are known to differ, check that they still do.
     fn tree(&mut self, what: &str, actual: String, expected: &Value) -> bool {
-        let known = DIFFERENT_TREES.iter().find(|(html, _)| *html == self.html);
+        let known = DIFFERENT_TREES
+            .iter()
+            .find(|(inputs, _)| inputs.contains(&self.html));
         match (known, expected.as_str() == Some(&actual)) {
             (None, true) => true,
             (Some(_), false) => {
@@ -224,25 +236,41 @@ fn the_forks_css_engine_is_this_one() {
     assert_eq!(fixtures["engine"].as_str(), Some(tarnish_css::ENGINE));
 }
 
+/// Each spec rendered as JSON reaches `renderSpec`: an array as a spec's own value, and any spec
+/// as the value of a node's attribute.
 #[test]
 fn rendered_specs_match_the_fork() {
     let (_, fixtures) = fixtures();
+    let holders = json::json!({"nodes": [
+        ["doc", {"content": "holder*"}],
+        ["holder", {"attrs": {"spec": {}}}],
+        ["text", {}],
+    ]});
+    let holders = api::schema(&holders).expect("the holders' schema");
     let mut failures = Vec::new();
     for record in fixtures["renders"].as_array().expect("renders") {
-        let dom = HtmlDom::new();
-        let spec = DomSpec::from(record["spec"].clone());
-        let rendered = render_spec(&dom, &spec, None).map(|rendered| {
-            let hole = rendered.content_dom.map(|hole| hole.outer_html());
-            json::json!({"html": rendered.dom.outer_html(), "hole": hole})
-        });
+        let json = &record["spec"];
+        let holder = json::json!({"type": "holder", "attrs": {"spec": json}});
+        let holder = Node::from_json(&holders, &holder).expect("a holder");
+        let attribute = holder.attrs_view().get("spec").expect("its spec");
+        let mut specs = vec![("As an attribute's value", DomSpec::Attr(attribute))];
+        if json.is_array() {
+            specs.push(("As a spec", DomSpec::from(json.clone())));
+        }
         let mut recorded = record.clone();
         recorded.as_object_mut().expect("a record").remove("spec");
-        let actual = outcome(rendered);
-        if actual != expected(&recorded) {
-            failures.push(format!(
-                "{}\n  recorded: {recorded}\n  tarnish-html: {actual}",
-                record["spec"]
-            ));
+        for (how, spec) in specs {
+            let dom = HtmlDom::new();
+            let rendered = render_spec(&dom, &spec, None).map(|rendered| {
+                let hole = rendered.content_dom.map(|hole| hole.outer_html());
+                json::json!({"html": rendered.dom.outer_html(), "hole": hole})
+            });
+            let actual = outcome(rendered);
+            if actual != expected(&recorded) {
+                failures.push(format!(
+                    "{how}: {json}\n  recorded: {recorded}\n  tarnish-html: {actual}"
+                ));
+            }
         }
     }
     report(failures);

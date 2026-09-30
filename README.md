@@ -126,18 +126,20 @@ This example is `tarnish-html`'s doctest.
   the fork, even in a document without a doctype. Selectors do follow quirks mode. So
   `width: 10` and `color: f00` are dropped where a browser, in quirks mode, would take them.
 - **Proven against the linkedom fork.** `npm run test:js` records to `fixtures/dom.json` what
-  ProseMirror does in the fork with prosemirror-schema-basic and prosemirror-schema-list: 297
-  parses of 287 HTML inputs, as a template's content and as a document, 450 documents written
-  as HTML, 85 inline styles, 42 DOM output specs, and the strings 262 nodes give an attribute
+  ProseMirror does in the fork with prosemirror-schema-basic and prosemirror-schema-list: 320
+  parses of 310 HTML inputs, as a template's content and as a document, 459 documents written
+  as HTML, 85 inline styles, 52 DOM output specs, and the strings 262 nodes give an attribute
   set to them: a link its `href`, resolved against the document's `<base>`, any other node its
   interface. The crate's tests write those schemas' rules and `toDOM`s in Rust, and must build
-  the same trees, documents, HTML and strings. They also check that the fork's `element.style`
-  runs the `tarnish-css` they do, by the `engine()` it recorded.
-- **Where the trees differ.** The tests print both trees for three inputs, where html5ever
+  the same trees, documents, HTML and strings. They render each spec as the value of a node's
+  attribute too, as an application's `toDOM` may hand one over. They also check that the fork's
+  `element.style` runs the `tarnish-css` they do, by the `engine()` it recorded.
+- **Where the trees differ.** The tests print both trees for eight inputs, where html5ever
   follows the HTML standard and parse5 8 doesn't, but for `<isindex>`:
   - elements in a `<select>`, which html5ever keeps, as the standard now does, and parse5
     drops;
-  - a CDATA section in MathML's `<mi>`, text to html5ever and a comment to parse5;
+  - a CDATA section in an element that isn't HTML's, such as MathML's `<mi>` or SVG's `<desc>`,
+    text to html5ever and a comment to parse5;
   - an end tag past an `<isindex>`, which html5ever still treats as special, as the standard
     did before it dropped `<isindex>`.
 
@@ -176,6 +178,15 @@ assert_eq!(markdown.parse("Hello **world**")?, doc.to_json());
 ```
 
 This example is `tarnish-tiptap`'s doctest.
+
+`npm run test:js` records what the JavaScript does, for the tests to hold these crates to:
+`fixtures/marked.json`, the tokens marked, with marked-more-lists, makes of 206 Markdown
+inputs, and `fixtures/tiptap.json`, the documents, Markdown and HTML that `MarkdownManager`,
+`DOMParser` and `DOMSerializer` make with Tiptap's own extensions, among them V8's errors for
+documents holding what the manager can't read. `tarnish_markdown::MARKED` and
+`tarnish_tiptap::TIPTAP` name the versions ported, and the tests check them against the
+versions installed. tarnish-tiptap's `Underline` and `Highlight` leave out Tiptap's Markdown for
+them, which an application writes.
 
 ### Elixir
 
@@ -402,7 +413,9 @@ The proof doesn't depend on anyone reading the Rust. CI checks it:
    - a step type defined with `Step.jsonID`: applied among ProseMirror's own steps, inverted,
      mapped, merged, and its errors;
    - 273 lists of `Transform` operations, 96 of them failing, and `textBetween` and
-     `textContent`, as the bindings take them.
+     `textContent`, as the bindings take them;
+   - DOM parses and serializations in the linkedom fork, marked's tokens, and Tiptap's
+     conversions, which tarnish-html, tarnish-markdown and tarnish-tiptap are held to.
 
    The Elixir tests apply every recorded transform, invert it and map its positions, and run every
    recorded op list and text read. The C test does the same, and its JSON must equal
@@ -416,7 +429,7 @@ The proof doesn't depend on anyone reading the Rust. CI checks it:
 | tarnish's own suite, against JavaScript and tarnish | 38 passing |
 | Elixir (`mix test`) | 545 tests |
 | C (`npm run test:c`) | 148 recorded transforms, 308 op lists and texts, the error cases and a 200,000-deep attribute |
-| Rust (`cargo test`) | the recorded cases, and a 20,000-deep document through every operation on a 256 KB stack |
+| Rust (`cargo test`) | the recorded cases, and a 20,000-deep document through every operation on a 256 KB stack, as are HTML, specs, Markdown and Tiptap's documents nested thousands deep |
 
 ## Speed
 
