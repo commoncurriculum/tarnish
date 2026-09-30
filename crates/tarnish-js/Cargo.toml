@@ -17,6 +17,7 @@ collation = ["dep:icu_collator"]
 compact_str = "0.9"
 icu_collator = { version = "2", optional = true }
 json-event-parser = "0.2"
+memchr = "2"
 regress = { path = "../../vendor/regress", features = ["utf16", "prohibit-unsafe"], optional = true }
 ryu-js = "1"
 serde = "1"

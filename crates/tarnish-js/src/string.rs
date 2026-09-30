@@ -1,3 +1,5 @@
+use memchr::memmem;
+
 use crate::{Error, Result, deadline, number_to_string};
 
 /// What JavaScript throws building a string longer than it holds, as tarnish throws building one
@@ -112,6 +114,114 @@ pub fn reserve(string: &mut String, additional: usize) -> Result<()> {
         .map_err(|_| invalid_string_length())
 }
 
+/// `strings.join("")`, as long as memory allows.
+pub fn concat(strings: &[&str]) -> Result<String> {
+    let length = strings
+        .iter()
+        .try_fold(0usize, |length, string| length.checked_add(string.len()))
+        .ok_or_else(invalid_string_length)?;
+    let mut joined = String::new();
+    reserve(&mut joined, length)?;
+    strings.iter().for_each(|string| joined.push_str(string));
+    Ok(joined)
+}
+
+/// `string.replaceAll(pattern, replacement)`, as long as memory allows, of a `pattern` that
+/// isn't empty: JavaScript matches an empty one between the halves of a surrogate pair too, which
+/// a `str` can't hold apart. The replacement's `$$`, `$&`, `` $` `` and `$'` stand for what they
+/// do in JavaScript, and, with no groups to name, any other `$` for itself.
+pub fn replace_all(string: &str, pattern: &str, replacement: &str) -> Result<String> {
+    assert!(!pattern.is_empty(), "replace_all of an empty pattern");
+    let pieces = substitution(replacement);
+    let matches = memmem::Finder::new(pattern);
+    let mut length = string.len();
+    for at in matches.find_iter(string.as_bytes()) {
+        length = pieces
+            .iter()
+            .try_fold(length - pattern.len(), |length, piece| {
+                length.checked_add(piece.at(string, pattern, at).len())
+            })
+            .ok_or_else(invalid_string_length)?;
+    }
+    let mut replaced = String::new();
+    reserve(&mut replaced, length)?;
+    let mut copied = 0;
+    for at in matches.find_iter(string.as_bytes()) {
+        replaced.push_str(&string[copied..at]);
+        for piece in &pieces {
+            replaced.push_str(piece.at(string, pattern, at));
+        }
+        copied = at + pattern.len();
+    }
+    replaced.push_str(&string[copied..]);
+    Ok(replaced)
+}
+
+/// A piece of a replacement as `GetSubstitution` reads it for a match of a string.
+enum Piece<'r> {
+    Text(&'r str),
+    /// `$&`.
+    Match,
+    /// `` $` ``.
+    Before,
+    /// `$'`.
+    After,
+}
+
+impl<'r> Piece<'r> {
+    /// What the piece stands for at a match of `pattern` at `at` in `string`.
+    fn at<'a>(&self, string: &'a str, pattern: &'a str, at: usize) -> &'a str
+    where
+        'r: 'a,
+    {
+        match *self {
+            Piece::Text(text) => text,
+            Piece::Match => pattern,
+            Piece::Before => &string[..at],
+            Piece::After => &string[at + pattern.len()..],
+        }
+    }
+}
+
+fn substitution(replacement: &str) -> Vec<Piece<'_>> {
+    let mut pieces = Vec::new();
+    let mut rest = replacement;
+    while let Some(dollar) = rest.find('$') {
+        let (piece, skip) = match rest.as_bytes().get(dollar + 1) {
+            Some(b'$') => (Piece::Text("$"), 2),
+            Some(b'&') => (Piece::Match, 2),
+            Some(b'`') => (Piece::Before, 2),
+            Some(b'\'') => (Piece::After, 2),
+            _ => (Piece::Text("$"), 1),
+        };
+        pieces.push(Piece::Text(&rest[..dollar]));
+        pieces.push(piece);
+        rest = &rest[dollar + skip..];
+    }
+    pieces.push(Piece::Text(rest));
+    pieces.retain(|piece| !matches!(piece, Piece::Text("")));
+    pieces
+}
+
+/// `string.split(/\r?\n/)`, which leaves a `\r` that no `\n` follows.
+pub fn split_crlf_lines(string: &str) -> impl Iterator<Item = &str> {
+    let mut rest = Some(string);
+    std::iter::from_fn(move || {
+        let current = rest?;
+        Some(match memchr::memchr(b'\n', current.as_bytes()) {
+            Some(end) => {
+                rest = Some(&current[end + 1..]);
+                let line = &current[..end];
+                line.strip_suffix('\r').unwrap_or(line)
+            }
+            None => {
+                rest = None;
+                current
+            }
+        })
+    })
+}
+
 /// `string.repeat(count)`, as long as memory allows.
 pub fn repeat(string: &str, count: f64) -> Result<String> {
     let times = if count.is_nan() { 0.0 } else { count.trunc() };
@@ -201,5 +311,74 @@ mod tests {
             reserve(&mut String::new(), 2 << 20)
         });
         assert!(late.is_none());
+    }
+
+    #[test]
+    fn builds_in_one_go_what_a_deadline_allows() {
+        let within = |build: &dyn Fn() -> Result<String>| {
+            crate::deadline::within(std::time::Duration::from_secs(60), build)
+        };
+        let half = "\n".repeat(1 << 19);
+        assert!(within(&|| concat(&[&half, &half])).is_some());
+        assert!(within(&|| concat(&[&half, &half, "x"])).is_none());
+        assert!(within(&|| replace_all(&half, "\n", "ab")).is_some());
+        assert!(within(&|| replace_all(&half, "\n", "abc")).is_none());
+        assert_eq!(replace_all(&half, "\n", "abc").unwrap().len(), 3 << 19);
+    }
+
+    // As V8 answers it.
+    #[test]
+    fn replaces_all_as_v8_does() {
+        assert_eq!(
+            replace_all("abcb", "b", "[$$|$&|$`|$'|$1|$<|$]").unwrap(),
+            "a[$|b|a|cb|$1|$<|$]c[$|b|abc||$1|$<|$]"
+        );
+        assert_eq!(replace_all("aaa", "aa", "b").unwrap(), "ba");
+        assert_eq!(concat(&["a", "", "bc"]).unwrap(), "abc");
+    }
+
+    #[cfg(feature = "regexp")]
+    #[test]
+    fn replaces_all_as_a_global_regex_does() {
+        use crate::random::{check_same, strings};
+        use crate::regexp::RegExp;
+        // RegExp's replacements don't read `` $` `` and `$'`.
+        let alphabet = &["a", "b", "\n", "\r\n", "$", "$$", "$&", "$1", "é", "😀"];
+        let lossy = |units: &[u16]| String::from_utf16_lossy(units);
+        for (pattern, source) in [("\n", r"\n"), ("ab", "ab"), ("$", r"\$")] {
+            let regex = RegExp::new(source, "g");
+            for replacement in strings(alphabet, 100) {
+                let replacement = lossy(&replacement);
+                check_same(
+                    alphabet,
+                    500,
+                    |src| replace_all(&lossy(src), pattern, &replacement).unwrap(),
+                    |src| {
+                        let src = crate::utf16::from(&lossy(src));
+                        lossy(&regex.replace(&src, &replacement))
+                    },
+                );
+            }
+        }
+    }
+
+    #[cfg(feature = "regexp")]
+    #[test]
+    fn splits_lines_as_the_regex_does() {
+        let regex = crate::regexp::RegExp::new(r"\r?\n", "g");
+        let lossy = |units: &[u16]| String::from_utf16_lossy(units);
+        crate::random::check_same(
+            &["a", "\r", "\n", "\r\n", "é", "\u{2028}"],
+            100_000,
+            |src| {
+                split_crlf_lines(&lossy(src))
+                    .map(String::from)
+                    .collect::<Vec<_>>()
+            },
+            |src| {
+                let src = crate::utf16::from(&lossy(src));
+                regex.split(&src).into_iter().map(lossy).collect::<Vec<_>>()
+            },
+        );
     }
 }

@@ -40,6 +40,16 @@ pub fn cannot_read(value: Nullish, property: &str) -> Error {
     ))
 }
 
+/// `String(value)` of a string that may be `null`, `None` being `undefined`, such as an
+/// element's attribute an optional chain reads.
+pub fn nullable_string<S: AsRef<str>>(value: &Option<Option<S>>) -> &str {
+    match value {
+        None => Nullish::Undefined.name(),
+        Some(None) => Nullish::Null.name(),
+        Some(Some(string)) => string.as_ref(),
+    }
+}
+
 /// A value whose `property` the JavaScript reads, which it has as `null` where it's missing.
 pub fn non_null<T>(value: Option<T>, property: &str) -> Result<T> {
     value.ok_or_else(|| cannot_read(Nullish::Null, property))
@@ -356,6 +366,15 @@ mod tests {
         assert_eq!(
             crate::to_string(&json!([1, null, [2, 3], {}])).unwrap(),
             "1,,2,3,[object Object]"
+        );
+    }
+
+    #[test]
+    fn strings_a_nullable_string_as_javascript_does() {
+        let values = [None, Some(None), Some(Some("a"))];
+        assert_eq!(
+            values.each_ref().map(nullable_string),
+            ["undefined", "null", "a"]
         );
     }
 }

@@ -1866,6 +1866,7 @@ dependencies = [
  "compact_str",
  "icu_collator",
  "json-event-parser",
+ "memchr",
  "regress",
  "ryu-js",
  "serde",
