@@ -1,14 +1,15 @@
 //! The attributes of node and mark types: their specs, their defaults, and the attributes nodes
 //! and marks get from what they're given.
 
+use std::borrow::Cow;
 use std::fmt;
 use std::sync::Arc;
 
 use super::compare_deep::deep_equal;
-use super::read::{AttrKeys, Given, Keys};
-use crate::chunk::{Builder, Chunk, EMPTY_OBJECT, JsonView, ValueRef};
+use super::read::{AttrKeys, Given, Keys, Property};
+use crate::chunk::{Builder, Chunk, EMPTY_OBJECT, JsonView, Kind, ValueRef};
 use crate::js::TypeOf;
-use crate::json::{Key, Map, Value};
+use crate::json::{EMPTY, Key, Map, Value};
 use crate::{Error, Result};
 
 /// A function that raises an error for an attribute value it doesn't accept, `None` being
@@ -111,7 +112,9 @@ impl fmt::Debug for Attrs<'_> {
 
 /// A node or mark type's attributes.
 pub(crate) struct AttrSet {
-    attrs: Vec<(Key, Attribute)>,
+    names: Vec<Key>,
+    /// Each attribute, in the place of its name.
+    attrs: Vec<Attribute>,
     /// What nodes or marks given no attributes get, when every attribute has a default.
     defaults: Option<Map>,
     /// Whether any attribute has a check.
@@ -126,7 +129,57 @@ pub(crate) struct AttrSet {
 /// `None` for one whose default is `undefined`.
 pub(crate) enum Computed<'g> {
     Defaults,
-    Values(Vec<(&'g Key, Option<&'g Value>)>),
+    Values(Vec<(&'g Key, Option<PropertyRef<'g>>)>),
+}
+
+/// A [`Property`] or a [`Value`], borrowed, as an attribute's value.
+#[derive(Clone, Copy)]
+pub(crate) enum PropertyRef<'v> {
+    Text(&'v str),
+    Value(&'v Value),
+}
+
+impl<'v> JsonView<'v> for PropertyRef<'v> {
+    fn kind(self) -> Kind<'v> {
+        match self {
+            PropertyRef::Text(text) => Kind::String(text),
+            PropertyRef::Value(value) => value.kind(),
+        }
+    }
+
+    fn items(self) -> impl ExactSizeIterator<Item = Self> {
+        let items: &[Value] = match self {
+            PropertyRef::Value(Value::Array(items)) => items,
+            _ => &[],
+        };
+        items.iter().map(PropertyRef::Value)
+    }
+
+    fn entries(self) -> impl ExactSizeIterator<Item = (&'v str, Self)> {
+        let object = match self {
+            PropertyRef::Value(Value::Object(object)) => object,
+            _ => &EMPTY,
+        };
+        object
+            .iter()
+            .map(|(key, value)| (key.as_str(), PropertyRef::Value(value)))
+    }
+
+    fn to_value(self) -> Cow<'v, Value> {
+        match self {
+            PropertyRef::Text(text) => Cow::Owned(Value::String(text.into())),
+            PropertyRef::Value(value) => Cow::Borrowed(value),
+        }
+    }
+}
+
+impl Property<'_> {
+    fn as_ref(&self) -> PropertyRef<'_> {
+        match self {
+            Property::Text(text) => PropertyRef::Text(text),
+            Property::Value(value) => PropertyRef::Value(value),
+        }
+    }
 }
 
 impl AttrSet {
@@ -137,7 +190,7 @@ impl AttrSet {
         specs: &[(String, AttributeSpec)],
         slot: usize,
     ) -> AttrSet {
-        let attrs: Vec<(Key, Attribute)> = specs
+        let (names, attrs): (Vec<Key>, Vec<Attribute>) = specs
             .iter()
             .map(|(name, spec)| {
                 let check = spec.validate.as_ref().map(|validate| match validate {
@@ -161,10 +214,11 @@ impl AttrSet {
                 };
                 (Key::from(name.as_str()), attribute)
             })
-            .collect();
+            .unzip();
         AttrSet {
-            defaults: defaults(&attrs),
-            checked: attrs.iter().any(|(_, attr)| attr.check.is_some()),
+            defaults: defaults(&names, &attrs),
+            checked: attrs.iter().any(|attr| attr.check.is_some()),
+            names,
             attrs,
             owner: format!("{kind} of type {type_name}"),
             slot,
@@ -173,6 +227,11 @@ impl AttrSet {
 
     pub fn is_empty(&self) -> bool {
         self.attrs.is_empty()
+    }
+
+    /// The attributes' names, in order.
+    pub fn names(&self) -> &[Key] {
+        &self.names
     }
 
     pub fn defaults(&self) -> Option<&Map> {
@@ -187,23 +246,34 @@ impl AttrSet {
     /// value gives the defaults where every attribute has one, and is every attribute
     /// otherwise, required or not.
     pub fn resolve<'g>(&'g self, given: &'g Given) -> Result<Computed<'g>> {
-        let given = match (given, &self.defaults) {
-            (Given::Falsy(_), Some(_)) => return Ok(Computed::Defaults),
-            (Given::Falsy(value), None) => {
-                return Ok(Computed::Values(
-                    self.attrs
-                        .iter()
-                        .map(|(name, _)| (name, Some(value)))
-                        .collect(),
-                ));
+        match (given, &self.defaults) {
+            (Given::Falsy(_), Some(_)) => Ok(Computed::Defaults),
+            (Given::Falsy(value), None) => Ok(Computed::Values(
+                self.names
+                    .iter()
+                    .map(|name| (name, Some(PropertyRef::Value(value))))
+                    .collect(),
+            )),
+            (Given::Object(given), _) => {
+                let mut next = 0;
+                self.values(|name, _| given.get_from(name, &mut next).map(PropertyRef::Value))
             }
-            (Given::Object(given), _) => given,
-        };
+            (Given::Named(given), _) => {
+                self.values(|_, index| given.get(index)?.as_ref().map(Property::as_ref))
+            }
+        }
+    }
+
+    /// Each attribute's value: the one `given` gives for its name and place, or its default.
+    fn values<'g>(
+        &'g self,
+        mut given: impl FnMut(&Key, usize) -> Option<PropertyRef<'g>>,
+    ) -> Result<Computed<'g>> {
         let mut built = Vec::with_capacity(self.attrs.len());
-        let mut next = 0;
-        for (name, attr) in &self.attrs {
-            let value = match (given.get_from(name, &mut next), &attr.default) {
-                (Some(value), _) | (None, AttributeDefault::Value(value)) => Some(value),
+        for (index, (name, attr)) in self.names.iter().zip(&self.attrs).enumerate() {
+            let value = match (given(name, index), &attr.default) {
+                (Some(value), _) => Some(value),
+                (None, AttributeDefault::Value(value)) => Some(PropertyRef::Value(value)),
                 (None, AttributeDefault::Undefined) => None,
                 (None, AttributeDefault::Required) => return Err(no_value(name)),
             };
@@ -214,17 +284,25 @@ impl AttrSet {
 
     /// Fail as [`resolve`](Self::resolve) would, without computing the attributes.
     pub fn check_given(&self, given: &Given) -> Result<()> {
-        let Given::Object(given) = given else {
-            return Ok(());
-        };
         if !self.has_required() {
             return Ok(());
         }
-        let missing = self.attrs.iter().find(|(name, attr)| {
-            matches!(attr.default, AttributeDefault::Required) && given.get(name).is_none()
-        });
+        // A falsy value is every attribute's.
+        let has = |index: usize, name: &Key| match given {
+            Given::Falsy(_) => true,
+            Given::Object(given) => given.contains_key(name),
+            Given::Named(given) => given.get(index).is_some_and(Option::is_some),
+        };
+        let missing =
+            self.names
+                .iter()
+                .zip(&self.attrs)
+                .enumerate()
+                .find(|&(index, (name, attr))| {
+                    matches!(attr.default, AttributeDefault::Required) && !has(index, name)
+                });
         match missing {
-            Some((name, _)) => Err(no_value(name)),
+            Some((_, (name, _))) => Err(no_value(name)),
             None => Ok(()),
         }
     }
@@ -235,7 +313,7 @@ impl AttrSet {
             Computed::Defaults => self.defaults.clone().unwrap_or_default(),
             Computed::Values(values) => values
                 .into_iter()
-                .filter_map(|(name, value)| Some((name.clone(), value?.clone())))
+                .filter_map(|(name, value)| Some((name.clone(), value?.to_value().into_owned())))
                 .collect(),
         })
     }
@@ -246,12 +324,12 @@ impl AttrSet {
         match computed {
             Computed::Defaults => {
                 let defaults = self.defaults.as_ref().expect("defaults");
-                for (name, attr) in &self.attrs {
+                for (name, attr) in self.names.iter().zip(&self.attrs) {
                     check_value(attr, defaults.get(name))?;
                 }
             }
             Computed::Values(values) => {
-                for ((_, attr), (_, value)) in self.attrs.iter().zip(values) {
+                for (attr, (_, value)) in self.attrs.iter().zip(values) {
                     check_value(attr, *value)?;
                 }
             }
@@ -277,7 +355,7 @@ impl AttrSet {
                 if values.iter().all(|(_, value)| value.is_none()) {
                     return EMPTY_OBJECT;
                 }
-                let names = self.attrs.iter().map(|(name, _)| name.as_str());
+                let names = self.names.iter().map(Key::as_str);
                 builder.attrs(self.slot, names, values.iter().map(|&(_, value)| value))
             }
         }
@@ -315,12 +393,9 @@ impl AttrSet {
         };
         for (at, (key, value)) in values.enumerate() {
             // Attributes a type computed are written in its order.
-            let index = match self.attrs.get(at) {
-                Some((known, _)) if known.as_bytes() == key => Some(at),
-                _ => self
-                    .attrs
-                    .iter()
-                    .position(|(known, _)| known.as_bytes() == key),
+            let index = match self.names.get(at) {
+                Some(known) if known.as_bytes() == key => Some(at),
+                _ => self.names.iter().position(|known| known.as_bytes() == key),
             };
             match index {
                 Some(index) => found[index] = Some(value),
@@ -328,7 +403,7 @@ impl AttrSet {
             }
         }
         if self.checked {
-            for ((_, attr), value) in self.attrs.iter().zip(found.iter()) {
+            for (attr, value) in self.attrs.iter().zip(found.iter()) {
                 check_value(attr, *value)?;
             }
         }
@@ -368,9 +443,9 @@ fn no_value(name: &str) -> Error {
 }
 
 /// The attributes' defaults, when every attribute has one.
-fn defaults(attrs: &[(Key, Attribute)]) -> Option<Map> {
+fn defaults(names: &[Key], attrs: &[Attribute]) -> Option<Map> {
     let mut defaults = Map::with_capacity(attrs.len());
-    for (name, attr) in attrs {
+    for (name, attr) in names.iter().zip(attrs) {
         match &attr.default {
             AttributeDefault::Required => return None,
             AttributeDefault::Undefined => {}

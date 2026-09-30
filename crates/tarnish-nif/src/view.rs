@@ -7,15 +7,14 @@
 
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
-use std::ops::Range;
 
 use rustler::types::atom;
 use rustler::types::map::MapIterator;
-use rustler::{BigInt, Binary, Encoder, Env, Term, TermType};
+use rustler::{BigInt, Binary, Term, TermType};
 use tarnish::js::stack;
 use tarnish::js::{self, WrittenNumber};
 use tarnish::json::{self, Key, Map, Number, Value};
-use tarnish::model::read::{self, AttrKeys, Given, ReadMark, ReadNode};
+use tarnish::model::read::{self, AttrKeys, Given, Property, ReadMark, ReadNode};
 
 use crate::term::Unread;
 
@@ -37,10 +36,8 @@ pub fn read<'a, T>(
         heavy: Cell::new(false),
         bounded: weight != usize::MAX,
         left: Cell::new(weight),
-        keys: RefCell::new(Vec::new()),
         open: RefCell::new(Vec::new()),
         irregular: Cell::new(0),
-        given: RefCell::new(Vec::new()),
     };
     let read = read(Json {
         term,
@@ -61,32 +58,28 @@ pub fn read<'a, T>(
 #[derive(Clone, Copy)]
 pub struct Json<'a, 'r> {
     term: Term<'a>,
-    reading: &'r Reading<'a>,
+    reading: &'r Reading,
 }
 
-pub struct Reading<'a> {
+pub struct Reading {
     refused: Cell<bool>,
     heavy: Cell<bool>,
     /// Whether the weight it may read is bounded, as a light call's is.
     bounded: bool,
     /// The weight left to read.
     left: Cell<usize>,
-    /// The keys looked up so far, as terms.
-    keys: RefCell<Vec<(&'static str, Term<'a>)>>,
     /// The maps being read as nodes and marks, innermost last.
     open: RefCell<Vec<Open>>,
     /// A count of the parts read so far that aren't as `toJSON` writes them. A map is as it
     /// writes it only when the count didn't grow while the map was read.
     irregular: Cell<usize>,
-    /// The keys of the attributes given the nodes and marks being read.
-    given: RefCell<Vec<Key>>,
 }
 
 /// A map being read as a node or mark, until the reader says what it read.
 struct Open {
     /// [`Reading::irregular`] when the map was opened.
     irregular: usize,
-    /// The map's size, when its keys are all among those looked up, and strings.
+    /// The map's size, when its keys are all among those looked up.
     size: Option<usize>,
     /// The nodes and marks read from its `content` and `marks`.
     children: usize,
@@ -94,11 +87,20 @@ struct Open {
     /// The rank of the last mark read, and whether the marks came in order of rank.
     rank: usize,
     sorted: bool,
-    /// Where the keys of the map read as its `attrs` are in [`Reading::given`].
-    attrs: Option<Range<usize>>,
+    /// What the map read as its `attrs` gave the type's attributes.
+    attrs: Option<GivenAttrs>,
 }
 
-impl<'a> Reading<'a> {
+/// What an object read as a node's or mark's attributes gave its type's.
+#[derive(Clone, Copy)]
+struct GivenAttrs {
+    /// How many of the type's attributes it gave.
+    given: usize,
+    /// Whether it had properties the type has no attributes for.
+    others: bool,
+}
+
+impl Reading {
     fn irregular(&self) {
         self.irregular.set(self.irregular.get() + 1);
     }
@@ -121,18 +123,10 @@ impl<'a> Reading<'a> {
         if let Some(open) = open.last_mut() {
             parent(open);
         }
-        let mut given = self.given.borrow_mut();
-        let given = match closed.attrs.clone() {
-            Some(range) => {
-                let keys = &given[range.clone()];
-                let mut written = 0;
-                let same = attrs.iter().all(|key| {
-                    written += 1;
-                    keys.iter().any(|given| given.as_str() == key)
-                }) && written == keys.len();
-                given.truncate(range.start);
-                same
-            }
+        // Every attribute given is written, so the map holds just those written when it has
+        // no others and gave as many.
+        let given = match closed.attrs {
+            Some(given) => !given.others && attrs.iter().count() == given.given,
             None => attrs.iter().next().is_none(),
         };
         closed.size == Some(fields)
@@ -162,16 +156,6 @@ impl<'a> Reading<'a> {
                 false
             }
         }
-    }
-
-    fn key(&self, env: Env<'a>, name: &'static str) -> Term<'a> {
-        let mut keys = self.keys.borrow_mut();
-        if let Some(&(_, key)) = keys.iter().find(|(known, _)| std::ptr::eq(*known, name)) {
-            return key;
-        }
-        let key = name.encode(env);
-        keys.push((name, key));
-        key
     }
 }
 
@@ -244,11 +228,24 @@ impl<'a, 'r> Json<'a, 'r> {
 
     /// A binary's text, which must be UTF-8. Past the reading's weight, it's none.
     fn text_of(self, binary: Binary<'a>) -> Option<&'a str> {
+        std::str::from_utf8(self.bytes_of(binary)?).ok()
+    }
+
+    /// A binary's bytes, weighed. Past the reading's weight, they're none.
+    fn bytes_of(self, binary: Binary<'a>) -> Option<&'a [u8]> {
         let bytes = binary.as_slice();
-        if !self.reading.weigh(1 + bytes.len()) {
-            return None;
+        self.reading.weigh(1 + bytes.len()).then_some(bytes)
+    }
+
+    /// A key's text, the reading refused when its bytes aren't UTF-8.
+    fn key_text(self, key: EntryKey<'a>) -> Option<Cow<'a, str>> {
+        match key {
+            EntryKey::Bytes(bytes) => match std::str::from_utf8(bytes) {
+                Ok(text) => Some(Cow::Borrowed(text)),
+                Err(_) => self.refuse(None),
+            },
+            EntryKey::Name(name) => Some(Cow::Owned(name)),
         }
-        std::str::from_utf8(bytes).ok()
     }
 
     fn string(self) -> Option<&'a str> {
@@ -266,20 +263,20 @@ impl<'a, 'r> Json<'a, 'r> {
         }
     }
 
-    /// A map key as Jason writes it: a string, an atom's name, or an integer's digits.
-    fn key(self, key: Term<'a>) -> Option<Cow<'a, str>> {
-        if let Ok(binary) = Binary::from_term(key) {
-            return self.text_of(binary).map(Cow::Borrowed);
+    /// A map key that isn't a string, as Jason writes it: an atom's name, or an integer's
+    /// digits.
+    fn key_name(self, key: Term<'a>) -> Option<String> {
+        match key.get_type() {
+            TermType::Atom => atom_name(key),
+            TermType::Integer => match key.decode::<i64>() {
+                Ok(integer) => Some(integer.to_string()),
+                Err(_) if self.reading.big_integer() => {
+                    Some(key.decode::<BigInt>().ok()?.to_string())
+                }
+                Err(_) => None,
+            },
+            _ => None,
         }
-        Some(match key.get_type() {
-            TermType::Atom => Cow::Owned(atom_name(key)?),
-            TermType::Integer => Cow::Owned(match key.decode::<i64>() {
-                Ok(integer) => integer.to_string(),
-                Err(_) if self.reading.big_integer() => key.decode::<BigInt>().ok()?.to_string(),
-                Err(_) => return None,
-            }),
-            _ => return None,
-        })
     }
 
     /// The fields of these names, and the map's size when it has no keys but those found.
@@ -291,30 +288,18 @@ impl<'a, 'r> Json<'a, 'r> {
         if !self.reading.weigh(1 + size) {
             return (fields, None);
         }
-        // A map with no keys but these, as strings, has each looked up. Any other key might be
-        // an atom or integer that Jason writes as one of them.
         let mut found = 0;
-        for (field, key) in fields.iter_mut().zip(keys) {
-            if found == size {
-                break;
-            }
-            let key = self.reading.key(self.term.get_env(), key);
-            if let Ok(value) = self.term.map_get(key) {
-                *field = Some(self.at(value));
-                found += 1;
-            }
-        }
-        if found == size {
-            return (fields, Some(size));
-        }
-        fields = [None; N];
         // Of keys that write the same, the last written is the one that counts.
-        for (name, value) in self.entries() {
-            if let Some(index) = keys.iter().position(|&key| key == name) {
-                fields[index] = Some(value);
+        for (key, value) in self.entries() {
+            match keys.iter().position(|name| key.is(name)) {
+                Some(index) => {
+                    fields[index] = Some(value);
+                    found += 1;
+                }
+                None => drop(self.key_text(key)),
             }
         }
-        (fields, None)
+        (fields, (found == size).then_some(size))
     }
 
     /// A map's entries, or a `Jason.OrderedObject`'s, as Jason writes them.
@@ -352,6 +337,9 @@ impl<'a, 'r> Json<'a, 'r> {
         }
         let mut entries = self.entries();
         while let Some((key, value)) = entries.next() {
+            let Some(key) = self.key_text(key) else {
+                break;
+            };
             let value = stack::grow(|| value.value());
             // A key written twice keeps its first place and its last value, as parsing the JSON
             // Jason writes does.
@@ -361,6 +349,47 @@ impl<'a, 'r> Json<'a, 'r> {
             }
         }
         object.into_js_order()
+    }
+
+    /// An object's properties of these names, each in its name's place, and what they gave.
+    /// The others are read only to weigh them and see that they're JSON.
+    fn named(self, names: &[Key]) -> (Vec<Option<Property<'a>>>, GivenAttrs) {
+        let mut values = Vec::new();
+        values.resize_with(names.len(), || None);
+        let mut given = GivenAttrs {
+            given: 0,
+            others: false,
+        };
+        let size = self.term.map_size().unwrap_or(0);
+        if !self.reading.weigh(1 + size) {
+            return (values, given);
+        }
+        // Of keys that write the same, the last written is the one that counts.
+        for (key, value) in self.entries() {
+            match names.iter().position(|name| key.is(name)) {
+                Some(index) => {
+                    let property = value.property();
+                    given.given += usize::from(values[index].replace(property).is_none());
+                }
+                None => {
+                    given.others = true;
+                    drop(self.key_text(key));
+                    drop(value.value());
+                }
+            }
+        }
+        (values, given)
+    }
+
+    /// The value as a property, a string's text borrowed from its binary.
+    fn property(self) -> Property<'a> {
+        match Binary::from_term(self.term) {
+            Ok(binary) => match self.text_of(binary) {
+                Some(text) => Property::Text(text),
+                None => self.refuse(Property::Value(Value::Null)),
+            },
+            Err(_) => Property::Value(self.value()),
+        }
     }
 
     /// A list's items, the list being proper.
@@ -404,14 +433,14 @@ impl<'a, 'r> Entries<'a, 'r> {
 
     /// Turns to the pairs of the `Jason.OrderedObject` the map is, whose `__struct__` names
     /// `name`. A struct's map is small, so its keys come in term order, `__struct__` first.
-    fn open_ordered(&mut self, name: Term<'a>) -> Option<()> {
+    fn open_ordered(&mut self, first: bool, name: Term<'a>) -> Option<()> {
         let term = self.json.term;
         self.map = None;
         self.unique = false;
         // A struct is written as a plain map.
         self.json.reading.irregular();
         let ordered =
-            self.first && term.map_size().is_ok_and(|size| size == 2) && ordered_object() == name;
+            first && term.map_size().is_ok_and(|size| size == 2) && ordered_object() == name;
         match term.map_get(values()) {
             Ok(pairs) if ordered => {
                 self.pairs = Some(pairs);
@@ -434,32 +463,53 @@ impl<'a, 'r> Entries<'a, 'r> {
 }
 
 impl<'a, 'r> Iterator for Entries<'a, 'r> {
-    type Item = (Cow<'a, str>, Json<'a, 'r>);
+    type Item = (EntryKey<'a>, Json<'a, 'r>);
 
     fn next(&mut self) -> Option<Self::Item> {
+        let from_map = self.pairs.is_none();
         let (key, value) = match self.pairs {
             Some(rest) => self.next_pair(rest)?,
-            None => {
-                let (key, value) = self.map.as_mut()?.next()?;
-                if __struct__() == key {
-                    self.open_ordered(value)?;
-                    return self.next();
-                }
-                self.first = false;
-                (key, value)
-            }
+            None => self.map.as_mut()?.next()?,
         };
-        match self.json.key(key) {
-            Some(key) => {
-                // Only a string key is written as it is.
-                if let Cow::Owned(_) = key {
+        let first = from_map && std::mem::replace(&mut self.first, false);
+        // A string key, the likeliest, is the only one written as it is.
+        let key = match Binary::from_term(key) {
+            Ok(binary) => match self.json.bytes_of(binary) {
+                Some(bytes) => EntryKey::Bytes(bytes),
+                None => return self.refuse(),
+            },
+            Err(_) if from_map && __struct__() == key => {
+                self.open_ordered(first, value)?;
+                return self.next();
+            }
+            Err(_) => match self.json.key_name(key) {
+                Some(name) => {
                     self.unique = false;
                     self.json.reading.irregular();
+                    EntryKey::Name(name)
                 }
-                Some((key, self.json.at(value)))
-            }
-            None => self.refuse(),
-        }
+                None => return self.refuse(),
+            },
+        };
+        Some((key, self.json.at(value)))
+    }
+}
+
+/// A map key as Jason writes it: a string's bytes, which may not be UTF-8, or the name it
+/// writes for an atom or an integer. A key the same as a name is known to be UTF-8, so only
+/// the others are checked, as they're read.
+enum EntryKey<'a> {
+    Bytes(&'a [u8]),
+    Name(String),
+}
+
+impl EntryKey<'_> {
+    fn is(&self, name: &str) -> bool {
+        let key = match self {
+            EntryKey::Bytes(bytes) => bytes,
+            EntryKey::Name(key) => key.as_bytes(),
+        };
+        key == name.as_bytes()
     }
 }
 
@@ -507,17 +557,14 @@ impl<'a> read::Json<'a> for Json<'a, '_> {
         (self.term.is_list() && self.reading.weigh(1)).then(|| self.list())
     }
 
-    fn attrs(self) -> Given<'a> {
+    fn attrs(self, names: &[Key]) -> Given<'a> {
         match self.kind() {
             Kind::Object => {
-                let attrs = self.object();
+                let (values, given) = self.named(names);
                 if let Some(open) = self.reading.open.borrow_mut().last_mut() {
-                    let mut given = self.reading.given.borrow_mut();
-                    let start = given.len();
-                    given.extend(attrs.keys().cloned());
-                    open.attrs = Some(start..given.len());
+                    open.attrs = Some(given);
                 }
-                Given::Object(Cow::Owned(attrs))
+                Given::Named(values)
             }
             _ if read::Json::truthy(self) => Given::Object(Cow::Borrowed(&json::EMPTY)),
             _ => Given::Falsy(self.value()),
