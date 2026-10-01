@@ -2,6 +2,7 @@
 //! extension's tokenizer makes, and `data` holds the fields only some types have. Strings are
 //! UTF-16, as JavaScript's are, and `raw` and `text` share the source they were cut from.
 
+use std::fmt;
 use std::ops::{Deref, DerefMut};
 
 use tarnish_js::stack;
@@ -85,9 +86,9 @@ pub struct Cell {
     pub tokens: Tokens,
 }
 
-/// A token's `tokens`, which nest as deeply as the Markdown does, so each level clones and
-/// drops on the stack segments `stack::grow` adds. Tokens nest only through these.
-#[derive(Debug, Default)]
+/// A token's `tokens`, which nest as deeply as the Markdown does, so each level clones, drops
+/// and formats on the stack segments `stack::grow` adds. Tokens nest only through these.
+#[derive(Default)]
 pub struct Tokens {
     pub(super) items: Vec<Token>,
     /// The entry of the lexer's inline queue whose tokens these will be.
@@ -139,6 +140,16 @@ impl Clone for Tokens {
 impl Drop for Tokens {
     fn drop(&mut self) {
         stack::drop_nested(&mut self.items);
+    }
+}
+
+impl fmt::Debug for Tokens {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        stack::grow(|| {
+            let mut tokens = formatter.debug_struct("Tokens");
+            tokens.field("items", &self.items);
+            tokens.field("queued", &self.queued).finish()
+        })
     }
 }
 

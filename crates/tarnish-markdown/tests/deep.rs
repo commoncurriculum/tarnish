@@ -12,6 +12,9 @@ use tarnish_markdown::marked_more_lists::more_lists;
 const BLOCKS: usize = 3_000;
 const INLINES: usize = 1_000;
 const LAZY: usize = 500;
+/// How deep the formatted tokens nest, whose text, each a slice of the one below, is as long as
+/// the square of the depth.
+const FORMATTED: usize = 1_000;
 
 /// How many tokens deep the JSON of the tokens nests, walked without recursing.
 fn depth(tokens: &[Value]) -> usize {
@@ -53,5 +56,21 @@ fn lexes_markdown_nested_as_deeply_as_memory_allows() {
             let json: Vec<Value> = tokens.iter().map(Token::to_json).collect();
             assert!(depth(&json) > levels, "{what}: {}", depth(&json));
         }
+    });
+}
+
+/// Tokens nested far deeper than a small stack could recurse through, formatted with `{:?}`
+/// and cloned there.
+#[test]
+fn formats_and_clones_tokens_nested_as_deeply_as_memory_allows() {
+    on_dirty_scheduler_stack(|| {
+        let marked = Marked::new(more_lists());
+        let markdown = ">".repeat(FORMATTED) + " x";
+        let tokens = Lexer::new(&marked).lex(&utf16::from(&markdown));
+        let tokens = tokens.unwrap_or_else(|error| panic!("{}", error.message()));
+        let formatted = format!("{tokens:?}");
+        assert_eq!(formatted.matches("kind: \"blockquote\"").count(), FORMATTED);
+        let cloned = tokens.clone();
+        assert_eq!(format!("{cloned:?}"), formatted);
     });
 }

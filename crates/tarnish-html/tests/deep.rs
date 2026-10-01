@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use tarnish::dom::{
-    DomParser, DomSerializer, DomSpec, NodeToDom, ParseOptions, ParseRule, Rule, TagRule,
-    render_spec, render_spec_of,
+    DomParser, DomSerializer, DomSpec, NodeToDom, ParseOptions, ParseRule, Rule, SpecAttrs,
+    TagRule, render_spec, render_spec_of,
 };
 use tarnish::js::stack::on_dirty_scheduler_stack;
 use tarnish::json::{self, Value};
@@ -108,6 +108,11 @@ fn specs_render_as_deeply_as_memory_allows() {
         );
         assert_eq!(attribute(&array), html);
         assert_eq!(attribute(&array_like), html);
+
+        let elements = (0..SPEC_DEPTH).fold(DomSpec::Text("x".into()), |inner, _| {
+            DomSpec::element("span", SpecAttrs::new(), vec![inner])
+        });
+        assert_eq!(rendered(&elements).expect("HTML"), html);
     });
 }
 
