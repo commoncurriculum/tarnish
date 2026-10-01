@@ -3,7 +3,7 @@
 use crate::DomSpec;
 use crate::markdown::{ParseHelpers, Parsed, RenderContext, RenderHelpers};
 use crate::{ExtensionAttribute, NodeExtension, ParseHtml};
-use tarnish::json::{Map, Value, json};
+use tarnish_js::json::{Map, Value, json};
 use tarnish_js::{self as js, Error, utf16, value};
 use tarnish_markdown::marked::Token;
 

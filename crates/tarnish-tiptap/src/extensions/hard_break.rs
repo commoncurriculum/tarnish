@@ -3,8 +3,8 @@
 use crate::DomSpec;
 use crate::markdown::{Parsed, RenderContext, RenderHelpers};
 use crate::{NodeExtension, ParseHtml};
-use tarnish::json::{Value, json};
 use tarnish_js::Error;
+use tarnish_js::json::{Value, json};
 
 pub fn hard_break() -> NodeExtension {
     NodeExtension::create("hardBreak")

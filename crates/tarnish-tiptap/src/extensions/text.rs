@@ -2,9 +2,9 @@
 
 use crate::NodeExtension;
 use crate::markdown::{ParseHelpers, Parsed, RenderContext, RenderHelpers};
-use tarnish::json::{Value, json};
 use tarnish_js as js;
 use tarnish_js::Error;
+use tarnish_js::json::{Value, json};
 use tarnish_js::utf16;
 use tarnish_markdown::marked::Token;
 

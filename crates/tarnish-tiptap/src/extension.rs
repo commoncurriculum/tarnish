@@ -13,8 +13,9 @@ use super::markdown::{
 };
 use super::parse_html::ParseHtml;
 use crate::{DomSpec, SpecAttrs};
-use tarnish::json::Value;
-use tarnish::{Error, Mark, Node};
+use tarnish::{Mark, Node};
+use tarnish_js::Error;
+use tarnish_js::json::Value;
 use tarnish_js::units::Units;
 use tarnish_markdown::marked::{Lexer, Token};
 
@@ -23,8 +24,9 @@ pub type RenderNode = Arc<
     dyn for<'a> Fn(&'a Node<'static>, SpecAttrs<'a>) -> Result<DomSpec<'a>, Error> + Send + Sync,
 >;
 /// A mark's `renderHTML`, given the mark and its rendered attributes.
-pub type RenderMark =
-    Arc<dyn for<'a> Fn(&'a Mark<'static>, SpecAttrs<'a>) -> DomSpec<'a> + Send + Sync>;
+pub type RenderMark = Arc<
+    dyn for<'a> Fn(&'a Mark<'static>, SpecAttrs<'a>) -> Result<DomSpec<'a>, Error> + Send + Sync,
+>;
 
 /// An extension's config. `K` is what its kind adds: [`NodeConfig`] for a node, [`MarkConfig`]
 /// for a mark, nothing for a plain extension, and [`Kind`] once it is any of them.
@@ -275,7 +277,10 @@ impl MarkExtension {
 
     pub fn render_html(
         mut self,
-        render: impl for<'a> Fn(&'a Mark<'static>, SpecAttrs<'a>) -> DomSpec<'a> + Send + Sync + 'static,
+        render: impl for<'a> Fn(&'a Mark<'static>, SpecAttrs<'a>) -> Result<DomSpec<'a>, Error>
+        + Send
+        + Sync
+        + 'static,
     ) -> Self {
         self.kind.render_html = Some(Arc::new(render));
         self

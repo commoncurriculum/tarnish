@@ -7,8 +7,9 @@ use tarnish::dom::{
     Content, ContentElement, ElementRule, GetAttrsResult, Namespace, ParseRule, Rule,
     StyleAttrsHook, StyleRule as DomStyleRule, TagRule as DomTagRule,
 };
-use tarnish::{Map, Result, Value, js};
 use tarnish_html::HtmlNode;
+use tarnish_js::json::{Map, Value};
+use tarnish_js::{self as js, Result};
 
 use super::attributes::ExtensionAttribute;
 

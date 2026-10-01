@@ -15,5 +15,5 @@ pub fn superscript() -> MarkExtension {
                 })
             })),
         ])
-        .render_html(|_, html| DomSpec::wrapping("sup", html))
+        .render_html(|_, html| Ok(DomSpec::wrapping("sup", html)))
 }

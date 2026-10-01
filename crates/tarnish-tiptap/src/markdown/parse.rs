@@ -6,13 +6,13 @@ use std::sync::LazyLock;
 use tarnish_js::stack;
 
 use super::MarkdownManager;
-use super::utils::{extract_absorbed_blank_lines, marks_of};
+use super::utils::extract_absorbed_blank_lines;
 use crate::markdown::Parsed;
 use crate::{decode_html_entities, marks_equal};
-use tarnish::json::{Map, Value, json};
+use tarnish_js::json::{Map, Value, json};
 use tarnish_js::regexp::RegExp;
 use tarnish_js::units::Units;
-use tarnish_js::{Error, utf16};
+use tarnish_js::{self as js, Error, utf16};
 use tarnish_markdown::marked::{Lexer, Token};
 
 impl MarkdownManager {
@@ -242,7 +242,10 @@ impl ParseHelpers<'_> {
                 Some(next)
                     if next["type"] == "text"
                         && node["type"] == "text"
-                        && marks_equal(marks_of(Some(next)), marks_of(Some(&node))) =>
+                        && marks_equal(
+                            js::array(next.get("marks")),
+                            js::array(node.get("marks")),
+                        ) =>
                 {
                     let text = format!(
                         "{}{}",

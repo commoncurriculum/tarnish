@@ -5,8 +5,8 @@
 use std::sync::Arc;
 
 use super::ParseHelpers;
-use tarnish::json::{Map, Value};
 use tarnish_js::Error;
+use tarnish_js::json::{Map, Value};
 use tarnish_js::units::Units;
 use tarnish_markdown::marked::{Lexer, Token};
 

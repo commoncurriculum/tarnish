@@ -5,8 +5,8 @@ use std::sync::LazyLock;
 use crate::DomSpec;
 use crate::markdown::{RenderContext, RenderHelpers};
 use crate::{ExtensionAttribute, MarkExtension, ParseHtml, get_style_property};
-use tarnish::json::Value;
 use tarnish_js::Error;
+use tarnish_js::json::Value;
 use tarnish_js::regexp::RegExp;
 use tarnish_js::units::Units;
 use tarnish_js::utf16;
@@ -25,7 +25,7 @@ pub fn highlight(options: HighlightOptions) -> MarkExtension {
     MarkExtension::create("highlight")
         .add_attributes(attributes)
         .parse_html([ParseHtml::tag("mark")])
-        .render_html(|_, html| DomSpec::wrapping("mark", html))
+        .render_html(|_, html| Ok(DomSpec::wrapping("mark", html)))
         .render_markdown(render_markdown)
         .parse_markdown(|token, helpers| {
             let content = helpers.parse_inline(token.tokens.as_deref().unwrap_or_default())?;

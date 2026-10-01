@@ -3,9 +3,9 @@
 use crate::DomSpec;
 use crate::markdown::{RenderContext, RenderHelpers};
 use crate::{MarkExtension, ParseHtml};
-use tarnish::Map as Attrs;
-use tarnish::json::Value;
 use tarnish_js::Error;
+use tarnish_js::json::Map;
+use tarnish_js::json::Value;
 
 pub fn italic() -> MarkExtension {
     MarkExtension::create("italic")
@@ -13,12 +13,12 @@ pub fn italic() -> MarkExtension {
             ParseHtml::Tag(ParseHtml::tag("em")),
             ParseHtml::Tag(
                 ParseHtml::tag("i")
-                    .get_attrs(|i| Ok((i.style_value("font-style") != "normal").then(Attrs::new))),
+                    .get_attrs(|i| Ok((i.style_value("font-style") != "normal").then(Map::new))),
             ),
             ParseHtml::Style(ParseHtml::style("font-style=normal").clears_mark()),
             ParseHtml::Style(ParseHtml::style("font-style=italic")),
         ])
-        .render_html(|_, html| DomSpec::wrapping("em", html))
+        .render_html(|_, html| Ok(DomSpec::wrapping("em", html)))
         .markdown_token_name("em")
         .html_reopen("<em>", "</em>")
         .parse_markdown(|token, helpers| {

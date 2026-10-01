@@ -3,9 +3,9 @@
 use crate::DomSpec;
 use crate::markdown::{RenderContext, RenderHelpers};
 use crate::{GetAttrsResult, MarkExtension, ParseHtml};
-use tarnish::Map as Attrs;
-use tarnish::json::Value;
 use tarnish_js::Error;
+use tarnish_js::json::Map;
+use tarnish_js::json::Value;
 
 pub fn strike() -> MarkExtension {
     MarkExtension::create("strike")
@@ -18,14 +18,14 @@ pub fn strike() -> MarkExtension {
                     .not_consuming()
                     .get_attrs(|value| {
                         Ok(if value.contains("line-through") {
-                            GetAttrsResult::Attrs(Attrs::new())
+                            GetAttrsResult::Attrs(Map::new())
                         } else {
                             GetAttrsResult::Reject
                         })
                     }),
             ),
         ])
-        .render_html(|_, html| DomSpec::wrapping("s", html))
+        .render_html(|_, html| Ok(DomSpec::wrapping("s", html)))
         .markdown_token_name("del")
         .parse_markdown(|token, helpers| {
             let content = helpers.parse_inline(token.tokens.as_deref().unwrap_or_default())?;

@@ -3,9 +3,9 @@
 use crate::DomSpec;
 use crate::markdown::{RenderContext, RenderHelpers};
 use crate::{GetAttrsResult, MarkExtension, ParseHtml};
-use tarnish::Map as Attrs;
-use tarnish::json::Value;
 use tarnish_js::Error;
+use tarnish_js::json::Map;
+use tarnish_js::json::Value;
 
 pub fn bold() -> MarkExtension {
     MarkExtension::create("bold")
@@ -13,7 +13,7 @@ pub fn bold() -> MarkExtension {
             ParseHtml::Tag(ParseHtml::tag("strong")),
             ParseHtml::Tag(
                 ParseHtml::tag("b")
-                    .get_attrs(|b| Ok((b.style_value("font-weight") != "normal").then(Attrs::new))),
+                    .get_attrs(|b| Ok((b.style_value("font-weight") != "normal").then(Map::new))),
             ),
             ParseHtml::Style(ParseHtml::style("font-weight=400").clears_mark()),
             ParseHtml::Style(ParseHtml::style("font-weight").get_attrs(|value| {
@@ -24,7 +24,7 @@ pub fn bold() -> MarkExtension {
                 })
             })),
         ])
-        .render_html(|_, html| DomSpec::wrapping("strong", html))
+        .render_html(|_, html| Ok(DomSpec::wrapping("strong", html)))
         .markdown_token_name("strong")
         .html_reopen("<strong>", "</strong>")
         .parse_markdown(|token, helpers| {

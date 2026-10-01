@@ -15,5 +15,5 @@ pub fn subscript() -> MarkExtension {
                 })
             })),
         ])
-        .render_html(|_, html| DomSpec::wrapping("sub", html))
+        .render_html(|_, html| Ok(DomSpec::wrapping("sub", html)))
 }

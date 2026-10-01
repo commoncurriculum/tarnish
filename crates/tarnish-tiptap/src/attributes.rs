@@ -5,8 +5,9 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use tarnish::chunk::ValueRef;
-use tarnish::{Error, Value};
 use tarnish_html::HtmlNode;
+use tarnish_js::Error;
+use tarnish_js::json::Value;
 
 use super::merge_attributes::merge_entry;
 use crate::{AttrValue, SpecAttrs};
