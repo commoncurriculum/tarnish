@@ -87,41 +87,41 @@ defmodule Tarnish.BridgeTest do
       end
 
       test "reads a request as Jason encodes it", %{opts: opts} do
-        expected = Tarnish.Bridge.serialize_html(document(["Fïrst ✓"]), %{}, opts)
-        assert expected == {:ok, "<p>Fïrst ✓</p>"}
-
         # An atom past Latin-1, whose name the VM gives out only in the external format.
         text = %{type: :text, text: :"Fïrst ✓"}
         paragraph = Jason.OrderedObject.new([{"type", "paragraph"}, {"content", [text]}])
         as_terms = %{type: :doc, content: [paragraph]}
 
-        assert Tarnish.Bridge.serialize_html(as_terms, %{}, opts) == expected
-        requests = [{"serializeHTML", as_terms}, {"serializeHTML", as_terms}]
-        assert Tarnish.Bridge.each(requests, opts) == [expected, expected]
+        for {operation, expected} <- serialized("<p>Fïrst ✓</p>", as_terms) do
+          request = {operation, as_terms}
+          assert Tarnish.Bridge.each([request], opts) == [expected]
+          assert Tarnish.Bridge.each([request, request], opts) == [expected, expected]
+        end
       end
 
       test "reads a map's keys as Jason writes them", %{opts: opts} do
-        expected = Tarnish.Bridge.serialize_html(document(["First"]), %{}, opts)
-
         # A key written twice keeps its first place and its last value.
         twice = %{:text => "Old", "text" => "First", "type" => "text"}
         # An atom key past Latin-1, after a key already read, has the map read again whole.
         past_latin1 = %{:a => 1, :"✓" => 2, "text" => "First", "type" => "text"}
 
-        for node <- [twice, past_latin1] do
-          request = {"serializeHTML", holding(node)}
+        for {node, as_read} <- [{twice, text("First")}, {past_latin1, past_latin1}],
+            {operation, expected} <- serialized("<p>First</p>", holding(as_read)) do
+          request = {operation, holding(node)}
           assert Tarnish.Bridge.each([request], opts) == [expected]
           assert Tarnish.Bridge.each([request, request], opts) == [expected, expected]
         end
       end
 
       test "reads a struct as its Jason.Encoder writes it", %{opts: opts} do
-        expected = Tarnish.Bridge.serialize_html(document(["2024-01-02"]), %{}, opts)
         as_struct = holding(text(~D[2024-01-02]))
+        as_written = document(["2024-01-02"])
 
-        assert Tarnish.Bridge.serialize_html(as_struct, %{}, opts) == expected
-        requests = [{"serializeHTML", as_struct}, {"serializeHTML", document(["2024-01-02"])}]
-        assert Tarnish.Bridge.each(requests, opts) == [expected, expected]
+        for {operation, expected} <- serialized("<p>2024-01-02</p>", as_written) do
+          assert Tarnish.Bridge.each([{operation, as_struct}], opts) == [expected]
+          requests = [{operation, as_struct}, {operation, as_written}]
+          assert Tarnish.Bridge.each(requests, opts) == [expected, expected]
+        end
       end
 
       test "converts a document of any size alone as in a batch", %{opts: opts} do
@@ -217,6 +217,11 @@ defmodule Tarnish.BridgeTest do
       assert log =~ "bridge worker exited with status 1 before it was ready"
     end
   end
+
+  # The answer of each serialization of a document read as `doc_json`: its HTML, and the
+  # "Markdown" of the tests' conversions, which is the JSON `JSON.stringify` writes for it.
+  defp serialized(html, doc_json),
+    do: [{"serializeHTML", {:ok, html}}, {"serializeMarkdown", {:ok, Jason.encode!(doc_json)}}]
 
   defp document(texts),
     do: %{"type" => "doc", "content" => Enum.map(texts, &paragraph([text(&1)]))}
