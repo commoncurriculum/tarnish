@@ -3,6 +3,7 @@
 //! a setter replaces the parent's field, and an `extend_` method adds to it, as a field that
 //! spreads `this.parent()` does.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use super::attributes::{ExtensionAttribute, GlobalAttributes};
@@ -12,17 +13,20 @@ use super::markdown::{
 };
 use super::parse_html::ParseHtml;
 use crate::{DomSpec, SpecAttrs};
-use tarnish::json::Value;
-use tarnish::{Error, Mark, Node};
-use tarnish_markdown::marked::Token;
+use tarnish::{Mark, Node};
+use tarnish_js::Error;
+use tarnish_js::json::Value;
+use tarnish_js::units::Units;
+use tarnish_markdown::marked::{Lexer, Token};
 
 /// A node's `renderHTML`, given the node and its rendered attributes.
 pub type RenderNode = Arc<
     dyn for<'a> Fn(&'a Node<'static>, SpecAttrs<'a>) -> Result<DomSpec<'a>, Error> + Send + Sync,
 >;
 /// A mark's `renderHTML`, given the mark and its rendered attributes.
-pub type RenderMark =
-    Arc<dyn for<'a> Fn(&'a Mark<'static>, SpecAttrs<'a>) -> DomSpec<'a> + Send + Sync>;
+pub type RenderMark = Arc<
+    dyn for<'a> Fn(&'a Mark<'static>, SpecAttrs<'a>) -> Result<DomSpec<'a>, Error> + Send + Sync,
+>;
 
 /// An extension's config. `K` is what its kind adds: [`NodeConfig`] for a node, [`MarkConfig`]
 /// for a mark, nothing for a plain extension, and [`Kind`] once it is any of them.
@@ -36,7 +40,7 @@ pub struct Extension<K = Kind> {
     pub global_attributes: Vec<GlobalAttributes>,
     /// `parseHTML`.
     pub parse_html: Vec<ParseHtml>,
-    pub markdown: Markdown,
+    pub(crate) markdown: Markdown,
 }
 
 /// `Node.create(config)`.
@@ -54,22 +58,26 @@ pub enum Kind {
 
 #[derive(Default)]
 pub struct NodeConfig {
-    pub content: &'static str,
+    pub content: Cow<'static, str>,
     pub group: &'static str,
     pub inline: bool,
     pub marks: Option<&'static str>,
     pub linebreak_replacement: bool,
+    /// `code`: the node holds code, whose text Markdown keeps as it is.
+    pub code: bool,
     pub render_html: Option<RenderNode>,
 }
 
 #[derive(Default)]
 pub struct MarkConfig {
+    /// `code`: the mark's text is code, which Markdown keeps as it is.
+    pub code: bool,
     pub render_html: Option<RenderMark>,
 }
 
 /// The fields `@tiptap/markdown` reads from an extension.
 #[derive(Default)]
-pub struct Markdown {
+pub(crate) struct Markdown {
     /// `markdownTokenName`: the marked token type `parseMarkdown` handles, when not the name.
     pub token_name: Option<&'static str>,
     /// `markdownTokenizer`.
@@ -156,14 +164,17 @@ impl<K> Extension<K> {
         self
     }
 
-    pub fn parse_html(mut self, rules: Vec<ParseHtml>) -> Self {
-        self.parse_html = rules;
+    pub fn parse_html(mut self, rules: impl IntoIterator<Item = impl Into<ParseHtml>>) -> Self {
+        self.parse_html = rules.into_iter().map(Into::into).collect();
         self
     }
 
     /// `parseHTML() { return [...this.parent?.(), ...rules] }`.
-    pub fn extend_parse_html(mut self, rules: Vec<ParseHtml>) -> Self {
-        self.parse_html.extend(rules);
+    pub fn extend_parse_html(
+        mut self,
+        rules: impl IntoIterator<Item = impl Into<ParseHtml>>,
+    ) -> Self {
+        self.parse_html.extend(rules.into_iter().map(Into::into));
         self
     }
 
@@ -172,14 +183,26 @@ impl<K> Extension<K> {
         self
     }
 
-    pub fn markdown_tokenizer(mut self, tokenizer: MarkdownTokenizer) -> Self {
-        self.markdown.tokenizer = Some(tokenizer);
+    /// `markdownTokenizer: { start: (src) => src.indexOf(start), tokenize }`, inline: `tokenize`
+    /// matches only where `src` starts with `start`.
+    pub fn markdown_tokenizer(
+        mut self,
+        start: &'static str,
+        tokenize: impl Fn(&Units, &[Token], &mut Lexer) -> Result<Option<Token>, Error>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        self.markdown.tokenizer = Some(MarkdownTokenizer {
+            start,
+            tokenize: Arc::new(tokenize),
+        });
         self
     }
 
     pub fn parse_markdown(
         mut self,
-        parse: impl Fn(&Token, &dyn ParseHelpers) -> Result<Parsed, Error> + Send + Sync + 'static,
+        parse: impl Fn(&Token, &ParseHelpers) -> Result<Parsed, Error> + Send + Sync + 'static,
     ) -> Self {
         self.markdown.parse = Some(Arc::new(parse));
         self
@@ -203,8 +226,9 @@ impl<K> Extension<K> {
 }
 
 impl NodeExtension {
-    pub fn content(mut self, content: &'static str) -> Self {
-        self.kind.content = content;
+    /// `content`, an expression that may be built from names.
+    pub fn content(mut self, content: impl Into<Cow<'static, str>>) -> Self {
+        self.kind.content = content.into();
         self
     }
 
@@ -228,6 +252,11 @@ impl NodeExtension {
         self
     }
 
+    pub fn code(mut self) -> Self {
+        self.kind.code = true;
+        self
+    }
+
     pub fn render_html(
         mut self,
         render: impl for<'a> Fn(&'a Node<'static>, SpecAttrs<'a>) -> Result<DomSpec<'a>, Error>
@@ -241,9 +270,17 @@ impl NodeExtension {
 }
 
 impl MarkExtension {
+    pub fn code(mut self) -> Self {
+        self.kind.code = true;
+        self
+    }
+
     pub fn render_html(
         mut self,
-        render: impl for<'a> Fn(&'a Mark<'static>, SpecAttrs<'a>) -> DomSpec<'a> + Send + Sync + 'static,
+        render: impl for<'a> Fn(&'a Mark<'static>, SpecAttrs<'a>) -> Result<DomSpec<'a>, Error>
+        + Send
+        + Sync
+        + 'static,
     ) -> Self {
         self.kind.render_html = Some(Arc::new(render));
         self

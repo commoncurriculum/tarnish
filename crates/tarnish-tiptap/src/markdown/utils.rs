@@ -6,9 +6,9 @@ use indexmap::IndexMap;
 use rustc_hash::FxBuildHasher;
 
 use crate::attrs_equal;
-use tarnish::json::Value;
 use tarnish_js as js;
 use tarnish_js::Error;
+use tarnish_js::json::Value;
 use tarnish_js::utf16;
 use tarnish_js::value::{self, SameValueKey};
 use tarnish_markdown::marked::Token;
@@ -57,12 +57,12 @@ pub fn extract_absorbed_blank_lines(tokens: &[Token]) -> Vec<Cow<'_, Token>> {
     normalized
 }
 
-/// `node.marks || []`.
-pub fn marks_of(node: Option<&Value>) -> &[Value] {
-    match node.and_then(|node| node.get("marks")) {
-        Some(Value::Array(marks)) => marks,
-        _ => &[],
-    }
+/// The items of `node?.marks || []`, whose array method `callee` the JavaScript calls.
+pub fn node_marks<'a>(node: Option<&'a Value>, callee: &str) -> Result<&'a [Value], Error> {
+    value::array_method(
+        value::or_empty_array(value::optional(node, "marks")),
+        callee,
+    )
 }
 
 /// `mark.type`.
@@ -105,10 +105,7 @@ pub fn find_marks_to_close<'a>(
             marks_to_close.push(*kind);
             continue;
         }
-        let next_marks = value::array_method(
-            value::or_empty_array(value::optional(next_node, "marks")),
-            "(nextNode.marks || []).find",
-        )?;
+        let next_marks = node_marks(next_node, "(nextNode.marks || []).find")?;
         let attrs = value::optional(Some(current_mark), "attrs");
         if !js::truthy(find_mark(next_marks, *kind, attrs)?) {
             marks_to_close.push(*kind);

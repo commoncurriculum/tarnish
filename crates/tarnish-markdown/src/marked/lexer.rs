@@ -8,19 +8,13 @@ use tarnish_js::stack;
 use super::Marked;
 use super::matchers;
 use super::rules::{INLINE, OTHER};
-use super::{Token, TokenData, Tokens};
+use super::{Destination, Token, TokenData, Tokens};
 use tarnish_js::deadline::Deadline;
 use tarnish_js::units::Units;
 use tarnish_js::{Error, utf16};
 
-/// A reference definition, as `tokens.links` holds it.
-pub struct Link {
-    pub href: Vec<u16>,
-    pub title: Option<Vec<u16>>,
-}
-
 #[derive(Default)]
-pub struct State {
+pub(crate) struct State {
     pub in_link: bool,
     pub top: bool,
 }
@@ -33,9 +27,9 @@ struct Queued {
 
 pub struct Lexer<'m> {
     pub(super) marked: &'m Marked,
-    /// `tokens.links`.
-    pub links: HashMap<Vec<u16>, Link>,
-    pub state: State,
+    /// `tokens.links`, the reference definitions by label.
+    pub(crate) links: HashMap<Vec<u16>, Destination>,
+    pub(crate) state: State,
     inline_queue: Vec<Queued>,
     slots: u32,
     deadline: Deadline,
@@ -129,7 +123,7 @@ impl<'m> Lexer<'m> {
                 continue;
             }
 
-            if let Some(token) = (self.marked.list)(self, &src)? {
+            if let Some(token) = self.list(&src)? {
                 src = src.substring(token.raw.len());
                 tokens.push(token);
                 continue;
@@ -151,7 +145,7 @@ impl<'m> Lexer<'m> {
                         self.continue_last(last, &token.raw, &token.raw);
                     }
                     _ if !self.links.contains_key(&def.tag) => {
-                        let link = Link {
+                        let link = Destination {
                             href: def.href.clone(),
                             title: def.title.clone(),
                         };
@@ -208,13 +202,13 @@ impl<'m> Lexer<'m> {
         Ok(())
     }
 
-    /// `inline(src)`: queues the text to be lexed once the blocks are, and returns the slot its
-    /// tokens will fill.
-    pub(super) fn inline(&mut self, src: Units) -> u32 {
+    /// `inline(src)`: queues the text to be lexed once the blocks are, and returns the tokens
+    /// its queue entry will fill.
+    pub(super) fn inline(&mut self, src: Units) -> Tokens {
         let slot = self.slots;
         self.slots += 1;
         self.inline_queue.push(Queued { src, slot });
-        slot
+        Tokens::queued(slot)
     }
 
     /// Appends a line to the last token, which the last queue entry now lexes all of.
@@ -475,13 +469,8 @@ fn mask(masked: &mut Vec<u16>, start: usize, end: usize) {
 /// Gives each queued token and table cell the inline tokens its queue entry lexed to.
 fn fill(tokens: &mut [Token], lexed: &mut [Option<Vec<Token>>]) {
     for token in tokens {
-        match token.queued.take() {
-            Some(slot) => token.tokens = lexed[slot as usize].take().map(Tokens::from),
-            None => {
-                if let Some(children) = token.tokens.as_mut() {
-                    stack::grow(|| fill(children, lexed));
-                }
-            }
+        if let Some(children) = token.tokens.as_mut() {
+            fill_tokens(children, lexed);
         }
         match &mut token.data {
             TokenData::List(list) => stack::grow(|| fill(&mut list.items, lexed)),
@@ -491,9 +480,7 @@ fn fill(tokens: &mut [Token], lexed: &mut [Option<Vec<Token>>]) {
                     .iter_mut()
                     .chain(table.rows.iter_mut().flatten())
                 {
-                    if let Some(slot) = cell.queued.take() {
-                        cell.tokens = lexed[slot as usize].take().unwrap_or_default();
-                    }
+                    fill_tokens(&mut cell.tokens, lexed);
                 }
             }
             TokenData::None
@@ -503,6 +490,14 @@ fn fill(tokens: &mut [Token], lexed: &mut [Option<Vec<Token>>]) {
             | TokenData::Def(_)
             | TokenData::ListItem { .. } => {}
         }
+    }
+}
+
+/// Gives `tokens` what its queue entry lexed to, or else fills the tokens inside it.
+fn fill_tokens(tokens: &mut Tokens, lexed: &mut [Option<Vec<Token>>]) {
+    match tokens.queued.take() {
+        Some(slot) => tokens.items = lexed[slot as usize].take().unwrap_or_default(),
+        None => stack::grow(|| fill(&mut tokens.items, lexed)),
     }
 }
 

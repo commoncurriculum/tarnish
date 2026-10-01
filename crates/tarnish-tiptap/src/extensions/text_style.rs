@@ -1,9 +1,9 @@
 //! `@tiptap/extension-text-style`: `TextStyle` and `Color`.
 
-use tarnish::Map as Attrs;
-use tarnish::Result;
-use tarnish::json::Value;
 use tarnish_html::HtmlNode;
+use tarnish_js::Result;
+use tarnish_js::json::Map;
+use tarnish_js::json::Value;
 use tarnish_js::value::nullable_string;
 
 use crate::DomSpec;
@@ -15,19 +15,14 @@ use crate::{
 pub fn text_style() -> MarkExtension {
     MarkExtension::create("textStyle")
         .priority(101)
-        .parse_html(vec![
-            ParseHtml::tag("span")
-                .not_consuming()
-                .get_attrs(|span| {
-                    if !span.has_attribute("style") {
-                        return Ok(None);
-                    }
-                    merge_nested_span_styles(span)?;
-                    Ok(Some(Attrs::new()))
-                })
-                .into(),
-        ])
-        .render_html(|_, html| DomSpec::wrapping("span", html))
+        .parse_html([ParseHtml::tag("span").not_consuming().get_attrs(|span| {
+            if !span.has_attribute("style") {
+                return Ok(None);
+            }
+            merge_nested_span_styles(span)?;
+            Ok(Some(Map::new()))
+        })])
+        .render_html(|_, html| Ok(DomSpec::wrapping("span", html)))
 }
 
 pub fn color() -> PlainExtension {

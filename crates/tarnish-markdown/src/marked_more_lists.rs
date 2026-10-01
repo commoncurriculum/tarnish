@@ -6,7 +6,7 @@ use std::sync::LazyLock;
 
 use tarnish_js::stack;
 
-use crate::marked::{Lexer, List, ListTokenizer, Token, TokenData, Tokens, hr};
+use crate::marked::{Lexer, List, ListTokenizer, Token, TokenData, Tokens, hr, run};
 use tarnish_js::Error;
 use tarnish_js::regexp::RegExp;
 use tarnish_js::units::Units;
@@ -64,7 +64,7 @@ impl Enders {
     /// The line past its spaces, if it has no more than may start an ender. None of the
     /// enders goes on with a space.
     fn after_spaces<'l>(&self, line: &'l [u16]) -> Option<&'l [u16]> {
-        let spaces = line.iter().take_while(|&&unit| unit == SPACE).count();
+        let spaces = run(line, 0, |unit| unit == SPACE);
         (spaces <= self.spaces).then(|| &line[spaces..])
     }
 
@@ -240,7 +240,7 @@ fn replace_tabs(line: &[u16]) -> Cow<'_, [u16]> {
 
 /// `line.replace(/^\t+/, (tabs) => " ".repeat(3 * tabs.length))`.
 fn leading_tabs_to_spaces(line: &[u16]) -> Vec<u16> {
-    let tabs = line.iter().take_while(|&&unit| unit == TAB).count();
+    let tabs = run(line, 0, |unit| unit == TAB);
     let mut replaced = vec![SPACE; 3 * tabs];
     replaced.extend_from_slice(&line[tabs..]);
     replaced
@@ -287,7 +287,7 @@ fn task(item: &[u16]) -> Option<&[u16]> {
 
 /// `item.replace(/^\[[ xX]\] +/, "")`, for an item `task` found a task in.
 fn without_task(item: &[u16]) -> Vec<u16> {
-    let spaces = item[3..].iter().take_while(|&&unit| unit == SPACE).count();
+    let spaces = run(item, 3, |unit| unit == SPACE);
     item[3 + spaces..].to_vec()
 }
 

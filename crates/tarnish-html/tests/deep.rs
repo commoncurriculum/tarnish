@@ -7,6 +7,7 @@ use tarnish::dom::{DomSpec, ParseOptions, render_spec, render_spec_of};
 use tarnish::js::stack::on_dirty_scheduler_stack;
 use tarnish::json::{self, Value};
 use tarnish::{Error, Node, Schema, api};
+use tarnish_fixtures::read;
 use tarnish_html::{HtmlDom, HtmlNode, parse_html, to_html};
 
 const DEPTH: usize = 3_000;
@@ -23,13 +24,7 @@ fn deep_html_round_trips_on_a_small_stack() {
             "<blockquote>".repeat(DEPTH),
             "</blockquote>".repeat(DEPTH)
         );
-        let fixtures = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../fixtures/dom.json"
-        ))
-        .expect("the fixtures");
-        let fixtures = json::from_str(&fixtures).expect("JSON");
-        let schema = api::schema(&fixtures["schema"]).expect("the schema");
+        let schema = api::schema(&read("dom")["schema"]).expect("the schema");
         let parser = basic::parser(&schema);
 
         let fragment = HtmlDom::new().parse_fragment(&html);

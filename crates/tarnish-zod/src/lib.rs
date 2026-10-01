@@ -4,9 +4,8 @@
 
 use std::borrow::Cow;
 
-use tarnish::json::{Map, Value, json};
-
-use tarnish_js::{Class, Error, MAX_SAFE_INTEGER, json};
+use tarnish_js::json::{self, Map, Value, json};
+use tarnish_js::{Class, Error, MAX_SAFE_INTEGER};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Schema {
@@ -26,8 +25,8 @@ pub enum Schema {
     Default(Box<Schema>, Value),
     /// `.catch(value)`; `None` catches to `undefined`.
     Catch(Box<Schema>, Option<Value>),
-    /// `.strict()` on an object schema, for which a key its shape lacks is an issue.
-    Strict(Box<Schema>),
+    /// `z.strictObject(shape)`, for which a key the shape lacks is an issue.
+    StrictObject(Vec<(&'static str, Schema)>),
 }
 
 /// A zod issue: its fields before `path` and `message`, in zod's order.
@@ -115,11 +114,10 @@ impl Schema {
     /// `schema.strict()`, for an object schema. Only `parse` reads it: the other parses read the
     /// object by key.
     pub fn strict(self) -> Schema {
-        assert!(
-            matches!(self, Schema::Object(_)),
-            "only an object schema is strict"
-        );
-        Schema::Strict(Box::new(self))
+        match self {
+            Schema::Object(shape) => Schema::StrictObject(shape),
+            _ => panic!("only an object schema is strict"),
+        }
     }
 
     /// `schema.shape[key]`, for an object schema.
@@ -176,9 +174,10 @@ impl Schema {
         }
     }
 
-    fn shape(&self) -> &[(&'static str, Schema)] {
+    /// `schema.shape`, for an object schema: its fields in order.
+    pub fn shape(&self) -> &[(&'static str, Schema)] {
         match self {
-            Schema::Object(shape) => shape,
+            Schema::Object(shape) | Schema::StrictObject(shape) => shape,
             _ => panic!("only an object schema has a shape"),
         }
     }
@@ -197,21 +196,9 @@ impl Schema {
         Ok(parsed.map(Cow::into_owned))
     }
 
-    /// `schema.parse(value)` for an object schema, as a map.
-    pub fn parse_object(&self, value: Option<&Value>) -> Result<Map, Error> {
-        Ok(self.parse_fields(value)?.into_map())
-    }
-
-    /// `schema.parse(value)` for an object schema, or the `ZodError` it throws.
-    pub fn parse_fields<'v>(&'v self, value: Option<&'v Value>) -> Result<Fields<'v>, Error> {
-        Ok(collecting(|issues| self.fields(value, issues))?)
-    }
-
-    /// `schema.safeParse(value).success ? data : undefined`, for an object schema.
-    pub fn safe_parse_fields<'v>(&'v self, value: &'v Value) -> Option<Fields<'v>> {
-        let mut issues = Sink::Count(0);
-        let fields = self.fields(Some(value), &mut issues);
-        issues.is_empty().then_some(fields)
+    /// `schema.parse(value)` for an object schema.
+    pub fn parse_fields<'v>(&'v self, value: Option<&'v Value>) -> Result<Fields<'v>, Issues> {
+        collecting(|issues| self.fields(value, issues))
     }
 
     /// `schema.parse(object)` for an object schema, the object's properties read by key: an
@@ -219,8 +206,8 @@ impl Schema {
     pub fn parse_properties<'v>(
         &'v self,
         property: impl FnMut(&str) -> Option<&'v Value>,
-    ) -> Result<Fields<'v>, Error> {
-        Ok(collecting(|issues| self.properties(property, issues))?)
+    ) -> Result<Fields<'v>, Issues> {
+        collecting(|issues| self.properties(property, issues))
     }
 
     /// `schema.safeParse(object).success ? data : undefined`, as `parse_properties` reads it.
@@ -233,15 +220,17 @@ impl Schema {
         issues.is_empty().then_some(fields)
     }
 
-    /// `const result = schema.safeParse(value); result.success ? result.data :
-    /// schema.parse(fallback)`, for an object schema.
-    pub fn safe_parse_fields_or<'v>(
+    /// `const result = schema.safeParse(object); result.success ? result.data :
+    /// schema.parse(fallback)`, both objects' properties read by key.
+    pub fn parse_properties_or<'v>(
         &'v self,
-        value: &'v Value,
-        fallback: &'v Value,
-    ) -> Result<Fields<'v>, Error> {
-        self.safe_parse_fields(value)
-            .map_or_else(|| self.parse_fields(Some(fallback)), Ok)
+        property: impl FnMut(&str) -> Option<&'v Value>,
+        fallback: impl FnMut(&str) -> Option<&'v Value>,
+    ) -> Result<Fields<'v>, Issues> {
+        match self.safe_parse_properties(property) {
+            Some(fields) => Ok(fields),
+            None => self.parse_properties(fallback),
+        }
     }
 
     /// An object schema's fields parsed from `value`, which mean nothing if it raised an issue.
@@ -296,23 +285,6 @@ impl Schema {
                 } else {
                     caught.as_ref().map(Cow::Borrowed)
                 }
-            }
-            Schema::Strict(object) => {
-                let Schema::Object(shape) = &**object else {
-                    panic!("only an object schema is strict");
-                };
-                let parsed = object.run(value, path, issues);
-                if let Some(Value::Object(entries)) = value {
-                    let unrecognized: Vec<&str> = entries
-                        .keys()
-                        .map(|key| key.as_ref())
-                        .filter(|key| shape.iter().all(|(name, _)| name != key))
-                        .collect();
-                    if !unrecognized.is_empty() {
-                        issues.add(|| unrecognized_keys(&unrecognized, path));
-                    }
-                }
-                parsed
             }
             Schema::String => check_type(value, "string", Value::is_string, path, issues),
             Schema::Boolean => check_type(value, "boolean", Value::is_boolean, path, issues),
@@ -384,7 +356,7 @@ impl Schema {
                     Cow::Owned(Value::Array(parsed))
                 }))
             }
-            Schema::Object(shape) => {
+            Schema::Object(shape) | Schema::StrictObject(shape) => {
                 let Some(Value::Object(entries)) = value else {
                     return type_issue(value, "object", path, issues);
                 };
@@ -397,6 +369,16 @@ impl Schema {
                     issues,
                     |key, value| object.push(key.into(), value.into_owned()),
                 );
+                if let Schema::StrictObject(_) = self {
+                    let unrecognized: Vec<&str> = entries
+                        .keys()
+                        .map(|key| key.as_ref())
+                        .filter(|key| shape.iter().all(|(name, _)| name != key))
+                        .collect();
+                    if !unrecognized.is_empty() {
+                        issues.add(|| unrecognized_keys(&unrecognized, path));
+                    }
+                }
                 Some(Cow::Owned(Value::Object(object)))
             }
             Schema::Record(item) => {
@@ -659,7 +641,32 @@ fn path_values(path: &Path) -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::Schema;
-    use tarnish::json::{Value, json};
+    use tarnish_js::json::{Value, json};
+
+    #[test]
+    fn parses_the_fallback_where_the_object_fails() {
+        let schema = Schema::Object(vec![
+            ("a", Schema::String),
+            ("b", Schema::Number.default(json!(0))),
+        ]);
+        let (good, bad) = (json!({ "a": "x", "b": 1 }), json!({ "a": 1 }));
+        let a = json!("y");
+        let fallback = |key: &str| (key == "a").then_some(&a);
+        let parsed = schema.parse_properties_or(|key| good.get(key), fallback);
+        assert_eq!(parsed.unwrap().into_map(), *good.as_object().unwrap());
+        let parsed = schema.parse_properties_or(|key| bad.get(key), fallback);
+        assert_eq!(
+            parsed.unwrap().into_map(),
+            *json!({ "a": "y", "b": 0 }).as_object().unwrap()
+        );
+        let failed = schema.parse_properties_or(|key| bad.get(key), |_| None);
+        assert_eq!(
+            failed
+                .err()
+                .map(|issues| issues.first_message().to_string()),
+            Some("Invalid input: expected string, received undefined".into())
+        );
+    }
 
     #[test]
     fn copies_an_array_from_the_first_item_that_changes() {

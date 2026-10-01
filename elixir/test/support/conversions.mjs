@@ -1,5 +1,6 @@
 // The conversions of the application tarnish's tests make: HTML to and from ProseMirror's JSON on a
-// schema of paragraphs of text in linkedom, and no Markdown. test_native/ makes them in Rust.
+// schema of paragraphs of text in linkedom, a document's JSON as its "Markdown", which shows a test
+// the document as the conversion read it, and no Markdown to parse. test_native/ makes them in Rust.
 import { parseHTML as parseWindow } from "linkedom"
 import { DOMParser, DOMSerializer, Node, Schema } from "prosemirror-model"
 
@@ -30,8 +31,8 @@ export function parseMarkdown() {
   throw new Error(NO_MARKDOWN)
 }
 
-export function serializeMarkdown() {
-  throw new Error(NO_MARKDOWN)
+export function serializeMarkdown(json) {
+  return JSON.stringify(json)
 }
 
 export function parseHTML(html, options) {

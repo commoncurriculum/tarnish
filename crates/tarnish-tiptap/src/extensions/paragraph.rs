@@ -3,8 +3,8 @@
 use crate::DomSpec;
 use crate::markdown::{ParseHelpers, Parsed, RenderContext, RenderHelpers};
 use crate::{NodeExtension, ParseHtml};
-use tarnish::json::Value;
 use tarnish_js::Error;
+use tarnish_js::json::Value;
 use tarnish_js::{self as js, utf16};
 use tarnish_markdown::marked::Token;
 
@@ -15,7 +15,7 @@ pub fn paragraph() -> NodeExtension {
         .priority(1000)
         .group("block")
         .content("inline*")
-        .parse_html(vec![ParseHtml::tag("p").into()])
+        .parse_html([ParseHtml::tag("p")])
         .render_html(|_, html| Ok(DomSpec::wrapping("p", html)))
         .parse_markdown(parse_markdown)
         .render_markdown(render_markdown)
@@ -23,7 +23,7 @@ pub fn paragraph() -> NodeExtension {
 
 const NBSP_CHAR: &str = "\u{A0}";
 
-fn parse_markdown(token: &Token, helpers: &dyn ParseHelpers) -> Result<Parsed, Error> {
+fn parse_markdown(token: &Token, helpers: &ParseHelpers) -> Result<Parsed, Error> {
     let tokens = token.tokens.as_deref().unwrap_or_default();
     if let [only] = tokens
         && only.kind == "image"

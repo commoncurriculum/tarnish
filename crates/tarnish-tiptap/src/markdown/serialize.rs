@@ -11,11 +11,11 @@ use tarnish_js::stack;
 use super::MarkdownManager;
 use super::utils::{
     Marks, close_marks_before_node, find_marks_to_close, find_marks_to_close_at_end,
-    find_marks_to_open, mark_type, marks_by_type, reopen_marks_after_node,
+    find_marks_to_open, mark_type, marks_by_type, node_marks, reopen_marks_after_node,
 };
 use crate::attrs_equal;
 use crate::markdown::{RenderContext, RenderHelpers};
-use tarnish::json::{Map, Value, json};
+use tarnish_js::json::{Map, Value, json};
 use tarnish_js::value::{self, Nullish, SameValueKey};
 use tarnish_js::{self as js, Error};
 
@@ -109,7 +109,7 @@ impl MarkdownManager {
     fn render_node(&self, node: &Value, parent: &Value, index: usize) -> Result<String, Error> {
         let kind = value::optional(Some(node), "type");
         if kind.is_some_and(|kind| kind == "text") {
-            return encode_text_for_markdown(node);
+            return self.encode_text_for_markdown(node, parent);
         }
         let Some(render) = kind
             .and_then(Value::as_str)
@@ -151,11 +151,7 @@ impl MarkdownManager {
             }
 
             if kind.is_none_or(|kind| kind != "text") {
-                let node_marks = value::array_method(
-                    value::or_empty_array(value::optional(Some(node), "marks")),
-                    "(node.marks || []).map",
-                )?;
-                let node_mark_types = node_marks
+                let node_mark_types = node_marks(Some(node), "(node.marks || []).map")?
                     .iter()
                     .map(mark_type)
                     .collect::<Result<FxHashSet<_>, _>>()?;
@@ -192,11 +188,8 @@ impl MarkdownManager {
                 continue;
             }
 
-            let mut text = encode_text_for_markdown(node)?;
-            let current_marks = marks_by_type(value::array_method(
-                value::or_empty_array(value::optional(Some(node), "marks")),
-                "(node.marks || []).map",
-            )?)?;
+            let mut text = self.encode_text_for_markdown(node, parent)?;
+            let current_marks = marks_by_type(node_marks(Some(node), "(node.marks || []).map")?)?;
             let marks_to_open = self.marks_to_open(&active_marks, &current_marks, next_node)?;
             let marks_to_close = find_marks_to_close(&current_marks, next_node)?;
             let active_closing_here: Vec<SameValueKey> = marks_to_close
@@ -247,13 +240,7 @@ impl MarkdownManager {
             text = leading_whitespace + &text;
 
             let marks_to_close_at_end: Vec<SameValueKey> = if crossed_boundary {
-                let next_marks = value::array_method(
-                    value::or_empty_array(
-                        next_node.and_then(|next| value::optional(Some(next), "marks")),
-                    ),
-                    "(nextNode?.marks || []).map",
-                )?;
-                let next_mark_types = next_marks
+                let next_mark_types = node_marks(next_node, "(nextNode?.marks || []).map")?
                     .iter()
                     .map(mark_type)
                     .collect::<Result<FxHashSet<_>, _>>()?;
@@ -314,13 +301,10 @@ impl MarkdownManager {
         if marks_to_open.len() <= 1 {
             return Ok(marks_to_open);
         }
-        let next_marks =
-            value::or_empty_array(next_node.and_then(|next| value::optional(Some(next), "marks")));
         let continues_in_next_node =
             |(kind, mark): &(SameValueKey, &Value)| -> Result<bool, Error> {
                 let attrs = value::optional(Some(mark), "attrs");
-                let next_marks = value::array_method(next_marks, "nextMarks.some")?;
-                for next_mark in next_marks {
+                for next_mark in node_marks(next_node, "nextMarks.some")? {
                     if mark_type(next_mark)? == *kind
                         && attrs_equal(value::optional(Some(next_mark), "attrs"), attrs)
                     {
@@ -443,21 +427,47 @@ fn is_empty_output(markdown: &str) -> bool {
     }
 }
 
-/// `encodeTextForMarkdown(node.text || "", node, parentNode)`. No extension here is `code`, so
-/// nothing is inside code, though the JS still reads the type of every mark to find out.
-fn encode_text_for_markdown(node: &Value) -> Result<String, Error> {
-    let marks = value::array_method(
-        value::or_empty_array(value::optional(Some(node), "marks")),
-        "(node.marks || []).some",
-    )?;
-    for mark in marks.iter().filter(|mark| !mark.is_string()) {
-        value::get(Some(mark), "type")?;
+impl MarkdownManager {
+    /// `encodeTextForMarkdown(node.text || "", node, parentNode)`: the text escaped for
+    /// Markdown, or as it is inside code.
+    fn encode_text_for_markdown(&self, node: &Value, parent: &Value) -> Result<String, Error> {
+        let text = value::optional(Some(node), "text").filter(|text| js::truthy(Some(text)));
+        if self.is_inside_code(node, parent)? {
+            // The JS keeps text that isn't a string as it is, which joining it into the
+            // Markdown makes the string it is here.
+            return text.map_or(Ok(String::new()), js::to_string);
+        }
+        match text {
+            Some(Value::String(text)) => Ok(escape_markdown(text)),
+            Some(_) => Err(value::not_a_function("text.replace")),
+            None => Ok(String::new()),
+        }
     }
-    let text = match value::optional(Some(node), "text") {
-        Some(Value::String(text)) => text.as_str(),
-        text if js::truthy(text) => return Err(value::not_a_function("text.replace")),
-        _ => "",
-    };
+
+    /// `isInsideCode`: whether the parent or one of the text's marks is code.
+    fn is_inside_code(&self, node: &Value, parent: &Value) -> Result<bool, Error> {
+        let is_code = |kind: Option<&Value>| {
+            kind.and_then(Value::as_str)
+                .is_some_and(|kind| self.code_types.contains(kind))
+        };
+        if is_code(value::optional(Some(parent), "type")) {
+            return Ok(true);
+        }
+        for mark in node_marks(Some(node), "(node.marks || []).some")? {
+            let kind = match mark {
+                Value::String(_) => Some(mark),
+                _ => value::get(Some(mark), "type")?,
+            };
+            if is_code(kind) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+}
+
+/// `escapeMarkdownSyntax(encodeHtmlEntities(text))`.
+fn escape_markdown(text: &str) -> String {
     let mut encoded = String::with_capacity(text.len());
     for character in text.chars() {
         match character {
@@ -471,7 +481,7 @@ fn encode_text_for_markdown(node: &Value) -> Result<String, Error> {
             other => encoded.push(other),
         }
     }
-    Ok(encoded)
+    encoded
 }
 
 /// Removes and returns `text`'s trailing whitespace, as `text.match(/(\s+)$/)` finds it.

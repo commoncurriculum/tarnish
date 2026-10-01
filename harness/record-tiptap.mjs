@@ -9,12 +9,13 @@
 // - Each document records the innerHTML of an element DOMSerializer fills in linkedom.
 // The version of @tiptap/markdown is recorded too, for the tests to check that tarnish-tiptap
 // ports the one installed.
-import { readFileSync, writeFileSync } from "node:fs"
 import { getSchema } from "@tiptap/core"
 import { Bold } from "@tiptap/extension-bold"
 import { Document } from "@tiptap/extension-document"
 import { HardBreak } from "@tiptap/extension-hard-break"
+import { Heading } from "@tiptap/extension-heading"
 import { Highlight } from "@tiptap/extension-highlight"
+import { Image } from "@tiptap/extension-image"
 import { Italic } from "@tiptap/extension-italic"
 import { Paragraph } from "@tiptap/extension-paragraph"
 import { Strike } from "@tiptap/extension-strike"
@@ -28,11 +29,14 @@ import { DOMParser, DOMSerializer, Node } from "@tiptap/pm/model"
 import { parseHTML } from "linkedom"
 import { Marked } from "marked"
 import moreLists from "marked-more-lists"
+import { installed, outcome, writeFixture } from "./fixture.mjs"
 
 const extensions = [
   Document,
   Paragraph,
   Text,
+  Heading,
+  Image,
   HardBreak,
   Bold,
   Italic,
@@ -51,26 +55,9 @@ const parser = DOMParser.fromSchema(schema)
 const serializer = DOMSerializer.fromSchema(schema)
 const { document } = parseHTML("<!DOCTYPE html><html><body></body></html>")
 
-function outcome(run) {
-  try {
-    return run()
-  } catch (error) {
-    return { error: { class: error.constructor.name, message: error.message } }
-  }
-}
-
 const withMarks = (text, ...marks) => ({ type: "text", text, marks: marks.map(type => ({ type })) })
-// tarnish-tiptap's Underline and Highlight leave out their Markdown, which an application gives.
-const markTypes = markdown => [
-  "bold",
-  "italic",
-  "strike",
-  ...(markdown ? [] : ["underline", "highlight"]),
-  "subscript",
-  "superscript",
-  "textStyle",
-]
-const docs = markdown => [
+const markTypes = ["bold", "italic", "strike", "underline", "highlight", "subscript", "superscript", "textStyle"]
+const docs = [
   { type: "doc", content: [{ type: "paragraph" }] },
   {
     type: "doc",
@@ -79,7 +66,7 @@ const docs = markdown => [
         type: "paragraph",
         content: [
           { type: "text", text: "plain " },
-          ...markTypes(markdown).map(type => withMarks(type, type)),
+          ...markTypes.map(type => withMarks(type, type)),
           { type: "hardBreak" },
           withMarks("both", "bold", "italic"),
         ],
@@ -88,12 +75,29 @@ const docs = markdown => [
       { type: "paragraph", content: [{ type: "text", text: "*not em* <b>not bold</b> & 1. two" }] },
     ],
   },
+  {
+    type: "doc",
+    content: [
+      { type: "heading", attrs: { level: 2 }, content: [{ type: "text", text: "two" }] },
+      { type: "heading", attrs: { level: "3" }, content: [withMarks("three", "bold")] },
+      { type: "heading", content: [{ type: "text", text: "no level" }] },
+      { type: "heading", attrs: { level: 4 } },
+    ],
+  },
+  {
+    type: "doc",
+    content: [
+      { type: "image", attrs: { src: "a.png", alt: "A", title: "T", width: 10 } },
+      { type: "image", attrs: { src: "b.png" } },
+      { type: "image" },
+    ],
+  },
 ]
 
 const text = node => ({ type: "doc", content: [{ type: "paragraph", content: [{ type: "text", ...node }] }] })
 const values = [1, 0, 1.5, "x", 'a"b', "", true, false, null, {}, [], [1], { some: 1 }]
 const serializesMarkdown = [
-  ...docs(true),
+  ...docs,
   ...values.flatMap(value => [
     text({ text: "a", marks: { some: value } }),
     text({ text: { replace: value } }),
@@ -114,6 +118,9 @@ const parsesMarkdown = [
   "one  \ntwo\n\nthree",
   "&nbsp;",
   "# heading\n\n- list\n\n> quote",
+  "### three **bold**\n\nSetext\n===",
+  "++under++ ==high== ++==both==++",
+  '![alt](a.png "title")\n\ntext ![](b.png) more',
 ].map(markdown => ({ markdown, ...outcome(() => ({ doc: manager.parse(markdown) })) }))
 
 const parsesHTML = [
@@ -123,6 +130,8 @@ const parsesHTML = [
   "<p><b style='font-weight: normal'>not bold</b><i style='font-style: normal'>not italic</i></p>",
   "<p><span style='font-weight: bold; font-style: italic; text-decoration: underline line-through'>styled</span></p>",
   "<h1>heading</h1><ul><li>item</li></ul>",
+  "<h3>three</h3><h6>six</h6>",
+  "<img src='a.png' alt='A' title='T' width='10' height='5'><img alt='no src'><img src='data:image/png;base64,AA'>",
   "loose text",
 ].map(html => ({
   html,
@@ -133,7 +142,7 @@ const parsesHTML = [
 }))
 
 const serializesHTML = [
-  ...docs(false),
+  ...docs,
   // `doc` has no toDOM, so the serializer has nothing to call for a doc inside the doc.
   { type: "doc", content: [{ type: "doc" }] },
 ].map(doc => ({
@@ -145,11 +154,10 @@ const serializesHTML = [
   }),
 }))
 
-const { version } = JSON.parse(readFileSync(new URL("../node_modules/@tiptap/markdown/package.json", import.meta.url), "utf8"))
-const oneEach = records => `[\n${records.map(record => `    ${JSON.stringify(record)}`).join(",\n")}\n  ]`
-writeFileSync(
-  new URL("../fixtures/tiptap.json", import.meta.url),
-  `{\n  "tiptap": ${JSON.stringify(version)},\n  "parsesMarkdown": ${oneEach(parsesMarkdown)},\n` +
-    `  "serializesMarkdown": ${oneEach(serializesMarkdown)},\n  "parsesHTML": ${oneEach(parsesHTML)},\n` +
-    `  "serializesHTML": ${oneEach(serializesHTML)}\n}\n`,
-)
+writeFixture("tiptap", {
+  tiptap: installed("@tiptap/markdown"),
+  parsesMarkdown,
+  serializesMarkdown,
+  parsesHTML,
+  serializesHTML,
+})

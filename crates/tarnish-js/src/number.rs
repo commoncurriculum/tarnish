@@ -53,14 +53,22 @@ pub fn same_number(a: &Number, b: &Number) -> bool {
 
 /// `Number.parseInt(string)`.
 pub fn parse_int(string: &str) -> f64 {
+    parse_int_radix(string, 0)
+}
+
+/// `Number.parseInt(string, radix)`, of a radix from 2 to 36, or 0 for none, with which a `0x`
+/// prefix reads as hexadecimal and the rest as decimal.
+pub fn parse_int_radix(string: &str, radix: u32) -> f64 {
+    assert!(radix == 0 || (2..=36).contains(&radix), "radix {radix}");
     let string = crate::trim_start(string);
     let (sign, string) = match string.strip_prefix('-') {
         Some(rest) => (-1.0, rest),
         None => (1.0, string.strip_prefix('+').unwrap_or(string)),
     };
-    let (radix, string) = match string.get(..2) {
-        Some("0x" | "0X") => (16, &string[2..]),
-        _ => (10, string),
+    let (radix, string) = match (radix, string.get(..2)) {
+        (0 | 16, Some("0x" | "0X")) => (16, &string[2..]),
+        (0, _) => (10, string),
+        _ => (radix, string),
     };
     let digits: Vec<u32> = string
         .chars()
@@ -118,5 +126,21 @@ pub fn string_to_number(string: &str) -> f64 {
             trimmed.parse().unwrap_or(f64::NAN)
         }
         _ => f64::NAN,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_int, parse_int_radix};
+
+    #[test]
+    fn parses_an_integer_as_parse_int_does() {
+        assert_eq!(parse_int("  -12px"), -12.0);
+        assert_eq!(parse_int("0x1A"), 26.0);
+        assert_eq!(parse_int_radix("0x1A", 16), 26.0);
+        assert_eq!(parse_int_radix("0x1A", 10), 0.0);
+        assert_eq!(parse_int_radix("1A", 16), 26.0);
+        assert_eq!(parse_int_radix("+7", 10), 7.0);
+        assert!(parse_int_radix("x", 10).is_nan());
     }
 }

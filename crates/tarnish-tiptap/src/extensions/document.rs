@@ -2,9 +2,9 @@
 
 use crate::NodeExtension;
 use crate::markdown::{RenderContext, RenderHelpers};
-use tarnish::json::Value;
 use tarnish_js as js;
 use tarnish_js::Error;
+use tarnish_js::json::Value;
 
 pub fn document() -> NodeExtension {
     NodeExtension::create("doc")
