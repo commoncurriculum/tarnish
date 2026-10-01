@@ -12,7 +12,7 @@ use std::time::Instant;
 use tarnish::js::json::{from_str, json, stringify, stringify_entries};
 use tarnish::{Map, Value};
 
-use crate::convert::{Answer, Conversions, Request, answer_json};
+use crate::convert::{Answer, Conversions, Document, Request, answer_json};
 
 /// An application's two makings of its conversions.
 pub struct Parity<'a> {
@@ -482,7 +482,9 @@ fn convert(conversions: &dyn Conversions, request: &Request) -> Result<(), tarni
     let (input, options) = (&request.input, request.options.as_ref());
     let text = || input.as_str().expect("a parse's input is text");
     match request.operation.as_str() {
-        Some("serializeHTML") => conversions.serialize_html(input.into(), options).map(used),
+        Some("serializeHTML") => conversions
+            .serialize_html(Document::json(input, conversions.schema()), options)
+            .map(used),
         Some("parseHTML") => conversions.parse_html(text(), options).map(used),
         Some("serializeMarkdown") => conversions.serialize_markdown(input, options).map(used),
         Some("parseMarkdown") => conversions.parse_markdown(text(), options).map(used),
