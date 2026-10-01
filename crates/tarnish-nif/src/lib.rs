@@ -8,7 +8,9 @@
 //!   terms Jason decodes from their JSON;
 //! - calls on the caller's own scheduler, which answer `:dirty` when they have more work than
 //!   that takes on;
-//! - mimalloc as the NIF's allocator, unless the `mimalloc` feature is off.
+//! - mimalloc as the NIF's allocator, unless the `mimalloc` feature is off;
+//! - `parity`, with the `parity` feature: the tools that hold an application's NIF to its Node
+//!   worker, for its examples.
 //!
 //! A crate that depends on this one has its `rustler::init!` register those functions with its
 //! own, so the module that loads its NIF declares them (`use Tarnish.NIF`), and its load hook
@@ -19,6 +21,8 @@
 pub mod convert;
 mod doc;
 mod etf;
+#[cfg(feature = "parity")]
+pub mod parity;
 mod prosemirror;
 mod share;
 mod term;

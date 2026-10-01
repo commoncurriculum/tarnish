@@ -84,6 +84,7 @@ fn served() -> &'static Served {
 
 /// A `Tarnish.Bridge.request()`, each part read from a `T`: its operation, its input, and its
 /// options when they aren't empty.
+#[derive(Clone)]
 pub struct Request<T = Value, I = T> {
     pub operation: T,
     pub input: I,
@@ -147,14 +148,14 @@ enum Input {
 
 /// A request's result: a serialization's text, `parseMarkdown`'s JSON, or the document
 /// `parseHTML` made, whose JSON can be written straight from its nodes.
-enum Answer {
+pub(crate) enum Answer {
     Text(String),
     Json(Value),
     Document(Node<'static>),
 }
 
 impl Answer {
-    fn into_json(self) -> Value {
+    pub(crate) fn into_json(self) -> Value {
         match self {
             Answer::Text(text) => Value::String(text),
             Answer::Json(json) => json,
@@ -206,13 +207,11 @@ fn answer(conversions: &dyn Conversions, request: Request<Value, Input>) -> Resu
     answered.map_err(|error| error.message().into())
 }
 
-/// A request read as JSON answered with its result as JSON, or its error.
-pub fn handle(conversions: &dyn Conversions, request: Request) -> Result<Value, String> {
-    answer_json(conversions, request).map(Answer::into_json)
-}
-
 /// [`answer`] of a request read as JSON.
-fn answer_json(conversions: &dyn Conversions, request: Request) -> Result<Answer, String> {
+pub(crate) fn answer_json(
+    conversions: &dyn Conversions,
+    request: Request,
+) -> Result<Answer, String> {
     let request = Request {
         operation: request.operation,
         input: Input::Json(request.input),

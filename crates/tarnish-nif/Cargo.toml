@@ -15,6 +15,9 @@ doctest = false
 default = ["mimalloc"]
 # The NIF's global allocator. A NIF that declares its own turns this off.
 mimalloc = ["dep:mimalloc"]
+# The tools that hold an application's NIF to its Node worker. An application turns it on for its
+# examples only, as a dev-dependency's feature, so its NIF never builds them.
+parity = []
 
 [dependencies]
 mimalloc = { version = "0.1", default-features = false, optional = true }

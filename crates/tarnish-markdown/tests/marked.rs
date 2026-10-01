@@ -2,27 +2,25 @@
 //! `harness/record-marked.mjs` records: tarnish-markdown's lexer must make the same tokens, or
 //! fail with the same error.
 
-use tarnish_js::json::{self, Value, json};
+use tarnish_fixtures::{outcome, read};
+use tarnish_js::json::{Value, json};
 use tarnish_js::utf16;
 use tarnish_markdown::marked::{Lexer, Marked, Token};
 use tarnish_markdown::marked_more_lists::more_lists;
 
-fn fixtures() -> Value {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/marked.json");
-    json::from_str(&std::fs::read_to_string(path).expect("the fixtures")).expect("JSON")
-}
-
 fn lexed(marked: &Marked, input: &str) -> Value {
-    match Lexer::new(marked).lex(&utf16::from(input)) {
-        Ok(tokens) => json!({ "tokens": tokens.iter().map(Token::to_json).collect::<Vec<_>>() }),
-        Err(error) => json!({ "error": error.message() }),
-    }
+    let tokens = Lexer::new(marked).lex(&utf16::from(input));
+    outcome(
+        tokens.map(
+            |tokens| json!({ "tokens": tokens.iter().map(Token::to_json).collect::<Vec<_>>() }),
+        ),
+    )
 }
 
 #[test]
 fn ports_the_installed_marked() {
     assert_eq!(
-        fixtures()["marked"].as_str(),
+        read("marked")["marked"].as_str(),
         Some(tarnish_markdown::MARKED)
     );
 }
@@ -30,7 +28,7 @@ fn ports_the_installed_marked() {
 #[test]
 fn tokens_match_marked() {
     let marked = Marked::new(more_lists());
-    let mut fixtures = fixtures();
+    let mut fixtures = read("marked");
     let mut failures = Vec::new();
     for mut record in fixtures["lexed"].take().into_array().expect("the inputs") {
         let input = record.as_object_mut().expect("a record").remove("input");

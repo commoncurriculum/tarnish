@@ -5,17 +5,10 @@
 use tarnish::json::{self, Value};
 use tarnish::transform::Step;
 use tarnish::{Schema, api};
+use tarnish_fixtures::read;
 
 fn schema() -> Schema {
-    let fixtures: Value = json::from_str(
-        &std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../fixtures/transform.json"
-        ))
-        .expect("the fixtures"),
-    )
-    .expect("JSON");
-    api::schema(&fixtures["schemas"][0]).expect("a schema")
+    api::schema(&read("transform")["schemas"][0]).expect("a schema")
 }
 
 #[test]

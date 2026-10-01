@@ -13,11 +13,12 @@
 // - Each node records what an attribute set to it holds, as renderSpec sets one to a
 //   {dom, contentDOM}: a link's href, resolved against its document's base URL, or else the name
 //   of its interface.
-import { readFileSync, writeFileSync } from "node:fs"
+import { readFileSync } from "node:fs"
 import { parseHTML } from "linkedom"
 import { DOMParser, DOMSerializer, Node, Schema } from "prosemirror-model"
 import { schema as basic } from "prosemirror-schema-basic"
 import { addListNodes } from "prosemirror-schema-list"
+import { outcome, writeFixture } from "./fixture.mjs"
 
 const schema = new Schema({
   nodes: addListNodes(basic.spec.nodes, "paragraph block*", "block"),
@@ -376,15 +377,6 @@ const withOptions = [
   ["<ul>\n  <li>one</li>\n  <li>two</li>\n</ul>", { preserveWhitespace: true }],
 ]
 
-function outcome(run) {
-  try {
-    return run()
-  } catch (error) {
-    const name = error instanceof window.DOMException ? { name: error.name } : {}
-    return { error: { class: error.constructor.name, ...name, message: error.message } }
-  }
-}
-
 // Each run parses the HTML again, since parsing can move nested lists in the DOM.
 function fromTemplate(source) {
   const template = document.createElement("template")
@@ -713,11 +705,13 @@ function nodeOf(owner, { element, href, node }) {
 }
 
 const spec = { topNode: schema.topNodeType.name, nodes: schema.spec.nodes.toObject(), marks: schema.spec.marks.toObject() }
-const oneEach = records => `[\n${records.map(record => `    ${JSON.stringify(record)}`).join(",\n")}\n  ]`
-writeFileSync(
-  new URL("../fixtures/dom.json", import.meta.url),
-  `{\n  "engine": ${JSON.stringify(engine())},\n  "schema": ${JSON.stringify(spec)},\n  "parses": ${oneEach(parses)},\n` +
-    `  "serializes": ${oneEach(serializes)},\n` +
-    `  "styleProperties": ${JSON.stringify(properties)},\n  "styles": ${oneEach(styles)},\n  "renders": ${oneEach(renders)},\n` +
-    `  "strings": ${oneEach(strings)}\n}\n`,
-)
+writeFixture("dom", {
+  engine: engine(),
+  schema: spec,
+  parses,
+  serializes,
+  styleProperties: properties,
+  styles,
+  renders,
+  strings,
+})

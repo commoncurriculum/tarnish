@@ -2,9 +2,9 @@
 // fixtures/steps.json, for a Rust test that defines the same step to expect: applying it alone
 // and among ProseMirror's steps, its maps, inverses, mapping and merging, and the errors of
 // `Step.jsonID` and `Step.fromJSON`.
-import { writeFileSync } from "node:fs"
 import { Fragment, Node, Schema, Slice } from "prosemirror-model"
 import { Mapping, ReplaceStep, Step, StepMap, StepResult, Transform } from "prosemirror-transform"
+import { outcome, writeFixture } from "./fixture.mjs"
 
 class InsertTextStep extends Step {
   constructor(pos, text) {
@@ -42,17 +42,9 @@ class InsertTextStep extends Step {
   }
 }
 
-function outcome(run) {
-  try {
-    return { result: run() }
-  } catch (error) {
-    return { error: { class: error.constructor.name, message: error.message } }
-  }
-}
-
 const jsonID = ["insertText", "insertText", "replace"].map(id => ({
   id,
-  ...outcome(() => (Step.jsonID(id, InsertTextStep), null)),
+  ...outcome(() => (Step.jsonID(id, InsertTextStep), { result: null })),
 }))
 
 const spec = {
@@ -83,7 +75,7 @@ const transforms = [
   for (const json of steps) {
     const step = Step.fromJSON(schema, json)
     const before = tr.doc
-    const { result: failed, error } = outcome(() => tr.maybeStep(step).failed)
+    const { result: failed, error } = outcome(() => ({ result: tr.maybeStep(step).failed }))
     if (error) {
       applied.push({ error })
       break
@@ -124,9 +116,6 @@ const fromJSON = [
   { stepType: "insertText", pos: "1", text: "a" },
   { stepType: "insertText", pos: 1 },
   { stepType: "unknown" },
-].map(json => ({ json, ...outcome(() => Step.fromJSON(schema, json).toJSON()) }))
+].map(json => ({ json, ...outcome(() => ({ result: Step.fromJSON(schema, json).toJSON() })) }))
 
-writeFileSync(
-  new URL("../fixtures/steps.json", import.meta.url),
-  JSON.stringify({ schema: spec, start, jsonID, transforms, mapped, merged, fromJSON }, null, 2) + "\n",
-)
+writeFixture("steps", { schema: spec, start, jsonID, transforms, mapped, merged, fromJSON })

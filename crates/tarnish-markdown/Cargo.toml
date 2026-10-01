@@ -10,3 +10,6 @@ repository.workspace = true
 [dependencies]
 regress = { path = "../../vendor/regress", features = ["utf16", "prohibit-unsafe"] }
 tarnish-js = { path = "../tarnish-js", version = "0.1.0", features = ["regexp"] }
+
+[dev-dependencies]
+tarnish-fixtures = { path = "../tarnish-fixtures" }

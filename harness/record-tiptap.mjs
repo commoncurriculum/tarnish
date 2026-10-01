@@ -9,7 +9,6 @@
 // - Each document records the innerHTML of an element DOMSerializer fills in linkedom.
 // The version of @tiptap/markdown is recorded too, for the tests to check that tarnish-tiptap
 // ports the one installed.
-import { readFileSync, writeFileSync } from "node:fs"
 import { getSchema } from "@tiptap/core"
 import { Bold } from "@tiptap/extension-bold"
 import { Document } from "@tiptap/extension-document"
@@ -30,6 +29,7 @@ import { DOMParser, DOMSerializer, Node } from "@tiptap/pm/model"
 import { parseHTML } from "linkedom"
 import { Marked } from "marked"
 import moreLists from "marked-more-lists"
+import { installed, outcome, writeFixture } from "./fixture.mjs"
 
 const extensions = [
   Document,
@@ -54,14 +54,6 @@ const schema = getSchema(extensions)
 const parser = DOMParser.fromSchema(schema)
 const serializer = DOMSerializer.fromSchema(schema)
 const { document } = parseHTML("<!DOCTYPE html><html><body></body></html>")
-
-function outcome(run) {
-  try {
-    return run()
-  } catch (error) {
-    return { error: { class: error.constructor.name, message: error.message } }
-  }
-}
 
 const withMarks = (text, ...marks) => ({ type: "text", text, marks: marks.map(type => ({ type })) })
 const markTypes = ["bold", "italic", "strike", "underline", "highlight", "subscript", "superscript", "textStyle"]
@@ -162,11 +154,10 @@ const serializesHTML = [
   }),
 }))
 
-const { version } = JSON.parse(readFileSync(new URL("../node_modules/@tiptap/markdown/package.json", import.meta.url), "utf8"))
-const oneEach = records => `[\n${records.map(record => `    ${JSON.stringify(record)}`).join(",\n")}\n  ]`
-writeFileSync(
-  new URL("../fixtures/tiptap.json", import.meta.url),
-  `{\n  "tiptap": ${JSON.stringify(version)},\n  "parsesMarkdown": ${oneEach(parsesMarkdown)},\n` +
-    `  "serializesMarkdown": ${oneEach(serializesMarkdown)},\n  "parsesHTML": ${oneEach(parsesHTML)},\n` +
-    `  "serializesHTML": ${oneEach(serializesHTML)}\n}\n`,
-)
+writeFixture("tiptap", {
+  tiptap: installed("@tiptap/markdown"),
+  parsesMarkdown,
+  serializesMarkdown,
+  parsesHTML,
+  serializesHTML,
+})

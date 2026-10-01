@@ -298,6 +298,37 @@ text = Tarnish.Node.text_content(doc)
 
   tarnish's own tests are such an application: `elixir/test/support` holds its conversions in
   JavaScript and its NIF, and `Tarnish.Bridge`'s tests run on both backends.
+- **Holding your NIF to your worker.** `tarnish_nif::parity`, behind the `parity` feature, finds
+  the requests your two makings of the conversions answer differently. Turn the feature on for
+  `tarnish-nif` as a dev-dependency, so your NIF never builds it, and run it from an example:
+
+  ```rust
+  fn main() -> std::process::ExitCode {
+      tarnish_nif::parity::main(&tarnish_nif::parity::Parity {
+          conversions: &MY_CONVERSIONS,
+          module: Path::new("/path/to/conversions.mjs"),
+          // Whether two values the answers differ in are the same answer all the same.
+          same: |_input, _theirs, _ours| false,
+      })
+  }
+  ```
+
+  ```sh
+  cargo run --release --example parity -- record requests.json > records.json
+  cargo run --release --example parity -- replay records.json
+  cargo run --release --example parity -- reduce records.json
+  cargo run --release --example parity -- speed requests.json [operation]
+  ```
+
+  A request file is a JSON array of `{"operation", "input", "options"}`. `record` writes each
+  request with the worker's `"output"` or `"error"`, from a worker the pool's way: tarnish's
+  `worker.mjs`, of the commit `tarnish-nif` is built from, on the `node` on your `PATH`.
+  `replay` answers each record's request in the NIF and prints how many answers differ in each
+  way, with the first few of each, and fails if any do. An object's keys may come in any order.
+  `reduce` shrinks each request the NIF gets wrong to a smallest input it still gets wrong the
+  same way, asking the worker for its answer to each smaller one, and prints the inputs it ends
+  at. `speed` times the NIF's conversions of a request file, without terms: the median of 5
+  rounds after a warm-up, per request, for each operation, or the one named.
 
 ### C, and other languages through it
 
@@ -528,7 +559,7 @@ hold:
 | `crates/tarnish-html` | An HTML DOM for `DomParser` and `DomSerializer`: html5ever's parser, the standard's serialization |
 | `crates/tarnish-css`, `crates/tarnish-css-wasm` | Inline styles on stylo, and the same as WebAssembly, which `harness/css-wasm.mjs` writes into the linkedom fork |
 | `elixir/`, `crates/tarnish_elixir` | The Elixir package and the Rustler NIF behind it. `elixir/test/support` is the application its tests make: conversions in JavaScript, and a NIF on `tarnish-nif` |
-| `crates/tarnish-nif` | The base of a NIF on tarnish: terms as JSON, budgets, a batch pool, the allocator, tarnish's functions, and `Tarnish.Bridge`'s conversions |
+| `crates/tarnish-nif` | The base of a NIF on tarnish: terms as JSON, budgets, a batch pool, the allocator, tarnish's functions, and `Tarnish.Bridge`'s conversions, with the tools that hold them to the Node worker's |
 | `crates/tarnish-tiptap` | Tiptap on the server: extensions, `getSchema`, `@tiptap/html`'s conversions and `@tiptap/markdown`'s `MarkdownManager`, with Tiptap's own extensions |
 | `crates/tarnish-zod` | The parts of zod 4 that attribute schemas use, with zod's output and errors |
 | `crates/tarnish-c` | The C library and its generated header |
@@ -537,9 +568,9 @@ hold:
 | `vendor/regress` | regress 0.12.0, the `RegExp` engine of `tarnish-js`, with its patches marked in the source |
 | `crates/tarnish-node` | The Node bridge that runs ProseMirror's suites against tarnish. Internal, not published |
 | `upstream/` | ProseMirror's repositories, pinned as submodules, for their test suites |
-| `harness/` | The suite runner, the fixture recorders, and the bridge and C test builds |
+| `harness/` | The suite runner, the fixture recorders and the one way they record (`fixture.mjs`), and the bridge and C test builds |
 | `test/` | tarnish's own tests, in the upstream suites' style |
-| `fixtures/` | What the real packages did, recorded by `npm run test:js` |
+| `fixtures/` | What the real packages did, recorded by `npm run test:js`, which `crates/tarnish-fixtures` reads for the Rust tests |
 | `bench/` | The benchmark document and ProseMirror's timing |
 
 ## Running the tests

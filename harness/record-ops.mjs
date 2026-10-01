@@ -7,9 +7,10 @@
 // reads ops the same way. Where a method takes a NodeRange, an op gives `from`, `to` and
 // optionally `depth`; where ProseMirror's users compute an argument with a helper, an op may
 // leave it out for `liftTarget` or `findWrapping` to compute.
-import { readFileSync, writeFileSync } from "node:fs"
+import { readFileSync } from "node:fs"
 import { Fragment, Node, NodeRange, Schema, Slice } from "prosemirror-model"
 import { Step, Transform, findWrapping, liftTarget } from "prosemirror-transform"
+import { outcome, writeFixture } from "./fixture.mjs"
 
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value)
 const field = (json, key) => (isObject(json) && Object.hasOwn(json, key) ? json[key] : undefined)
@@ -243,14 +244,6 @@ function transform(doc, ops) {
     methods[op.name](tr, op)
   }
   return tr
-}
-
-function outcome(run) {
-  try {
-    return run()
-  } catch (error) {
-    return { error: { class: error.constructor.name, message: error.message } }
-  }
 }
 
 const recorded = JSON.parse(readFileSync(new URL("../fixtures/transform.json", import.meta.url), "utf8"))
@@ -784,9 +777,4 @@ const textContent = [
   [4, docs.text],
 ].map(([schema, doc]) => ({ schema, doc, result: Node.fromJSON(built[schema], doc).textContent }))
 
-const list = records =>`[\n${records.map(record => `    ${JSON.stringify(record)}`).join(",\n")}\n  ]`
-writeFileSync(
-  new URL("../fixtures/ops.json", import.meta.url),
-  `{\n  "schemas": ${list(schemas)},\n  "transforms": ${list(transforms)},\n` +
-    `  "textBetween": ${list(textBetween)},\n  "textContent": ${list(textContent)}\n}\n`,
-)
+writeFixture("ops", { schemas, transforms, textBetween, textContent })
