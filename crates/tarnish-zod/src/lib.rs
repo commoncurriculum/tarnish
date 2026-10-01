@@ -330,10 +330,17 @@ impl Schema {
             Schema::String => check_type(input, "string", Value::is_string, path, issues),
             Schema::Boolean => check_type(input, "boolean", Value::is_boolean, path, issues),
             Schema::Number => match input.value() {
-                Some(value @ Value::Number(_)) => Some(Cow::Borrowed(value)),
+                Some(value @ Value::Number(number)) if number.as_f64().is_finite() => {
+                    Some(Cow::Borrowed(value))
+                }
                 _ => type_issue(input, "number", path, issues),
             },
-            Schema::Int => match input.value().and_then(Value::as_f64) {
+            // `z.int()` checks the numbers `z.number()` passes.
+            Schema::Int => match input
+                .value()
+                .and_then(Value::as_f64)
+                .filter(|number| number.is_finite())
+            {
                 None => type_issue(input, "number", path, issues),
                 Some(number) if number.fract() != 0.0 => {
                     issues.add(|| Issue {
@@ -683,20 +690,29 @@ fn type_issue<'v>(
 ) -> Option<Cow<'v, Value>> {
     issues.add(|| {
         let received = match input {
-            Input::Undefined => "undefined",
-            Input::Inherited => "function",
-            Input::Value(Value::Null) => "null",
-            Input::Value(Value::Bool(_)) => "boolean",
-            Input::Value(Value::Number(_)) => "number",
-            Input::Value(Value::String(_)) => "string",
-            Input::Value(Value::Array(_)) => "array",
-            Input::Value(Value::Object(_)) => "object",
+            Input::Undefined => "undefined".into(),
+            Input::Inherited => "function".into(),
+            Input::Value(Value::Null) => "null".into(),
+            Input::Value(Value::Bool(_)) => "boolean".into(),
+            Input::Value(Value::Number(number)) if number.as_f64().is_finite() => "number".into(),
+            // NaN and ±Infinity are named by their value.
+            Input::Value(Value::Number(number)) => {
+                Cow::Owned(tarnish_js::number_to_string(number.as_f64()))
+            }
+            Input::Value(Value::String(_)) => "string".into(),
+            Input::Value(Value::Array(_)) => "array".into(),
+            Input::Value(Value::Object(_)) => "object".into(),
         };
+        let mut fields = vec![
+            ("expected", json!(expected)),
+            ("code", json!("invalid_type")),
+        ];
+        // A number `z.number()` refuses, which is NaN or ±Infinity, it names in the issue too.
+        if expected == "number" && matches!(input, Input::Value(Value::Number(_))) {
+            fields.push(("received", json!(received.as_ref())));
+        }
         Issue {
-            fields: vec![
-                ("expected", json!(expected)),
-                ("code", json!("invalid_type")),
-            ],
+            fields,
             path: path_values(path),
             message: format!("Invalid input: expected {expected}, received {received}"),
         }

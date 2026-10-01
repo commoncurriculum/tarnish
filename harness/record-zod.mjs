@@ -47,9 +47,8 @@ function build(schema) {
   }
 }
 
-// Every kind of JSON, and the numbers at the edges of `z.number()` and `z.int()`. None is past a
-// double, which `JSON.parse` reads as Infinity, and tarnish-js's JSON, which holds what JSON text
-// can write, as null.
+// Every kind of JSON, and the numbers at the edges of `z.number()` and `z.int()`, past a double's
+// among them, which `JSON.parse` reads as ±Infinity.
 const values = [
   undefined,
   "null",
@@ -93,6 +92,12 @@ const values = [
   '{"__proto__":"p","a":"x"}',
   '{"a":{"b":1.5},"c":[{"d":1},{"d":"x"},{}]}',
   '{"a":{"b":"x"},"c":[{"d":"y"}]}',
+  "1e400",
+  "-1e400",
+  "[1e400,1]",
+  "[[-1e400]]",
+  '{"a":"x","b":1e400}',
+  '{"a":{"b":-1e400},"c":[]}',
 ]
 
 const abc = [
@@ -178,6 +183,12 @@ const schemas = [
   ["default", ["catch", "string"], "d"],
   ["nullable", ["optional", "string"]],
   ["catch", ["optional", "string"], "x"],
+  ["nullable", "number"],
+  ["nullable", "int"],
+  ["optional", "int"],
+  ["default", "number", 0],
+  ["catch", "number", 0],
+  ["catch", "int", 1],
 ]
 
 const parses = schemas.flatMap((schema, index) =>
