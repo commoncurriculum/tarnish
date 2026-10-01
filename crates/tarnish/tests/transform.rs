@@ -1,22 +1,16 @@
 //! The transforms `prosemirror-transform`'s tests make, recorded from the real package by
 //! `npm run test:js`.
 
-use tarnish::json::{self, Value};
+use tarnish::json::Value;
 use tarnish::{Node, Schema, api};
+use tarnish_fixtures::{read, schemas};
 
 /// Steps after the first are applied to a document only `apply_steps` holds, which a replace
 /// changes in place: the document it was given must stay as it was.
 #[test]
 fn steps_give_prosemirrors_document_and_leave_the_one_given() {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/transform.json");
-    let fixtures =
-        json::from_str(&std::fs::read_to_string(path).expect("the fixtures")).expect("JSON");
-    let schemas: Vec<Schema> = fixtures["schemas"]
-        .as_array()
-        .expect("schemas")
-        .iter()
-        .map(|spec| api::schema(spec).expect("a schema"))
-        .collect();
+    let fixtures = read("transform");
+    let schemas = schemas(&fixtures);
     for case in fixtures["tests"].as_array().expect("tests") {
         let schema = &schemas[case["schema"].as_u64().expect("a schema's index") as usize];
         let doc = Node::from_json(schema, &case["start"]).expect("a document");
@@ -57,15 +51,8 @@ fn reloaded(
 /// document read back from the chunks' bytes, and so is the change undoing it, on three.
 #[test]
 fn changes_read_back_from_their_chunks() {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/transform.json");
-    let fixtures =
-        json::from_str(&std::fs::read_to_string(path).expect("the fixtures")).expect("JSON");
-    let schemas: Vec<Schema> = fixtures["schemas"]
-        .as_array()
-        .expect("schemas")
-        .iter()
-        .map(|spec| api::schema(spec).expect("a schema"))
-        .collect();
+    let fixtures = read("transform");
+    let schemas = schemas(&fixtures);
     for case in fixtures["tests"].as_array().expect("tests") {
         let schema = &schemas[case["schema"].as_u64().expect("a schema's index") as usize];
         let read = Node::from_json(schema, &case["start"]).expect("a document");

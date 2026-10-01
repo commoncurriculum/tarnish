@@ -567,9 +567,9 @@ hold:
 | `vendor/regress` | regress 0.12.0, the `RegExp` engine of `tarnish-js`, with its patches marked in the source |
 | `crates/tarnish-node` | The Node bridge that runs ProseMirror's suites against tarnish. Internal, not published |
 | `upstream/` | ProseMirror's repositories, pinned as submodules, for their test suites |
-| `harness/` | The suite runner, the fixture recorders, and the bridge and C test builds |
+| `harness/` | The suite runner, the fixture recorders and the one way they record (`fixture.mjs`), and the bridge and C test builds |
 | `test/` | tarnish's own tests, in the upstream suites' style |
-| `fixtures/` | What the real packages did, recorded by `npm run test:js` |
+| `fixtures/` | What the real packages did, recorded by `npm run test:js`, which `crates/tarnish-fixtures` reads for the Rust tests |
 | `bench/` | The benchmark document and ProseMirror's timing |
 
 ## Running the tests

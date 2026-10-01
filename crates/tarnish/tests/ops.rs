@@ -2,20 +2,13 @@
 //! them, recorded by `harness/record-ops.mjs`: tarnish must give the same documents, steps,
 //! text and errors.
 
-use tarnish::json::{self, Value};
+use tarnish::json::{Value, json};
 use tarnish::{Node, Result, Schema, Text, api};
+use tarnish_fixtures::{expect, outcome, read, schemas};
 
 fn fixtures() -> (Vec<Schema>, Value) {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/ops.json");
-    let fixtures =
-        json::from_str(&std::fs::read_to_string(path).expect("the fixtures")).expect("JSON");
-    let schemas = fixtures["schemas"]
-        .as_array()
-        .expect("schemas")
-        .iter()
-        .map(|spec| api::schema(spec).expect("a schema"))
-        .collect();
-    (schemas, fixtures)
+    let fixtures = read("ops");
+    (schemas(&fixtures), fixtures)
 }
 
 fn doc(schemas: &[Schema], case: &Value) -> Node<'static> {
@@ -23,21 +16,13 @@ fn doc(schemas: &[Schema], case: &Value) -> Node<'static> {
     Node::from_json(schema, &case["doc"]).expect("a document")
 }
 
-fn expect_error(case: &Value, error: tarnish::Error) {
-    let recorded = case
-        .get("error")
-        .unwrap_or_else(|| panic!("{error} in {case}"));
-    assert_eq!(error.class(), recorded["class"], "{case}");
-    assert_eq!(error.message(), recorded["message"], "{case}");
-}
-
 /// Text with a lone surrogate is recorded as its JSON.
 fn expect_text(case: &Value, text: Result<Text>) {
-    match (text, case.get("resultJSON")) {
-        (Ok(text), Some(json)) => assert_eq!(json, &text.to_json_string(), "{case}"),
-        (Ok(text), None) => assert_eq!(text.as_str(), case["result"].as_str(), "{case}"),
-        (Err(error), _) => expect_error(case, error),
-    }
+    let text = text.map(|text| match case.get("resultJSON") {
+        Some(_) => json!({ "resultJSON": text.to_json_string() }),
+        None => json!({ "result": text.as_str() }),
+    });
+    expect(case, outcome(text));
 }
 
 #[test]
@@ -46,13 +31,14 @@ fn ops_give_prosemirrors_document_steps_and_errors() {
     for case in fixtures["transforms"].as_array().expect("transforms") {
         let doc = doc(&schemas, case);
         let before = doc.to_json();
-        match api::transform(&doc, &case["ops"]) {
-            Ok((changed, steps)) => {
-                assert!(changed.to_json() == case["result"], "{case}");
-                assert!(steps == case["steps"], "{case}");
-            }
-            Err(error) => expect_error(case, error),
-        }
+        let transformed = api::transform(&doc, &case["ops"]);
+        expect(
+            case,
+            outcome(
+                transformed
+                    .map(|(changed, steps)| json!({ "result": changed.to_json(), "steps": steps })),
+            ),
+        );
         assert!(doc.to_json() == before, "{case}");
     }
 }

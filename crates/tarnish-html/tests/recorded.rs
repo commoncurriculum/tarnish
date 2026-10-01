@@ -7,6 +7,7 @@ mod basic;
 use tarnish::dom::{Dom, DomParser, DomSpec, ParseOptions, PreserveWhitespace, render_spec};
 use tarnish::json::{self, Value};
 use tarnish::{Node, Result, Schema, api};
+use tarnish_fixtures::{outcome, read};
 use tarnish_html::{HtmlDom, HtmlNode, parse_html, parse_html_slice, to_html};
 
 /// Inputs html5ever builds another tree from than the fork's parse5 8 does, and why. The test
@@ -42,9 +43,7 @@ const DIFFERENT_TREES: &[(&[&str], &str)] = &[
 ];
 
 fn fixtures() -> (Schema, Value) {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/dom.json");
-    let fixtures =
-        json::from_str(&std::fs::read_to_string(path).expect("the fixtures")).expect("JSON");
+    let fixtures = read("dom");
     let schema = api::schema(&fixtures["schema"]).expect("the schema");
     (schema, fixtures)
 }
@@ -61,14 +60,6 @@ fn options(record: &Value) -> ParseOptions<'static, HtmlNode> {
     ParseOptions {
         preserve_whitespace,
         ..ParseOptions::default()
-    }
-}
-
-/// An outcome as the fixtures record it: its value, or its error's class and message.
-fn outcome(result: Result<Value>) -> Value {
-    match result {
-        Ok(value) => value,
-        Err(error) => json::json!({"error": {"class": error.class(), "message": error.message()}}),
     }
 }
 

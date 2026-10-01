@@ -2,9 +2,9 @@
 // to fixtures/marked.json, for tarnish-markdown's tests to expect. Each token records the fields
 // `Token::to_json` writes, or the lexer's error. The version of marked is recorded too, for the
 // tests to check that tarnish-markdown ports the one installed.
-import { readFileSync, writeFileSync } from "node:fs"
 import { Marked } from "marked"
 import moreLists from "marked-more-lists"
+import { installed, outcome, writeFixture } from "./fixture.mjs"
 
 const marked = new Marked()
 marked.use(moreLists())
@@ -245,14 +245,6 @@ const inputs = [
   "# Title\n\nIntro with **bold**, *em*, `code` and [a link](x).\n\n- one\n- two\n  1. nested\n\n> quote\n\n```\ncode\n```\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\n---\n\nThe end.",
 ]
 
-function lex(input) {
-  try {
-    return { tokens: marked.lexer(input).map(project) }
-  } catch (error) {
-    return { error: error.message }
-  }
-}
-
 function project(token) {
   const out = { type: token.type, raw: token.raw }
   if (typeof token.text === "string") out.text = token.text
@@ -287,9 +279,5 @@ function project(token) {
   return out
 }
 
-const { version } = JSON.parse(readFileSync(new URL("../node_modules/marked/package.json", import.meta.url), "utf8"))
-const lexed = inputs.map(input => ({ input, ...lex(input) }))
-writeFileSync(
-  new URL("../fixtures/marked.json", import.meta.url),
-  `{\n  "marked": ${JSON.stringify(version)},\n  "lexed": [\n${lexed.map(record => `    ${JSON.stringify(record)}`).join(",\n")}\n  ]\n}\n`,
-)
+const lexed = inputs.map(input => ({ input, ...outcome(() => ({ tokens: marked.lexer(input).map(project) })) }))
+writeFixture("marked", { marked: installed("marked"), lexed })
