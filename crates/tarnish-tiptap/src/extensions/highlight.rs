@@ -3,6 +3,7 @@
 use std::sync::LazyLock;
 
 use crate::DomSpec;
+use crate::markdown::{RenderContext, RenderHelpers};
 use crate::{ExtensionAttribute, MarkExtension, ParseHtml, get_style_property};
 use tarnish::json::Value;
 use tarnish_js::Error;
@@ -25,7 +26,20 @@ pub fn highlight(options: HighlightOptions) -> MarkExtension {
         .add_attributes(attributes)
         .parse_html([ParseHtml::tag("mark")])
         .render_html(|_, html| DomSpec::wrapping("mark", html))
+        .render_markdown(render_markdown)
+        .parse_markdown(|token, helpers| {
+            let content = helpers.parse_inline(token.tokens.as_deref().unwrap_or_default())?;
+            Ok(helpers.apply_mark("highlight", content, None))
+        })
         .markdown_tokenizer("==", tokenize)
+}
+
+fn render_markdown(
+    node: &Value,
+    helpers: &dyn RenderHelpers,
+    _: &RenderContext,
+) -> Result<String, Error> {
+    Ok(["==", &helpers.render_children(node, "")?, "=="].concat())
 }
 
 static RULE: LazyLock<RegExp> = LazyLock::new(|| RegExp::new("^(==)([^=]+)(==)", ""));

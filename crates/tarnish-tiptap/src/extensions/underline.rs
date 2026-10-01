@@ -3,8 +3,10 @@
 use std::sync::LazyLock;
 
 use crate::DomSpec;
+use crate::markdown::{RenderContext, RenderHelpers};
 use crate::{GetAttrsResult, MarkExtension, ParseHtml};
 use tarnish::Map as Attrs;
+use tarnish::json::Value;
 use tarnish_js::Error;
 use tarnish_js::regexp::RegExp;
 use tarnish_js::units::Units;
@@ -28,7 +30,20 @@ pub fn underline() -> MarkExtension {
             ),
         ])
         .render_html(|_, html| DomSpec::wrapping("u", html))
+        .parse_markdown(|token, helpers| {
+            let content = helpers.parse_inline(token.tokens.as_deref().unwrap_or_default())?;
+            Ok(helpers.apply_mark("underline", content, None))
+        })
+        .render_markdown(render_markdown)
         .markdown_tokenizer("++", tokenize)
+}
+
+fn render_markdown(
+    node: &Value,
+    helpers: &dyn RenderHelpers,
+    _: &RenderContext,
+) -> Result<String, Error> {
+    Ok(["++", &helpers.render_children(node, "")?, "++"].concat())
 }
 
 static RULE: LazyLock<RegExp> = LazyLock::new(|| RegExp::new(r"^(\+\+)([\s\S]+?)(\+\+)", ""));

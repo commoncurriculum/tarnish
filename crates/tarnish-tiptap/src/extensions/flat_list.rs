@@ -1,4 +1,6 @@
-//! `tiptap-extension-flat-list`: `FlatListCore` and the three flat list item nodes.
+//! `tiptap-extension-flat-list`: `FlatListCore` and the three flat list item nodes. Their `li`
+//! parse rules, which prop up an item through the page's global `document`, are left to the
+//! application.
 
 use tarnish::chunk::ValueRef;
 use tarnish::json::json;
