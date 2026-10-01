@@ -163,9 +163,13 @@ defmodule Tarnish.BridgeTest do
       end
     end
 
-    test "starts no pool" do
+    test "starts no pool, but a lazy one, for a call that picks the Node workers" do
       assert Tarnish.Bridge.start_link(backend: :nif) == :ignore
       assert Process.whereis(Tarnish.Bridge.Pool) == nil
+
+      start_supervised!({Tarnish.Bridge, name: :lazy, backend: :nif, lazy: true})
+      assert worker_pids(:lazy) == []
+      assert {:ok, _} = Tarnish.Bridge.parse_html("<p>x</p>", %{}, backend: :node, pool: :lazy)
     end
   end
 

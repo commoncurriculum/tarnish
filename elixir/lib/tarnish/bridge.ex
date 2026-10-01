@@ -19,8 +19,9 @@ defmodule Tarnish.Bridge do
   that `config :tarnish, native:` names.
 
   Put `Tarnish.Bridge` in your supervision tree. It loads the NIF, so that an application whose
-  NIF doesn't load fails to start, and it starts the pool only for `:node`. `start_link/1` takes
-  `backend:` and the pool's options, over the configured ones, and `name:`.
+  NIF doesn't load fails to start, and it starts the pool for `:node`, and for `:nif` when the
+  pool is lazy, which costs nothing until a call picks `:node`. `start_link/1` takes `backend:`
+  and the pool's options, over the configured ones, and `name:`.
 
   Each conversion gives `{:ok, value}` or `{:error, message}`. Its `opts` take `backend:`, over
   the configured one, so that a test can hold both backends to the same answers. On `:node`, a
@@ -47,10 +48,7 @@ defmodule Tarnish.Bridge do
   def start_link(opts) do
     Code.ensure_loaded!(@native)
 
-    case backend(opts) do
-      :node -> Pool.start_link(opts)
-      :nif -> :ignore
-    end
+    if backend(opts) == :node or Pool.lazy?(opts), do: Pool.start_link(opts), else: :ignore
   end
 
   @doc "Markdown to a document's JSON: `{:ok, doc_json}` or `{:error, message}`."
