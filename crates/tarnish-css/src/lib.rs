@@ -14,6 +14,10 @@ use style::servo_arc::Arc;
 use style::stylesheets::{CssRuleType, Origin, UrlExtraData};
 use style_traits::ParsingMode;
 
+mod room;
+
+use room::Room;
+
 /// This crate's version and the stylo it's built on. The fork's WebAssembly gives it as
 /// `engine()`, so a test can check that JavaScript and Rust run the same engine.
 pub const ENGINE: &str = concat!(env!("CARGO_PKG_VERSION"), "+stylo-0.21.0");
@@ -54,44 +58,47 @@ pub fn property_names() -> impl Iterator<Item = String> {
 }
 
 /// The declarations of a `style` attribute, with CSSOM's operations on them.
-pub struct Declarations(PropertyDeclarationBlock);
+pub struct Declarations {
+    block: PropertyDeclarationBlock,
+    /// As deep as any CSS they were parsed from nests, which stylo walks them as deep as.
+    room: Room,
+}
 
 impl Declarations {
     pub fn parse(css: &str) -> Self {
-        Declarations(parse_style_attribute(
-            css,
-            &SETTINGS.url,
-            None,
-            QUIRKS,
-            CssRuleType::Style,
-        ))
+        let room = Room::of(css);
+        let block = room
+            .run(|| parse_style_attribute(css, &SETTINGS.url, None, QUIRKS, CssRuleType::Style));
+        Declarations { block, room }
     }
 
     /// `cssText`.
     pub fn css_text(&self) -> String {
         let mut text = String::new();
-        self.0.to_css(&mut text).expect("writing to a string");
+        self.room
+            .run(|| self.block.to_css(&mut text))
+            .expect("writing to a string");
         text
     }
 
     /// `length`: how many longhands and custom properties are declared.
     pub fn len(&self) -> usize {
-        self.0.len()
+        self.block.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.block.is_empty()
     }
 
     /// `item(index)`: the name of the declaration at `index`.
     pub fn item(&self, index: usize) -> Option<String> {
-        let declaration = self.0.declarations().get(index)?;
+        let declaration = self.block.declarations().get(index)?;
         Some(declaration.id().name().into_owned())
     }
 
     /// Every `item(index)`, in order.
     pub fn names(&self) -> Vec<String> {
-        let declarations = self.0.declarations().iter();
+        let declarations = self.block.declarations().iter();
         declarations
             .map(|declaration| declaration.id().name().into_owned())
             .collect()
@@ -99,12 +106,12 @@ impl Declarations {
 
     /// `getPropertyValue(name)`.
     pub fn value(&self, name: &str) -> String {
-        property(name).map_or_else(String::new, |id| self.value_of(&id))
+        property(name).map_or_else(String::new, |id| self.room.run(|| self.value_of(&id)))
     }
 
     fn value_of(&self, id: &PropertyId) -> String {
         let mut value = String::new();
-        self.0
+        self.block
             .property_value_to_css(id, &mut value)
             .expect("writing to a string");
         value
@@ -112,7 +119,7 @@ impl Declarations {
 
     /// `getPropertyPriority(name)`.
     pub fn priority(&self, name: &str) -> &'static str {
-        match property(name).map(|id| self.0.property_priority(&id)) {
+        match property(name).map(|id| self.block.property_priority(&id)) {
             Some(Importance::Important) => "important",
             _ => "",
         }
@@ -132,29 +139,33 @@ impl Declarations {
             false if priority.is_empty() => Importance::Normal,
             false => return false,
         };
-        let mut declarations = SourcePropertyDeclaration::default();
-        let parsed = parse_one_declaration_into(
-            &mut declarations,
-            id,
-            value,
-            Origin::Author,
-            &SETTINGS.url,
-            None,
-            ParsingMode::DEFAULT,
-            QUIRKS,
-            CssRuleType::Style,
-        );
-        let mut updates = Default::default();
-        if parsed.is_err()
-            || !self
-                .0
-                .prepare_for_update(&declarations, importance, &mut updates)
-        {
-            return false;
+        let room = self.room.max(Room::of(value));
+        let block = &mut self.block;
+        let changed = room.run(|| {
+            let mut declarations = SourcePropertyDeclaration::default();
+            let parsed = parse_one_declaration_into(
+                &mut declarations,
+                id,
+                value,
+                Origin::Author,
+                &SETTINGS.url,
+                None,
+                ParsingMode::DEFAULT,
+                QUIRKS,
+                CssRuleType::Style,
+            );
+            let mut updates = Default::default();
+            if parsed.is_err() || !block.prepare_for_update(&declarations, importance, &mut updates)
+            {
+                return false;
+            }
+            block.update(declarations.drain(), importance, &mut updates);
+            true
+        });
+        if changed {
+            self.room = room;
         }
-        self.0
-            .update(declarations.drain(), importance, &mut updates);
-        true
+        changed
     }
 
     /// `removeProperty(name)`: the value it had, if it was declared.
@@ -163,10 +174,19 @@ impl Declarations {
     }
 
     fn remove_id(&mut self, id: &PropertyId) -> Option<String> {
-        let first = self.0.first_declaration_to_remove(id)?;
-        let value = self.value_of(id);
-        self.0.remove_property(id, first);
-        Some(value)
+        let first = self.block.first_declaration_to_remove(id)?;
+        self.room.run(|| {
+            let value = self.value_of(id);
+            self.block.remove_property(id, first);
+            Some(value)
+        })
+    }
+}
+
+impl Drop for Declarations {
+    fn drop(&mut self) {
+        let block = std::mem::take(&mut self.block);
+        self.room.run(|| drop(block));
     }
 }
 

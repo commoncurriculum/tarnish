@@ -1833,6 +1833,7 @@ dependencies = [
  "stylo",
  "stylo_static_prefs",
  "stylo_traits",
+ "tarnish-js",
  "url",
 ]
 

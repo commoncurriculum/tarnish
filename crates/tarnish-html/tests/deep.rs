@@ -1,9 +1,12 @@
-//! HTML and specs nested far deeper than a small stack could recurse through, parsed, rendered
-//! and written on a thread with such a stack.
+//! HTML, specs and styles nested far deeper than a small stack could recurse through, parsed,
+//! rendered and written on a thread with such a stack.
 
 mod basic;
 
-use tarnish::dom::{DomSpec, ParseOptions, render_spec, render_spec_of};
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use tarnish::dom::{DomSerializer, DomSpec, NodeToDom, ParseOptions, render_spec, render_spec_of};
 use tarnish::js::stack::on_dirty_scheduler_stack;
 use tarnish::json::{self, Value};
 use tarnish::{Error, Node, Schema, api};
@@ -15,6 +18,10 @@ const DEPTH: usize = 3_000;
 /// How deep specs and attributes nest, which is deeper than HTML, whose tree builder takes time
 /// that grows with the square of the depth.
 const SPEC_DEPTH: usize = 20_000;
+
+/// How deep blocks nest in a style's CSS, which the CSS engine reads in time that grows with
+/// the depth.
+const CSS_DEPTH: usize = 100_000;
 
 #[test]
 fn deep_html_round_trips_on_a_small_stack() {
@@ -110,5 +117,48 @@ fn looks_for_a_spec_through_attributes_nested_as_deeply_as_memory_allows() {
         let refused = render_spec_of(&HtmlDom::new(), &spec, attrs).err();
         let message = refused.as_ref().map(Error::message);
         assert!(message.is_some_and(|message| message.contains("cross site scripting")));
+    });
+}
+
+/// Styles whose CSS nests far deeper than the HTML does: the CSS engine reads each element's
+/// style as the parser walks it, and writes a style it's given as the attribute.
+#[test]
+fn styles_nest_as_deeply_as_memory_allows() {
+    on_dirty_scheduler_stack(|| {
+        let parens = "(".repeat(CSS_DEPTH) + &")".repeat(CSS_DEPTH);
+        let schema = api::schema(&read("dom")["schema"]).expect("the schema");
+        let parser = basic::parser(&schema);
+        // A style as given, and as the CSS engine writes it back.
+        let styles = [
+            (
+                format!("--a:{}", "(".repeat(CSS_DEPTH)),
+                format!("--a: {parens};"),
+            ),
+            (
+                format!("color: var(--a,{parens})"),
+                format!("color: var(--a,{parens});"),
+            ),
+        ];
+        for (given, kept) in styles {
+            let html = format!("<p style=\"{given}\">x</p>");
+            let doc = parse_html(&parser, &html, ParseOptions::<HtmlNode>::default());
+            let doc = doc.expect("a document");
+            assert_eq!(
+                to_html(&basic::serializer(), doc.content()).expect("HTML"),
+                "<p>x</p>"
+            );
+
+            let styled = format!("<p style=\"{kept}\">x</p>");
+            let spec = json::json!(["p", {"style": given.clone()}, "x"]);
+            assert!(rendered(&DomSpec::from(spec)).expect("HTML") == styled);
+
+            let paragraph: NodeToDom<HtmlNode> =
+                Arc::new(move |_| Ok(json::json!(["p", {"style": given.clone()}, 0]).into()));
+            let serializer = DomSerializer::new(
+                HashMap::from([("paragraph".to_owned(), paragraph)]),
+                HashMap::new(),
+            );
+            assert!(to_html(&serializer, doc.content()).expect("HTML") == styled);
+        }
     });
 }
