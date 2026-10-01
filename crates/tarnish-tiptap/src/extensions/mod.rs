@@ -17,3 +17,27 @@ pub mod superscript;
 pub mod text;
 pub mod text_style;
 pub mod underline;
+
+#[cfg(test)]
+mod tests {
+    use tarnish_markdown::marked::Marked;
+    use tarnish_markdown::marked_more_lists::more_lists;
+
+    use super::highlight::{HighlightOptions, highlight};
+    use super::underline::underline;
+    use crate::Extension;
+    use crate::markdown::MarkdownManager;
+
+    #[test]
+    fn tokenizers_match_only_at_their_starts() {
+        let extensions: [Extension; 2] = [
+            underline().into(),
+            highlight(HighlightOptions { multicolor: false }).into(),
+        ];
+        let manager = MarkdownManager::new(&extensions, Marked::new(more_lists()));
+        let alphabet = &[
+            "=", "==", "+", "++", "a", " ", "\n", "\\", "*", "`", "<", ">",
+        ];
+        manager.marked().check_extension_starts(alphabet);
+    }
+}
