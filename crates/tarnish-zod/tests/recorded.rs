@@ -33,6 +33,7 @@ fn keys(keys: &Value) -> Vec<&'static str> {
 }
 
 /// The schema the recorder writes as JSON.
+// bounded: as deep as the recorder's schemas, which code writes, nest
 fn build(schema: &Value) -> Schema {
     if let Some(kind) = schema.as_str() {
         return match kind {

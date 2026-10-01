@@ -178,6 +178,7 @@ impl Schema {
     /// Whether the schema puts a value in place of `undefined`, as `.default()` does, which zod
     /// calls an `optin` of `"defaulted"`: `.optional()` and `.catch()` keep it from the schema
     /// they wrap.
+    // bounded: as deep as the schema, which code builds, nests
     fn defaults(&self) -> bool {
         match self {
             Schema::Default(..) => true,
