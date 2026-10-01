@@ -57,7 +57,7 @@ pub fn get_schema(extensions: &[Extension]) -> Result<TiptapSchema> {
                 spec.nodes.push((
                     extension.name.to_owned(),
                     NodeSpec {
-                        content: non_empty(node.content),
+                        content: non_empty(&node.content),
                         group: non_empty(node.group),
                         inline: node.inline,
                         marks: node.marks.map(str::to_owned),

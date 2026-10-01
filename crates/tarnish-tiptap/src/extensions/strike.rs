@@ -9,20 +9,21 @@ use tarnish_js::Error;
 
 pub fn strike() -> MarkExtension {
     MarkExtension::create("strike")
-        .parse_html(vec![
-            ParseHtml::tag("s").into(),
-            ParseHtml::tag("del").into(),
-            ParseHtml::tag("strike").into(),
-            ParseHtml::style("text-decoration")
-                .not_consuming()
-                .get_attrs(|value| {
-                    Ok(if value.contains("line-through") {
-                        GetAttrsResult::Attrs(Attrs::new())
-                    } else {
-                        GetAttrsResult::Reject
-                    })
-                })
-                .into(),
+        .parse_html([
+            ParseHtml::Tag(ParseHtml::tag("s")),
+            ParseHtml::Tag(ParseHtml::tag("del")),
+            ParseHtml::Tag(ParseHtml::tag("strike")),
+            ParseHtml::Style(
+                ParseHtml::style("text-decoration")
+                    .not_consuming()
+                    .get_attrs(|value| {
+                        Ok(if value.contains("line-through") {
+                            GetAttrsResult::Attrs(Attrs::new())
+                        } else {
+                            GetAttrsResult::Reject
+                        })
+                    }),
+            ),
         ])
         .render_html(|_, html| DomSpec::wrapping("s", html))
         .markdown_token_name("del")

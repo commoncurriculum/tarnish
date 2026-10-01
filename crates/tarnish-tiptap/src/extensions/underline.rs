@@ -13,18 +13,19 @@ use tarnish_markdown::marked::{Lexer, Token};
 
 pub fn underline() -> MarkExtension {
     MarkExtension::create("underline")
-        .parse_html(vec![
-            ParseHtml::tag("u").into(),
-            ParseHtml::style("text-decoration")
-                .not_consuming()
-                .get_attrs(|value| {
-                    Ok(if value.contains("underline") {
-                        GetAttrsResult::Attrs(Attrs::new())
-                    } else {
-                        GetAttrsResult::Reject
-                    })
-                })
-                .into(),
+        .parse_html([
+            ParseHtml::Tag(ParseHtml::tag("u")),
+            ParseHtml::Style(
+                ParseHtml::style("text-decoration")
+                    .not_consuming()
+                    .get_attrs(|value| {
+                        Ok(if value.contains("underline") {
+                            GetAttrsResult::Attrs(Attrs::new())
+                        } else {
+                            GetAttrsResult::Reject
+                        })
+                    }),
+            ),
         ])
         .render_html(|_, html| DomSpec::wrapping("u", html))
         .markdown_tokenizer("++", tokenize)

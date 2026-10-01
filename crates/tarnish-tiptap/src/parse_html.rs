@@ -1,5 +1,6 @@
 //! The rules an extension's `parseHTML` returns, and `injectExtensionAttributesToParseRule`.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use tarnish::dom::{
@@ -25,7 +26,7 @@ pub enum ParseHtml {
 /// `{ tag, ... }`.
 #[derive(Clone)]
 pub struct TagRule {
-    tag: &'static str,
+    tag: Cow<'static, str>,
     priority: i32,
     consuming: bool,
     attrs: Map,
@@ -45,9 +46,10 @@ pub struct StyleRule {
 }
 
 impl ParseHtml {
-    pub fn tag(tag: &'static str) -> TagRule {
+    /// `{ tag }`, a selector that may be built from a name.
+    pub fn tag(tag: impl Into<Cow<'static, str>>) -> TagRule {
         TagRule {
-            tag,
+            tag: tag.into(),
             priority: 50,
             consuming: true,
             attrs: Map::new(),

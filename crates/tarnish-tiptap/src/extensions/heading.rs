@@ -17,14 +17,9 @@ pub fn heading(options: HeadingOptions) -> NodeExtension {
             ExtensionAttribute::new("level", json!(1)).not_rendered(),
         ])
         .parse_html(
-            levels
-                .iter()
-                .map(|level| {
-                    ParseHtml::tag(TAGS[usize::from(*level) - 1])
-                        .attrs(object!({ "level": level }))
-                        .into()
-                })
-                .collect(),
+            levels.iter().map(|level| {
+                ParseHtml::tag(format!("h{level}")).attrs(object!({ "level": level }))
+            }),
         )
         .render_html(move |node, html| {
             let level = node

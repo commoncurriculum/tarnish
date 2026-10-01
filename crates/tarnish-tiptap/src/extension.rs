@@ -3,6 +3,7 @@
 //! a setter replaces the parent's field, and an `extend_` method adds to it, as a field that
 //! spreads `this.parent()` does.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use super::attributes::{ExtensionAttribute, GlobalAttributes};
@@ -55,7 +56,7 @@ pub enum Kind {
 
 #[derive(Default)]
 pub struct NodeConfig {
-    pub content: &'static str,
+    pub content: Cow<'static, str>,
     pub group: &'static str,
     pub inline: bool,
     pub marks: Option<&'static str>,
@@ -157,14 +158,17 @@ impl<K> Extension<K> {
         self
     }
 
-    pub fn parse_html(mut self, rules: Vec<ParseHtml>) -> Self {
-        self.parse_html = rules;
+    pub fn parse_html(mut self, rules: impl IntoIterator<Item = impl Into<ParseHtml>>) -> Self {
+        self.parse_html = rules.into_iter().map(Into::into).collect();
         self
     }
 
     /// `parseHTML() { return [...this.parent?.(), ...rules] }`.
-    pub fn extend_parse_html(mut self, rules: Vec<ParseHtml>) -> Self {
-        self.parse_html.extend(rules);
+    pub fn extend_parse_html(
+        mut self,
+        rules: impl IntoIterator<Item = impl Into<ParseHtml>>,
+    ) -> Self {
+        self.parse_html.extend(rules.into_iter().map(Into::into));
         self
     }
 
@@ -216,8 +220,9 @@ impl<K> Extension<K> {
 }
 
 impl NodeExtension {
-    pub fn content(mut self, content: &'static str) -> Self {
-        self.kind.content = content;
+    /// `content`, an expression that may be built from names.
+    pub fn content(mut self, content: impl Into<Cow<'static, str>>) -> Self {
+        self.kind.content = content.into();
         self
     }
 

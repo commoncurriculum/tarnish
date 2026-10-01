@@ -23,7 +23,7 @@ pub fn highlight(options: HighlightOptions) -> MarkExtension {
     };
     MarkExtension::create("highlight")
         .add_attributes(attributes)
-        .parse_html(vec![ParseHtml::tag("mark").into()])
+        .parse_html([ParseHtml::tag("mark")])
         .render_html(|_, html| DomSpec::wrapping("mark", html))
         .markdown_tokenizer("==", tokenize)
 }

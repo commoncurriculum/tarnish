@@ -9,13 +9,14 @@ use tarnish_js::Error;
 
 pub fn italic() -> MarkExtension {
     MarkExtension::create("italic")
-        .parse_html(vec![
-            ParseHtml::tag("em").into(),
-            ParseHtml::tag("i")
-                .get_attrs(|i| Ok((i.style_value("font-style") != "normal").then(Attrs::new)))
-                .into(),
-            ParseHtml::style("font-style=normal").clears_mark().into(),
-            ParseHtml::style("font-style=italic").into(),
+        .parse_html([
+            ParseHtml::Tag(ParseHtml::tag("em")),
+            ParseHtml::Tag(
+                ParseHtml::tag("i")
+                    .get_attrs(|i| Ok((i.style_value("font-style") != "normal").then(Attrs::new))),
+            ),
+            ParseHtml::Style(ParseHtml::style("font-style=normal").clears_mark()),
+            ParseHtml::Style(ParseHtml::style("font-style=italic")),
         ])
         .render_html(|_, html| DomSpec::wrapping("em", html))
         .markdown_token_name("em")

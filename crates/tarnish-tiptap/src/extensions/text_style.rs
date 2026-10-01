@@ -15,18 +15,13 @@ use crate::{
 pub fn text_style() -> MarkExtension {
     MarkExtension::create("textStyle")
         .priority(101)
-        .parse_html(vec![
-            ParseHtml::tag("span")
-                .not_consuming()
-                .get_attrs(|span| {
-                    if !span.has_attribute("style") {
-                        return Ok(None);
-                    }
-                    merge_nested_span_styles(span)?;
-                    Ok(Some(Attrs::new()))
-                })
-                .into(),
-        ])
+        .parse_html([ParseHtml::tag("span").not_consuming().get_attrs(|span| {
+            if !span.has_attribute("style") {
+                return Ok(None);
+            }
+            merge_nested_span_styles(span)?;
+            Ok(Some(Attrs::new()))
+        })])
         .render_html(|_, html| DomSpec::wrapping("span", html))
 }
 

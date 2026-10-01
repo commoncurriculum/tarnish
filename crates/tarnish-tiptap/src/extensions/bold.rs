@@ -9,21 +9,20 @@ use tarnish_js::Error;
 
 pub fn bold() -> MarkExtension {
     MarkExtension::create("bold")
-        .parse_html(vec![
-            ParseHtml::tag("strong").into(),
-            ParseHtml::tag("b")
-                .get_attrs(|b| Ok((b.style_value("font-weight") != "normal").then(Attrs::new)))
-                .into(),
-            ParseHtml::style("font-weight=400").clears_mark().into(),
-            ParseHtml::style("font-weight")
-                .get_attrs(|value| {
-                    Ok(if is_bold_weight(value) {
-                        GetAttrsResult::Defaults
-                    } else {
-                        GetAttrsResult::Reject
-                    })
+        .parse_html([
+            ParseHtml::Tag(ParseHtml::tag("strong")),
+            ParseHtml::Tag(
+                ParseHtml::tag("b")
+                    .get_attrs(|b| Ok((b.style_value("font-weight") != "normal").then(Attrs::new))),
+            ),
+            ParseHtml::Style(ParseHtml::style("font-weight=400").clears_mark()),
+            ParseHtml::Style(ParseHtml::style("font-weight").get_attrs(|value| {
+                Ok(if is_bold_weight(value) {
+                    GetAttrsResult::Defaults
+                } else {
+                    GetAttrsResult::Reject
                 })
-                .into(),
+            })),
         ])
         .render_html(|_, html| DomSpec::wrapping("strong", html))
         .markdown_token_name("strong")

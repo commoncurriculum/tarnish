@@ -15,7 +15,7 @@ pub fn paragraph() -> NodeExtension {
         .priority(1000)
         .group("block")
         .content("inline*")
-        .parse_html(vec![ParseHtml::tag("p").into()])
+        .parse_html([ParseHtml::tag("p")])
         .render_html(|_, html| Ok(DomSpec::wrapping("p", html)))
         .parse_markdown(parse_markdown)
         .render_markdown(render_markdown)

@@ -23,7 +23,7 @@ fn with(figure: NodeExtension) -> Vec<Extension> {
 
 fn figure() -> NodeExtension {
     NodeExtension::create("figure")
-        .parse_html(vec![ParseHtml::tag("figure").into()])
+        .parse_html([ParseHtml::tag("figure")])
         .render_html(|_, html| Ok(DomSpec::element("figure", html, Vec::new())))
 }
 
@@ -88,24 +88,18 @@ fn renders_an_attribute_under_a_name_it_makes() -> tarnish::Result<()> {
 
 #[test]
 fn fails_to_parse_where_a_hook_fails() -> tarnish::Result<()> {
-    let attrs = NodeExtension::create("figure").parse_html(vec![
-        ParseHtml::tag("figure")
-            .get_attrs(|figure| {
-                figure.query_selector("[")?;
-                Ok(Some(Map::new()))
-            })
-            .into(),
-    ]);
+    let attrs = NodeExtension::create("figure").parse_html([ParseHtml::tag("figure").get_attrs(
+        |figure| {
+            figure.query_selector("[")?;
+            Ok(Some(Map::new()))
+        },
+    )]);
     let content = NodeExtension::create("figure")
         .content("text*")
-        .parse_html(vec![
-            ParseHtml::tag("figure")
-                .content_element(|figure| {
-                    figure.query_selector("[")?;
-                    Ok(figure.clone())
-                })
-                .into(),
-        ]);
+        .parse_html([ParseHtml::tag("figure").content_element(|figure| {
+            figure.query_selector("[")?;
+            Ok(figure.clone())
+        })]);
     for figure in [attrs, content] {
         let schema = get_schema(&with(figure))?;
         assert!(html::parse(&schema, "<figure>x</figure>").is_err());
