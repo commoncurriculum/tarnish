@@ -61,11 +61,15 @@ pub struct NodeConfig {
     pub inline: bool,
     pub marks: Option<&'static str>,
     pub linebreak_replacement: bool,
+    /// `code`: the node holds code, whose text Markdown keeps as it is.
+    pub code: bool,
     pub render_html: Option<RenderNode>,
 }
 
 #[derive(Default)]
 pub struct MarkConfig {
+    /// `code`: the mark's text is code, which Markdown keeps as it is.
+    pub code: bool,
     pub render_html: Option<RenderMark>,
 }
 
@@ -246,6 +250,11 @@ impl NodeExtension {
         self
     }
 
+    pub fn code(mut self) -> Self {
+        self.kind.code = true;
+        self
+    }
+
     pub fn render_html(
         mut self,
         render: impl for<'a> Fn(&'a Node<'static>, SpecAttrs<'a>) -> Result<DomSpec<'a>, Error>
@@ -259,6 +268,11 @@ impl NodeExtension {
 }
 
 impl MarkExtension {
+    pub fn code(mut self) -> Self {
+        self.kind.code = true;
+        self
+    }
+
     pub fn render_html(
         mut self,
         render: impl for<'a> Fn(&'a Mark<'static>, SpecAttrs<'a>) -> DomSpec<'a> + Send + Sync + 'static,

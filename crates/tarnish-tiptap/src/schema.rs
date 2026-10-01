@@ -62,6 +62,7 @@ pub fn get_schema(extensions: &[Extension]) -> Result<TiptapSchema> {
                         inline: node.inline,
                         marks: node.marks.map(str::to_owned),
                         linebreak_replacement: node.linebreak_replacement,
+                        code: node.code,
                         attrs,
                         ..NodeSpec::default()
                     },
@@ -83,6 +84,7 @@ pub fn get_schema(extensions: &[Extension]) -> Result<TiptapSchema> {
                     extension.name.to_owned(),
                     MarkSpec {
                         attrs,
+                        code: mark.code,
                         ..MarkSpec::default()
                     },
                 ));

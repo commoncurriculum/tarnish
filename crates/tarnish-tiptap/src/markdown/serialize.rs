@@ -109,7 +109,7 @@ impl MarkdownManager {
     fn render_node(&self, node: &Value, parent: &Value, index: usize) -> Result<String, Error> {
         let kind = value::optional(Some(node), "type");
         if kind.is_some_and(|kind| kind == "text") {
-            return encode_text_for_markdown(node);
+            return self.encode_text_for_markdown(node, parent);
         }
         let Some(render) = kind
             .and_then(Value::as_str)
@@ -192,7 +192,7 @@ impl MarkdownManager {
                 continue;
             }
 
-            let mut text = encode_text_for_markdown(node)?;
+            let mut text = self.encode_text_for_markdown(node, parent)?;
             let current_marks = marks_by_type(value::array_method(
                 value::or_empty_array(value::optional(Some(node), "marks")),
                 "(node.marks || []).map",
@@ -443,21 +443,51 @@ fn is_empty_output(markdown: &str) -> bool {
     }
 }
 
-/// `encodeTextForMarkdown(node.text || "", node, parentNode)`. No extension here is `code`, so
-/// nothing is inside code, though the JS still reads the type of every mark to find out.
-fn encode_text_for_markdown(node: &Value) -> Result<String, Error> {
-    let marks = value::array_method(
-        value::or_empty_array(value::optional(Some(node), "marks")),
-        "(node.marks || []).some",
-    )?;
-    for mark in marks.iter().filter(|mark| !mark.is_string()) {
-        value::get(Some(mark), "type")?;
+impl MarkdownManager {
+    /// `encodeTextForMarkdown(node.text || "", node, parentNode)`: the text escaped for
+    /// Markdown, or as it is inside code.
+    fn encode_text_for_markdown(&self, node: &Value, parent: &Value) -> Result<String, Error> {
+        let text = value::optional(Some(node), "text").filter(|text| js::truthy(Some(text)));
+        if self.is_inside_code(node, parent)? {
+            // The JS keeps text that isn't a string as it is, which joining it into the
+            // Markdown makes the string it is here.
+            return text.map_or(Ok(String::new()), js::to_string);
+        }
+        match text {
+            Some(Value::String(text)) => Ok(escape_markdown(text)),
+            Some(_) => Err(value::not_a_function("text.replace")),
+            None => Ok(String::new()),
+        }
     }
-    let text = match value::optional(Some(node), "text") {
-        Some(Value::String(text)) => text.as_str(),
-        text if js::truthy(text) => return Err(value::not_a_function("text.replace")),
-        _ => "",
-    };
+
+    /// `isInsideCode`: whether the parent or one of the text's marks is code.
+    fn is_inside_code(&self, node: &Value, parent: &Value) -> Result<bool, Error> {
+        let is_code = |kind: Option<&Value>| {
+            kind.and_then(Value::as_str)
+                .is_some_and(|kind| self.code_types.contains(kind))
+        };
+        if is_code(value::optional(Some(parent), "type")) {
+            return Ok(true);
+        }
+        let marks = value::array_method(
+            value::or_empty_array(value::optional(Some(node), "marks")),
+            "(node.marks || []).some",
+        )?;
+        for mark in marks {
+            let kind = match mark {
+                Value::String(_) => Some(mark),
+                _ => value::get(Some(mark), "type")?,
+            };
+            if is_code(kind) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+}
+
+/// `escapeMarkdownSyntax(encodeHtmlEntities(text))`.
+fn escape_markdown(text: &str) -> String {
     let mut encoded = String::with_capacity(text.len());
     for character in text.chars() {
         match character {
@@ -471,7 +501,7 @@ fn encode_text_for_markdown(node: &Value) -> Result<String, Error> {
             other => encoded.push(other),
         }
     }
-    Ok(encoded)
+    encoded
 }
 
 /// Removes and returns `text`'s trailing whitespace, as `text.match(/(\s+)$/)` finds it.

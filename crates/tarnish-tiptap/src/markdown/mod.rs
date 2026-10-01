@@ -12,9 +12,9 @@ pub use types::*;
 
 use std::sync::Arc;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::{Extension, sort_extensions};
+use crate::{Extension, Kind, sort_extensions};
 use tarnish_js::units::Units;
 use tarnish_markdown::marked::{Lexer, Marked, Token, TokenizerExtension, Tokens};
 
@@ -34,6 +34,8 @@ pub struct MarkdownManager {
     node_type_registry: FxHashMap<&'static str, Vec<Spec>>,
     /// Registration order, which ranks marks: a lower rank opens outside a higher one.
     extension_ranks: FxHashMap<&'static str, usize>,
+    /// The node and mark types that are code.
+    code_types: FxHashSet<&'static str>,
 }
 
 impl MarkdownManager {
@@ -45,6 +47,7 @@ impl MarkdownManager {
             registry: FxHashMap::default(),
             node_type_registry: FxHashMap::default(),
             extension_ranks: FxHashMap::default(),
+            code_types: FxHashSet::default(),
         };
         for extension in sort_extensions(extensions) {
             manager.register_extension(extension);
@@ -53,6 +56,14 @@ impl MarkdownManager {
     }
 
     fn register_extension(&mut self, extension: &Extension) {
+        let code = match &extension.kind {
+            Kind::Node(node) => node.code,
+            Kind::Mark(mark) => mark.code,
+            Kind::Extension => false,
+        };
+        if code {
+            self.code_types.insert(extension.name);
+        }
         let rank = self.extension_ranks.len();
         self.extension_ranks.entry(extension.name).or_insert(rank);
         let markdown = &extension.markdown;
