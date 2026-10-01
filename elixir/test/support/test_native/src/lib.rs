@@ -69,8 +69,8 @@ impl Conversions for Html {
         Err(Error::Other(NO_MARKDOWN.into()))
     }
 
-    fn serialize_markdown(&self, _: &Value, _: Option<&Value>) -> Result<String, Error> {
-        Err(Error::Other(NO_MARKDOWN.into()))
+    fn serialize_markdown(&self, document: &Value, _: Option<&Value>) -> Result<String, Error> {
+        Ok(json::stringify(document))
     }
 
     fn parse_html(&self, html: &str, options: Option<&Value>) -> Result<Node<'static>, Error> {
@@ -78,9 +78,9 @@ impl Conversions for Html {
         parse_html(&self.parser, html, ParseOptions::default())
     }
 
-    fn serialize_html(&self, json: Document, options: Option<&Value>) -> Result<String, Error> {
+    fn serialize_html(&self, document: Document, options: Option<&Value>) -> Result<String, Error> {
         refuse_options(options)?;
-        to_html(&self.serializer, json.read(&self.schema)?.content())
+        to_html(&self.serializer, document.read()?.content())
     }
 }
 

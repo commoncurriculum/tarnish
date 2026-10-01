@@ -9,7 +9,6 @@ use rustler::types::map::MapIterator;
 use rustler::{Binary, Encoder, Env, NewBinary, Term, TermType};
 use tarnish::chunk::{Kind, ValueRef};
 use tarnish::js::stack;
-use tarnish::js::{self, WrittenNumber};
 use tarnish::json::{Key, Map, Number, Value};
 use tarnish::{Field, Fields};
 
@@ -22,7 +21,6 @@ pub struct Reader {
     left: usize,
     /// Whether the weight it may read is bounded, as a light call's is.
     bounded: bool,
-    irregular: bool,
 }
 
 /// Why a reader gave no value for a term.
@@ -43,15 +41,7 @@ impl Reader {
         Reader {
             left: weight,
             bounded: weight != usize::MAX,
-            irregular: false,
         }
-    }
-
-    /// Whether a term read so far isn't what Jason decodes from the JSON it writes for it: an
-    /// atom but `nil`, `true` and `false`, a key that isn't a binary, a struct, or a number
-    /// JavaScript writes as another. JSON that Jason decoded has none.
-    pub fn irregular(&self) -> bool {
-        self.irregular
     }
 
     pub fn read(&mut self, term: Term) -> Result<Value, Unread> {
@@ -71,30 +61,16 @@ impl Reader {
             TermType::Atom if atom::false_() == term => Value::Bool(false),
             // The VM gives out an atom's name in Latin-1, which not every name fits.
             TermType::Atom => match term.atom_to_string() {
-                Ok(name) => {
-                    self.irregular = true;
-                    Value::String(name)
-                }
+                Ok(name) => Value::String(name),
                 Err(_) => return self.external(term, slot),
             },
             TermType::Integer => match term.decode::<i64>() {
-                Ok(integer) => {
-                    let number = Number::from(integer);
-                    let written = js::written_number(&number);
-                    if !matches!(written, WrittenNumber::Integer(same) if same == integer.into()) {
-                        self.irregular = true;
-                    }
-                    Value::Number(number)
-                }
+                Ok(integer) => Value::Number(integer.into()),
                 Err(_) => return self.external(term, slot),
             },
             TermType::Float => {
                 let double = term.decode::<f64>().map_err(|_| NotJson)?;
-                let number = Number::from_f64(double).ok_or(NotJson)?;
-                if !matches!(js::written_number(&number), WrittenNumber::Float(_)) {
-                    self.irregular = true;
-                }
-                Value::Number(number)
+                Value::Number(Number::from_f64(double).ok_or(NotJson)?)
             }
             TermType::List => return stack::grow(|| self.list(term, slot)),
             TermType::Map => return stack::grow(|| self.object(term, slot)),
@@ -120,7 +96,6 @@ impl Reader {
         if self.bounded {
             return Err(Unread::Heavy);
         }
-        self.irregular = true;
         let bytes = term.to_binary();
         self.weigh(bytes.len())?;
         *slot = etf::read(&bytes)?;
@@ -154,7 +129,6 @@ impl Reader {
                 TermType::Atom if atom::__struct__() != key => match key.atom_to_string() {
                     Ok(name) => {
                         unique = false;
-                        self.irregular = true;
                         Key::from(name)
                     }
                     Err(_) => return self.external(map, slot),
@@ -189,11 +163,6 @@ fn key(bytes: &[u8]) -> Result<Key, NotJson> {
 /// A binary's bytes as UTF-8, which is all Jason encodes.
 fn text(bytes: &[u8]) -> Result<&str, NotJson> {
     std::str::from_utf8(bytes).map_err(|_| NotJson)
-}
-
-/// The term Jason decodes from the JSON `JSON.stringify` writes for the value.
-pub fn write<'a>(env: Env<'a>, value: &Value) -> Term<'a> {
-    Writer::new(env).write(value)
 }
 
 /// A map of at most this many keys is a flatmap, which keeps its keys in term order.

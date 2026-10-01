@@ -27,10 +27,13 @@ defmodule Tarnish.Bridge.Pool do
     NimblePool.start_link(
       worker: {__MODULE__, command(opts)},
       pool_size: size,
-      lazy: option(opts, :lazy, false),
+      lazy: lazy?(opts),
       name: name
     )
   end
+
+  @doc false
+  def lazy?(opts), do: option(opts, :lazy, false)
 
   # Sends the requests to the workers, a share to each, and gives their answers in order. A
   # request has options only when they aren't empty, as `Tarnish.Bridge.each` leaves them.

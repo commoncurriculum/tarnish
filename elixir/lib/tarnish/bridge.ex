@@ -19,13 +19,15 @@ defmodule Tarnish.Bridge do
   that `config :tarnish, native:` names.
 
   Put `Tarnish.Bridge` in your supervision tree. It loads the NIF, so that an application whose
-  NIF doesn't load fails to start, and it starts the pool only for `:node`. `start_link/1` takes
-  the pool's options, over the configured ones, and `name:`.
+  NIF doesn't load fails to start, and it starts the pool for `:node`, and for `:nif` when the
+  pool is lazy, which costs nothing until a call picks `:node`. `start_link/1` takes `backend:`
+  and the pool's options, over the configured ones, and `name:`.
 
-  Each conversion gives `{:ok, value}` or `{:error, message}`. On `:node`, a worker that exits
-  or passes the timeout raises. `opts` are the pool's: `timeout:` in milliseconds (30,000 by
-  default), and `pool:`, the name of a pool other than the one in your supervision tree. The NIF
-  takes none.
+  Each conversion gives `{:ok, value}` or `{:error, message}`. Its `opts` take `backend:`, over
+  the configured one, so that a test can hold both backends to the same answers. On `:node`, a
+  worker that exits or passes the timeout raises, and `opts` take the pool's `timeout:` in
+  milliseconds (30,000 by default) and `pool:`, the name of a pool other than the one in your
+  supervision tree.
   """
 
   alias Tarnish.Bridge.Pool
@@ -46,10 +48,7 @@ defmodule Tarnish.Bridge do
   def start_link(opts) do
     Code.ensure_loaded!(@native)
 
-    case backend() do
-      :node -> Pool.start_link(opts)
-      :nif -> :ignore
-    end
+    if backend(opts) == :node or Pool.lazy?(opts), do: Pool.start_link(opts), else: :ignore
   end
 
   @doc "Markdown to a document's JSON: `{:ok, doc_json}` or `{:error, message}`."
@@ -85,22 +84,22 @@ defmodule Tarnish.Bridge do
   def each(requests, opts \\ []) do
     requests = Enum.map(requests, &without_empty_options/1)
 
-    case backend() do
+    case backend(opts) do
       :node -> Pool.run(requests, opts)
       :nif -> run_in_nif(requests)
     end
   end
 
-  @doc "The backend `config :tarnish, Tarnish.Bridge, backend:` names: `:node`, the default, or `:nif`."
-  @spec backend() :: :node | :nif
-  def backend do
-    case Keyword.get(Application.get_env(:tarnish, __MODULE__, []), :backend, :node) do
+  defp backend(opts) do
+    configured = Keyword.get(Application.get_env(:tarnish, __MODULE__, []), :backend, :node)
+
+    case Keyword.get(opts, :backend, configured) do
       backend when backend in [:node, :nif] ->
         backend
 
       other ->
         raise ArgumentError,
-              "config :tarnish, Tarnish.Bridge, backend: must be :node or :nif, not #{inspect(other)}"
+              "Tarnish.Bridge's backend must be :node or :nif, not #{inspect(other)}"
     end
   end
 
