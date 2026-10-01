@@ -83,6 +83,12 @@ fn parses_markdown_nested_as_deeply_as_memory_allows() {
             ("strong", quoted(delimited("**a ", " a**"))),
             ("em", quoted(delimited("*a ", " a*"))),
             ("del", quoted(delimited("~~a ", " a~~"))),
+            // A heading's blank lines become a token of their own, the heading copied, its
+            // tokens with it.
+            (
+                "a heading's blank lines",
+                "# ".to_owned() + &delimited("*a ", " a*") + "\n\ny",
+            ),
         ];
         for (what, input) in nested {
             converts(what, markdown.parse(&input));
