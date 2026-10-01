@@ -27,9 +27,10 @@ defmodule TarnishTest do
     %{schemas: schemas(@fixtures), model_schemas: schemas(@model)}
   end
 
-  fixtures = @fixtures |> File.read!() |> Jason.decode!()
+  # A section with no records would make no tests, so each must have some.
+  %{"tests" => [_ | _] = tests} = @fixtures |> File.read!() |> Jason.decode!()
 
-  for {fixture, index} <- Enum.with_index(fixtures["tests"]) do
+  for {fixture, index} <- Enum.with_index(tests) do
     @fixture fixture
     test "transform #{index} gives the document ProseMirror gives", %{schemas: schemas} do
       %{"schema" => schema, "start" => start, "steps" => steps, "result" => result} = @fixture
@@ -49,10 +50,12 @@ defmodule TarnishTest do
     end
   end
 
-  model = @model |> File.read!() |> Jason.decode!()
+  %{"fromJSON" => [_ | _] = from_json, "transforms" => [_ | _] = transforms} =
+    @model |> File.read!() |> Jason.decode!()
+
   kinds = %{"RangeError" => :range_error, "TypeError" => :type_error, "Error" => :js_error}
 
-  for {fixture, index} <- Enum.with_index(model["fromJSON"]) do
+  for {fixture, index} <- Enum.with_index(from_json) do
     @fixture fixture
     @kinds kinds
     test "node #{index} from JSON is the one ProseMirror reads", %{model_schemas: schemas} do
@@ -75,7 +78,7 @@ defmodule TarnishTest do
     end
   end
 
-  for {fixture, index} <- Enum.with_index(model["transforms"]) do
+  for {fixture, index} <- Enum.with_index(transforms) do
     @fixture fixture
     test "a step splitting a surrogate pair leaves U+FFFD for each half, #{index}",
          %{model_schemas: schemas} do

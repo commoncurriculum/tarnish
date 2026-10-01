@@ -29,7 +29,12 @@ defmodule Tarnish.OpsTest do
     %{schemas: schemas}
   end
 
-  fixtures = @fixtures |> File.read!() |> Jason.decode!()
+  # A section with no records would make no tests, so each must have some.
+  %{
+    "transforms" => [_ | _] = transforms,
+    "textBetween" => [_ | _] = text_between,
+    "textContent" => [_ | _] = text_content
+  } = @fixtures |> File.read!() |> Jason.decode!()
 
   defp doc(schemas, %{"schema" => schema, "doc" => json}) do
     {:ok, doc} = Tarnish.Node.from_json(Enum.at(schemas, schema), json)
@@ -46,7 +51,7 @@ defmodule Tarnish.OpsTest do
   # surrogate.
   defp expected(%{"resultJSON" => json}), do: {:ok, Tarnish.JSON.decode!(json)}
 
-  for {fixture, index} <- Enum.with_index(fixtures["transforms"]) do
+  for {fixture, index} <- Enum.with_index(transforms) do
     @fixture fixture
     test "op list #{index} gives what ProseMirror gives", %{schemas: schemas} do
       doc = doc(schemas, @fixture)
@@ -60,7 +65,7 @@ defmodule Tarnish.OpsTest do
     end
   end
 
-  for {fixture, index} <- Enum.with_index(fixtures["textBetween"]) do
+  for {fixture, index} <- Enum.with_index(text_between) do
     @fixture fixture
     test "textBetween #{index} is ProseMirror's", %{schemas: schemas} do
       %{"from" => from, "to" => to} = @fixture
@@ -79,7 +84,7 @@ defmodule Tarnish.OpsTest do
     end
   end
 
-  for {fixture, index} <- Enum.with_index(fixtures["textContent"]) do
+  for {fixture, index} <- Enum.with_index(text_content) do
     @fixture fixture
     test "textContent #{index} is ProseMirror's", %{schemas: schemas} do
       assert Tarnish.Node.text_content(doc(schemas, @fixture)) === @fixture["result"]
