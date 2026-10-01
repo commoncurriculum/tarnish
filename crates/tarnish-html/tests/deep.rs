@@ -150,8 +150,9 @@ fn looks_for_a_spec_through_attributes_nested_as_deeply_as_memory_allows() {
         let attrs = holder.attrs_view();
         let spec = DomSpec::Attr(attrs.get("spec").expect("its spec"));
         let refused = render_spec_of(&HtmlDom::new(), &spec, attrs).err();
-        let message = refused.as_ref().map(Error::message);
-        assert!(message.is_some_and(|message| message.contains("cross site scripting")));
+        let attack = "Using an array from an attribute object as a DOM spec. This may be an \
+                      attempted cross site scripting attack.";
+        assert!(refused == Some(Error::Range(attack.into())));
     });
 }
 

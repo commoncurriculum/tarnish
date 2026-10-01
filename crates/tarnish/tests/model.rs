@@ -3,7 +3,7 @@
 
 use tarnish::json::{self, Value, json};
 use tarnish::{Fragment, Node, Schema, api};
-use tarnish_fixtures::{expect, outcome, read, schemas};
+use tarnish_fixtures::{expect, outcome, read, records, schemas};
 
 fn fixtures() -> (Vec<Schema>, Value) {
     let fixtures = read("model");
@@ -17,41 +17,35 @@ fn schema<'a>(schemas: &'a [Schema], case: &Value) -> &'a Schema {
 #[test]
 fn nodes_from_json_are_prosemirrors() {
     let (schemas, fixtures) = fixtures();
-    for case in fixtures["fromJSON"].as_array().expect("cases") {
+    for case in records(&fixtures, "fromJSON") {
         let node = Node::from_json(schema(&schemas, case), &case["json"]);
-        expect(
-            case,
-            outcome(node.map(|node| json!({ "result": node.to_json() }))),
-        );
+        let node = node.map(|node| json!({ "result": node.to_json() }));
+        expect(case, &["schema", "json"], outcome(node));
     }
 }
 
 #[test]
 fn filled_nodes_are_prosemirrors() {
     let (schemas, fixtures) = fixtures();
-    for case in fixtures["createAndFill"].as_array().expect("cases") {
+    for case in records(&fixtures, "createAndFill") {
         let filled =
             schema(&schemas, case)
                 .top_node_type()
                 .create_and_fill(None, Fragment::empty(), &[]);
         let filled = filled.map(|node| node.map_or(Value::Null, |node| node.to_json()));
-        expect(
-            case,
-            outcome(filled.map(|filled| json!({ "result": filled }))),
-        );
+        let filled = filled.map(|filled| json!({ "result": filled }));
+        expect(case, &["schema"], outcome(filled));
     }
 }
 
 #[test]
 fn steps_that_split_a_surrogate_pair_leave_prosemirrors_text() {
     let (schemas, fixtures) = fixtures();
-    for case in fixtures["transforms"].as_array().expect("cases") {
+    for case in records(&fixtures, "transforms") {
         let doc = Node::from_json(schema(&schemas, case), &case["start"]).expect("a document");
         let changed = api::apply_steps(&doc, &case["steps"]).expect("the steps");
-        assert_eq!(
-            Some(changed.to_json_string().as_str()),
-            case["result"].as_str()
-        );
+        let written = json!({ "result": changed.to_json_string() });
+        expect(case, &["schema", "start", "steps"], written);
         let inverted = api::invert_steps(&doc, &case["steps"]).expect("their inverse");
         let undone = api::apply_steps(&changed, &inverted).expect("the inverse");
         assert!(undone == doc);

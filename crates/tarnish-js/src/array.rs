@@ -600,7 +600,7 @@ mod tests {
             true => Err(Error::Other("x".into())),
             false => Ok(f64::from(a - b)),
         });
-        assert!(thrown.is_err());
+        assert!(thrown == Err(Error::Other("x".into())));
         assert_eq!(items, [5, 4, 3, 2, 1, 0, 9, 8, 7]);
     }
 

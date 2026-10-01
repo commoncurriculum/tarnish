@@ -1,5 +1,4 @@
 {
-  "marked": "17.0.6",
   "lexed": [
     {"input":"","tokens":[]},
     {"input":"   ","tokens":[{"type":"space","raw":"   "}]},

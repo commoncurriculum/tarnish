@@ -47,10 +47,10 @@ static void fail(const char *test, const char *what, const char *expected, const
     fprintf(stderr, "%s: %s\n  expected: %s\n  actual:   %s\n", test, what, expected, actual ? actual : "(NULL)");
 }
 
-/* Checks that a call failed with an error starting with `prefix`, and frees the error. */
-static void expect_error(const char *test, bool failed, char *error, const char *prefix) {
-    if (!failed || !error || strncmp(error, prefix, strlen(prefix)) != 0)
-        fail(test, "the error", prefix, failed ? error : "(no error)");
+/* Checks that a call failed with the error `expected`, and frees the error. */
+static void expect_error(const char *test, bool failed, char *error, const char *expected) {
+    if (!failed || !error || strcmp(error, expected) != 0)
+        fail(test, "the error", expected, failed ? error : "(no error)");
     tarnish_free(error);
 }
 
@@ -137,13 +137,14 @@ static void run_errors(const TarnishSchema_t *schema) {
     TarnishNode_t *loose =
         tarnish_node_from_json(schema, "{\"type\":\"doc\",\"content\":[{\"type\":\"text\",\"text\":\"loose\"}]}", &error);
     bool valid = loose && tarnish_check(loose, &error);
-    expect_error("a document that doesn't fit the schema", !valid, error, "RangeError: Invalid content for node doc");
+    expect_error("a document that doesn't fit the schema", !valid, error,
+                 "RangeError: Invalid content for node doc: <\"loose\">");
     tarnish_node_free(loose);
 
     error = NULL;
     TarnishNode_t *doc = tarnish_node_from_json(schema, "{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\"}]}", &error);
     TarnishNode_t *applied = tarnish_apply_steps(doc, "[{\"stepType\":\"replace\",\"from\":0,\"to\":1}]", &error);
-    expect_error("a step that doesn't apply", applied == NULL, error, "TransformError: ");
+    expect_error("a step that doesn't apply", applied == NULL, error, "TransformError: Inconsistent open depths");
 
     error = NULL;
     TarnishNode_t *unread = tarnish_node_from_json(schema, "{\"type\":", &error);
@@ -151,7 +152,7 @@ static void run_errors(const TarnishSchema_t *schema) {
 
     error = NULL;
     valid = tarnish_map_position(schema, "[]", 0, 1, NULL, &error);
-    expect_error("nowhere to map into", !valid, error, "Error: ");
+    expect_error("nowhere to map into", !valid, error, "Error: The place to map into was NULL");
 
     if (tarnish_apply_steps(doc, "null", NULL) != NULL)
         fail("an error with nowhere to report it", "the result", "(NULL)", "a document");

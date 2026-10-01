@@ -1,5 +1,4 @@
 {
-  "tiptap": "3.30.0",
   "parsesMarkdown": [
     {"markdown":"","doc":{"type":"doc","content":[]}},
     {"markdown":"plain","doc":{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"plain"}]}]}},

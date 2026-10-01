@@ -16,7 +16,7 @@ pub use de::{SyntaxError, from_str};
 pub use deep::{Event, events};
 pub use index::JsonIndex;
 pub use macros::{json, object};
-pub use map::Map;
+pub use map::{Map, array_index};
 pub use write::{
     stringify, stringify_entries, stringify_pretty, write_number, write_object, write_string,
     write_units, write_value,

@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "build:bridge": "node harness/build.mjs",
-    "test:js": "TARNISH_TARGET=js node harness/run.mjs && node harness/record-model.mjs && node harness/record-steps.mjs && node harness/record-ops.mjs && node harness/record-dom.mjs && node harness/record-tiptap.mjs && node harness/record-marked.mjs",
+    "test:js": "TARNISH_TARGET=js node harness/run.mjs && node harness/record-model.mjs && node harness/record-steps.mjs && node harness/record-ops.mjs && node harness/record-dom.mjs && node harness/record-tiptap.mjs && node harness/record-marked.mjs && node harness/record-zod.mjs && node harness/record-versions.mjs",
     "test:rust": "npm run build:bridge && TARNISH_TARGET=rust node harness/run.mjs",
     "test:c": "node harness/test-c.mjs",
     "bench": "node bench/document.mjs && node bench/prosemirror.mjs"
@@ -39,6 +39,7 @@
     "prosemirror-test-builder": "1.1.1",
     "prosemirror-transform": "1.12.0",
     "tiptap-extension-flat-list": "0.1.1",
-    "tsx": "4.19.2"
+    "tsx": "4.19.2",
+    "zod": "4.5.4"
   }
 }

@@ -5,35 +5,100 @@
 mod basic;
 
 use tarnish::dom::{Dom, DomParser, DomSpec, ParseOptions, PreserveWhitespace, render_spec};
-use tarnish::json::{self, Value};
+use tarnish::json::{self, Map, Value};
 use tarnish::{Node, Result, Schema, api};
-use tarnish_fixtures::{outcome, read};
+use tarnish_fixtures::{outcome, read, records, version};
 use tarnish_html::{HtmlDom, HtmlNode, parse_html, parse_html_slice, to_html};
 
-/// Inputs html5ever builds another tree from than the fork's parse5 8 does, and why. The test
-/// prints both trees, and fails when they come to match.
-const DIFFERENT_TREES: &[(&[&str], &str)] = &[
+/// An input html5ever builds another tree from than the fork's parse5 8 does, and what
+/// tarnish-html makes of it: html5ever's tree, which a template and a document's body hold
+/// alike, the document ProseMirror's parser reads from either, and the template's slice, as
+/// JSON.
+struct Different {
+    html: &'static str,
+    tree: &'static str,
+    doc: &'static str,
+    slice: &'static str,
+}
+
+const fn different(
+    html: &'static str,
+    tree: &'static str,
+    doc: &'static str,
+    slice: &'static str,
+) -> Different {
+    Different {
+        html,
+        tree,
+        doc,
+        slice,
+    }
+}
+
+/// The inputs html5ever builds another tree from, and why. The test fails when the fork's tree
+/// comes to match html5ever's.
+const DIFFERENT_TREES: &[(&[Different], &str)] = &[
     (
         &[
-            "<select><option>a<b>x</b></option></select>",
-            "<select><option>a<p>b</p></select>",
+            different(
+                "<select><option>a<b>x</b></option></select>",
+                "<select><option>a<b>x</b></option></select>",
+                r#"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"a"},{"type":"text","marks":[{"type":"strong"}],"text":"x"}]}]}"#,
+                r#"{"content":[{"type":"text","text":"a"},{"type":"text","marks":[{"type":"strong"}],"text":"x"}]}"#,
+            ),
+            different(
+                "<select><option>a<p>b</p></select>",
+                "<select><option>a<p>b</p></option></select>",
+                r#"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"a"}]},{"type":"paragraph","content":[{"type":"text","text":"b"}]}]}"#,
+                r#"{"content":[{"type":"text","text":"a"},{"type":"paragraph","content":[{"type":"text","text":"b"}]}],"openEnd":1}"#,
+            ),
         ],
         "html5ever 0.40 parses <select> as the standard now does, keeping the elements inside \
          it. parse5 8 predates that, and drops their tags.",
     ),
     (
-        &["<p><span>a<isindex>b</span>c</p>"],
+        &[different(
+            "<p><span>a<isindex>b</span>c</p>",
+            "<p><span>a<isindex>bc</isindex></span></p>",
+            r#"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"abc"}]}]}"#,
+            r#"{"content":[{"type":"paragraph","content":[{"type":"text","text":"abc"}]}],"openStart":1,"openEnd":1}"#,
+        )],
         "html5ever still counts <isindex> among the special elements, which an end tag doesn't \
          close past, as the standard did before it dropped <isindex>. parse5 knows no \
          <isindex>, so </span> closes it.",
     ),
     (
         &[
-            "<math><mi><![CDATA[x<y]]></mi></math>",
-            "<math><mi><![CDATA[x]]></mi></math>",
-            "<svg><desc><![CDATA[x]]></desc></svg>",
-            "<svg><foreignObject><![CDATA[x]]></foreignObject></svg>",
-            "<math><annotation-xml encoding=text/html><![CDATA[x]]></annotation-xml></math>",
+            different(
+                "<math><mi><![CDATA[x<y]]></mi></math>",
+                "<math><mi>x&lt;y</mi></math>",
+                r#"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"x<y"}]}]}"#,
+                r#"{"content":[{"type":"text","text":"x<y"}]}"#,
+            ),
+            different(
+                "<math><mi><![CDATA[x]]></mi></math>",
+                "<math><mi>x</mi></math>",
+                X_DOC,
+                X_SLICE,
+            ),
+            different(
+                "<svg><desc><![CDATA[x]]></desc></svg>",
+                "<svg><desc>x</desc></svg>",
+                X_DOC,
+                X_SLICE,
+            ),
+            different(
+                "<svg><foreignObject><![CDATA[x]]></foreignObject></svg>",
+                "<svg><foreignObject>x</foreignObject></svg>",
+                X_DOC,
+                X_SLICE,
+            ),
+            different(
+                "<math><annotation-xml encoding=text/html><![CDATA[x]]></annotation-xml></math>",
+                r#"<math><annotation-xml encoding="text/html">x</annotation-xml></math>"#,
+                X_DOC,
+                X_SLICE,
+            ),
         ],
         "The standard reads a CDATA section as text wherever the current element isn't HTML's, \
          the integration points among them. parse5 reads one as a comment in a MathML text \
@@ -41,6 +106,10 @@ const DIFFERENT_TREES: &[(&[&str], &str)] = &[
          does in HTML.",
     ),
 ];
+
+const X_DOC: &str =
+    r#"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"x"}]}]}"#;
+const X_SLICE: &str = r#"{"content":[{"type":"text","text":"x"}]}"#;
 
 fn fixtures() -> (Schema, Value) {
     let fixtures = read("dom");
@@ -75,6 +144,15 @@ fn expected(recorded: &Value) -> Value {
     }
 }
 
+/// `record` without the fields `inputs` names.
+fn recorded(record: &Value, inputs: &[&str]) -> Value {
+    let mut fields = record.as_object().expect("a record").clone();
+    for input in inputs {
+        fields.remove(input);
+    }
+    Value::Object(fields)
+}
+
 fn report(failures: Vec<String>) {
     assert!(
         failures.is_empty(),
@@ -84,47 +162,60 @@ fn report(failures: Vec<String>) {
     );
 }
 
-struct Check<'r> {
-    html: &'r str,
-    failures: Vec<String>,
+/// What a template and a document's body parse to, as the recorder records it: each one's
+/// tree, the document the parser reads from it, and the template's slice, each outcome as
+/// tarnish gives it. A tree is read before the parser reads it, since the parser moves a list
+/// nested straight in a list into the item before it.
+fn parsed(parser: &DomParser<HtmlNode>, html: &str, record: &Value) -> Value {
+    let template_tree = HtmlDom::new().parse_fragment(html).inner_html();
+    let template_doc = parse_html(parser, html, options(record)).map(|doc| doc.to_json());
+    let slice = parse_html_slice(parser, html, options(record)).map(|slice| slice.to_json());
+    let dom = HtmlDom::parse_document(html);
+    let body = dom.body().expect("a body");
+    let document_tree = body.inner_html();
+    let document_doc = parser.parse(&dom, &body, options(record));
+    json::json!({
+        "template": {
+            "tree": template_tree,
+            "doc": outcome(template_doc),
+            "slice": outcome(slice),
+        },
+        "document": {
+            "tree": document_tree,
+            "doc": outcome(document_doc.map(|doc| doc.to_json())),
+        },
+    })
 }
 
-impl Check<'_> {
-    fn equal(&mut self, what: &str, actual: &Value, recorded: &Value) {
-        let expected = expected(recorded);
-        if *actual != expected {
-            self.failures.push(format!(
-                "{what} of {:?}\n  recorded: {expected}\n  tarnish-html: {actual}",
-                self.html
+/// A parse record as tarnish-html must give it: the record, where the trees match, or what
+/// html5ever's tree gives, where they don't.
+fn expected_parse(record: &Value, failures: &mut Vec<String>) -> Value {
+    let html = record["html"].as_str().expect("HTML");
+    let known = DIFFERENT_TREES
+        .iter()
+        .flat_map(|(inputs, _)| inputs.iter())
+        .find(|different| different.html == html);
+    let Some(different) = known else {
+        let mut parse = recorded(record, &["html", "options"]);
+        for part in parse.as_object_mut().expect("a parse").values_mut() {
+            for outcome in part.as_object_mut().expect("a part").values_mut() {
+                *outcome = expected(outcome);
+            }
+        }
+        return parse;
+    };
+    for part in ["template", "document"] {
+        if record[part]["tree"].as_str() == Some(different.tree) {
+            failures.push(format!(
+                "The {part}'s tree of {html:?} is no longer different"
             ));
         }
     }
-
-    /// Whether the trees match. Where they are known to differ, check that they still do.
-    fn tree(&mut self, what: &str, actual: String, expected: &Value) -> bool {
-        let known = DIFFERENT_TREES
-            .iter()
-            .find(|(inputs, _)| inputs.contains(&self.html));
-        match (known, expected.as_str() == Some(&actual)) {
-            (None, true) => true,
-            (Some(_), false) => {
-                println!(
-                    "{what} of {:?}\n  recorded: {expected}\n  html5ever: {actual:?}",
-                    self.html
-                );
-                false
-            }
-            (None, false) => {
-                self.equal(what, &Value::String(actual), expected);
-                false
-            }
-            (Some(_), true) => {
-                let message = format!("{what} of {:?} is no longer different", self.html);
-                self.failures.push(message);
-                false
-            }
-        }
-    }
+    let read = |text: &str| json::from_str(text).expect("JSON");
+    json::json!({
+        "template": {"tree": different.tree, "doc": read(different.doc), "slice": read(different.slice)},
+        "document": {"tree": different.tree, "doc": read(different.doc)},
+    })
 }
 
 #[test]
@@ -132,34 +223,15 @@ fn parses_match_the_fork() {
     let (schema, fixtures) = fixtures();
     let parser: DomParser<HtmlNode> = basic::parser(&schema);
     let mut failures = Vec::new();
-    for record in fixtures["parses"].as_array().expect("parses") {
+    for record in records(&fixtures, "parses") {
         let html = record["html"].as_str().expect("HTML");
-        let mut check = Check {
-            html,
-            failures: Vec::new(),
-        };
-
-        let (template, document) = (&record["template"], &record["document"]);
-        let dom = HtmlDom::new();
-        let tree = dom.parse_fragment(html).inner_html();
-        if check.tree("The template's tree", tree, &template["tree"]) {
-            let doc = parse_html(&parser, html, options(record));
-            let doc = outcome(doc.map(|doc| doc.to_json()));
-            check.equal("The template's document", &doc, &template["doc"]);
-            let slice = parse_html_slice(&parser, html, options(record));
-            let slice = outcome(slice.map(|slice| slice.to_json()));
-            check.equal("The template's slice", &slice, &template["slice"]);
+        let actual = parsed(&parser, html, record);
+        let expected = expected_parse(record, &mut failures);
+        if actual != expected {
+            failures.push(format!(
+                "{html:?}\n  expected: {expected}\n  tarnish-html: {actual}"
+            ));
         }
-
-        let body = |dom: &HtmlDom| dom.body().expect("a body");
-        let tree = body(&HtmlDom::parse_document(html)).inner_html();
-        if check.tree("The document's tree", tree, &document["tree"]) {
-            let dom = HtmlDom::parse_document(html);
-            let doc = parser.parse(&dom, &body(&dom), options(record));
-            let doc = outcome(doc.map(|doc| doc.to_json()));
-            check.equal("The document's document", &doc, &document["doc"]);
-        }
-        failures.extend(check.failures);
     }
     report(failures);
 }
@@ -169,15 +241,12 @@ fn serializations_match_the_fork() {
     let (schema, fixtures) = fixtures();
     let serializer = basic::serializer();
     let mut failures = Vec::new();
-    for record in fixtures["serializes"].as_array().expect("serializations") {
+    for record in records(&fixtures, "serializes") {
         let doc = Node::from_json(&schema, &record["doc"]);
         let html = doc.and_then(|doc| to_html(&serializer, doc.content()));
-        let html = outcome(html.map(Value::String));
-        let recorded = match record.get("html") {
-            Some(html) => html.clone(),
-            None => json::json!({"error": record["error"].clone()}),
-        };
-        if html != expected(&recorded) {
+        let html = outcome(html.map(|html| json::json!({"html": html})));
+        let recorded = expected(&recorded(record, &["doc"]));
+        if html != recorded {
             failures.push(format!(
                 "{}\n  recorded: {recorded}\n  tarnish-html: {html}",
                 record["doc"]
@@ -190,14 +259,14 @@ fn serializations_match_the_fork() {
 #[test]
 fn inline_styles_match_the_fork() -> Result<()> {
     let (_, fixtures) = fixtures();
-    let properties = fixtures["styleProperties"].as_array().expect("properties");
+    let properties = records(&fixtures, "styleProperties");
     let dom = HtmlDom::new();
     let mut failures = Vec::new();
-    for record in fixtures["styles"].as_array().expect("styles") {
+    for record in records(&fixtures, "styles") {
         let css = Value::String(record["css"].as_str().expect("CSS").to_owned());
         let element = dom.create_element(None, "p")?;
         dom.set_attribute(&element, None, "style", &css)?;
-        let mut values = json::Map::new();
+        let mut values = Map::new();
         for property in properties {
             let property = property.as_str().expect("a property");
             let value = dom.style_value(&element, property)?;
@@ -223,8 +292,7 @@ fn inline_styles_match_the_fork() -> Result<()> {
 
 #[test]
 fn the_forks_css_engine_is_this_one() {
-    let (_, fixtures) = fixtures();
-    assert_eq!(fixtures["engine"].as_str(), Some(tarnish_css::ENGINE));
+    assert_eq!(version("CSS engine"), tarnish_css::ENGINE);
 }
 
 /// Each spec rendered as JSON reaches `renderSpec`: an array as a spec's own value, and any spec
@@ -239,7 +307,7 @@ fn rendered_specs_match_the_fork() {
     ]});
     let holders = api::schema(&holders).expect("the holders' schema");
     let mut failures = Vec::new();
-    for record in fixtures["renders"].as_array().expect("renders") {
+    for record in records(&fixtures, "renders") {
         let json = &record["spec"];
         let holder = json::json!({"type": "holder", "attrs": {"spec": json}});
         let holder = Node::from_json(&holders, &holder).expect("a holder");
@@ -248,8 +316,7 @@ fn rendered_specs_match_the_fork() {
         if json.is_array() {
             specs.push(("As a spec", DomSpec::from(json.clone())));
         }
-        let mut recorded = record.clone();
-        recorded.as_object_mut().expect("a record").remove("spec");
+        let recorded = expected(&recorded(record, &["spec"]));
         for (how, spec) in specs {
             let dom = HtmlDom::new();
             let rendered = render_spec(&dom, &spec, None).map(|rendered| {
@@ -257,7 +324,7 @@ fn rendered_specs_match_the_fork() {
                 json::json!({"html": rendered.dom.outer_html(), "hole": hole})
             });
             let actual = outcome(rendered);
-            if actual != expected(&recorded) {
+            if actual != recorded {
                 failures.push(format!(
                     "{how}: {json}\n  recorded: {recorded}\n  tarnish-html: {actual}"
                 ));
@@ -298,14 +365,15 @@ fn node_of(dom: &HtmlDom, record: &Value) -> Result<HtmlNode> {
 fn attribute_values_of_nodes_match_the_fork() -> Result<()> {
     let (_, fixtures) = fixtures();
     let mut failures = Vec::new();
-    for record in fixtures["strings"].as_array().expect("strings") {
+    for record in records(&fixtures, "strings") {
         let dom = match record.get("document").and_then(Value::as_str) {
             Some(html) => HtmlDom::parse_document(html),
             None => HtmlDom::new(),
         };
         let string = dom.attribute_value(&node_of(&dom, record)?)?;
-        if record["string"].as_str() != Some(&string) {
-            failures.push(format!("  recorded: {record}\n  tarnish-html: {string:?}"));
+        let actual = json::json!({"string": string});
+        if actual != recorded(record, &["document", "node", "element", "href"]) {
+            failures.push(format!("  recorded: {record}\n  tarnish-html: {actual}"));
         }
     }
     report(failures);
