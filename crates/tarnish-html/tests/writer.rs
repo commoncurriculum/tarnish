@@ -234,6 +234,7 @@ impl Random {
         Value::Array(content)
     }
 
+    // bounded: past depth 2 a block holds no blocks
     fn block(&mut self, depth: u32) -> Value {
         match self.below(if depth > 2 { 2 } else { 3 }) {
             0 => json!({"type": "para", "attrs": self.attrs(20), "content": self.inline()}),

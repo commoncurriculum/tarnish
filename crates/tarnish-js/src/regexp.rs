@@ -9,14 +9,52 @@ use std::sync::Arc;
 
 use regress::{Flags, Regex};
 
+use crate::stack;
 use crate::units::Units;
 use crate::utf16;
+
+/// The stack regress takes besides, for each level its groups nest, and for each alternative,
+/// three times what it was seen to take (a level 5.3 KiB unoptimized and 1.3 KiB optimized, an
+/// alternative 0.9 KiB and 0.15 KiB): it compiles a pattern, and matches a lookaround, in calls
+/// nested as deep, and an alternative chains each one after it.
+const BASE: usize = 64 << 10;
+const PER_LEVEL: usize = if cfg!(debug_assertions) {
+    16 << 10
+} else {
+    4 << 10
+};
+const PER_ALTERNATIVE: usize = if cfg!(debug_assertions) {
+    3 << 10
+} else {
+    1 << 9
+};
+/// regress refuses a pattern whose groups nest deeper.
+const MOST_LEVELS: usize = 257;
+/// The most lookarounds a pattern may hold for matching to need no more room than any call.
+const FEW_LOOKAROUNDS: usize = 4;
+
+/// The stack compiling `source` may take: a group or class opens with `(` or `[`.
+fn compile_room(source: &str) -> usize {
+    let count = |bytes: &[u8]| source.bytes().filter(|byte| bytes.contains(byte)).count();
+    let levels = count(b"([").min(MOST_LEVELS);
+    BASE + levels * PER_LEVEL + count(b"|") * PER_ALTERNATIVE
+}
+
+/// The stack matching `source` may take, when its lookarounds may nest deeper than a few.
+fn lookaround_room(source: &str) -> Option<usize> {
+    let lookarounds: usize = ["(?=", "(?!", "(?<=", "(?<!"]
+        .iter()
+        .map(|opener| source.matches(opener).count())
+        .sum();
+    (lookarounds > FEW_LOOKAROUNDS).then(|| BASE + lookarounds.min(MOST_LEVELS) * PER_LEVEL)
+}
 
 pub struct RegExp {
     regex: Arc<Regex>,
     unicode: bool,
     global: bool,
     anchored: bool,
+    lookaround_room: Option<usize>,
 }
 
 pub struct Match<'t> {
@@ -87,10 +125,11 @@ impl RegExp {
             if let Some(regex) = compiled.get(&key) {
                 return regex.clone();
             }
-            let regex = Arc::new(
+            let regex = stack::with_room(compile_room(source), || {
                 Regex::with_flags(source, Flags::from(key.1.as_str()))
-                    .unwrap_or_else(|error| panic!("/{source}/{flags}: {error}")),
-            );
+            });
+            let regex =
+                Arc::new(regex.unwrap_or_else(|error| panic!("/{source}/{flags}: {error}")));
             if compiled.len() == CACHED_REGEXES {
                 compiled.clear();
             }
@@ -102,6 +141,7 @@ impl RegExp {
             regex,
             unicode: flags.contains('u'),
             global: flags.contains('g'),
+            lookaround_room: lookaround_room(source),
         }
     }
 
@@ -131,10 +171,15 @@ impl RegExp {
     #[inline(never)]
     fn run<'t>(&self, text: &'t [u16], last_index: usize) -> Option<Match<'t>> {
         let mut groups = SPARE_GROUPS.with_borrow_mut(Vec::pop).unwrap_or_default();
-        if self
-            .regex
-            .find_utf16_into(text, last_index, self.unicode, &mut groups)
-        {
+        let mut find = || {
+            self.regex
+                .find_utf16_into(text, last_index, self.unicode, &mut groups)
+        };
+        let found = match self.lookaround_room {
+            Some(room) => stack::with_room(room, find),
+            None => find(),
+        };
+        if found {
             Some(Match { text, groups })
         } else {
             SPARE_GROUPS.with_borrow_mut(|spare| spare.push(groups));

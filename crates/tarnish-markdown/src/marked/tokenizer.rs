@@ -181,7 +181,7 @@ impl Lexer<'_> {
                 // Include the continuation in the nested blockquote.
                 let old = tokens.pop().expect("the last token");
                 let new_text = join_rest(&old.raw, &lines);
-                let new = self.blockquote(&new_text)?.expect("a blockquote");
+                let new = stack::grow(|| self.blockquote(&new_text))?.expect("a blockquote");
                 raw = Units::from(utf16::concat(&[
                     &raw[..raw.len().saturating_sub(old.raw.len())],
                     &new.raw,
@@ -196,7 +196,7 @@ impl Lexer<'_> {
                 // Include the continuation in the nested list.
                 let old = tokens.pop().expect("the last token");
                 let new_text = join_rest(&old.raw, &lines);
-                let new = self.list(&new_text)?.expect("a list");
+                let new = stack::grow(|| self.list(&new_text))?.expect("a list");
                 raw = Units::from(utf16::concat(&[
                     &raw[..raw.len().saturating_sub(old.raw.len())],
                     &new.raw,

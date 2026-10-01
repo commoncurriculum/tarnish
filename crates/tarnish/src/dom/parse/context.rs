@@ -341,25 +341,26 @@ impl<'p, D: Dom> ParseContext<'p, D> {
 
 /// Whether a mark of this type could apply to a node of this type anywhere in the schema.
 fn mark_may_apply(schema: &Schema, mark_type: &MarkType, node_type: &NodeType) -> bool {
-    fn scan<'s>(
-        matched: &ContentMatch<'s>,
-        node_type: &NodeType,
-        seen: &mut Vec<ContentMatch<'s>>,
-    ) -> bool {
-        seen.push(*matched);
-        for index in 0..matched.edge_count() {
-            let (edge_type, next) = matched.edge(index).expect("an edge in range");
-            if edge_type == *node_type {
-                return true;
-            }
-            if !seen.contains(&next) && scan(&next, node_type, seen) {
-                return true;
+    /// Whether an edge of this type leaves a state reachable from `start`: ProseMirror's `scan`,
+    /// walking the automaton, which can be any length, without recursing.
+    fn reaches(start: ContentMatch, node_type: &NodeType) -> bool {
+        let mut seen = vec![start];
+        let mut unvisited = vec![start];
+        while let Some(matched) = unvisited.pop() {
+            for index in 0..matched.edge_count() {
+                let (edge_type, next) = matched.edge(index).expect("an edge in range");
+                if edge_type == *node_type {
+                    return true;
+                }
+                if !seen.contains(&next) {
+                    seen.push(next);
+                    unvisited.push(next);
+                }
             }
         }
         false
     }
     schema.node_types().any(|parent| {
-        parent.allows_mark_type(mark_type)
-            && scan(&parent.content_match(), node_type, &mut Vec::new())
+        parent.allows_mark_type(mark_type) && reaches(parent.content_match(), node_type)
     })
 }

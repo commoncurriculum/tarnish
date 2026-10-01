@@ -128,6 +128,8 @@ fn field_value(field: Field) -> Value {
     }
 }
 
+// bounded: a mark's fields hold no content or marks, so writing one goes a single level down;
+// content grows the stack
 pub(crate) fn write_json<'c>(out: &mut String, fields: impl Fields<'c>) {
     out.push('{');
     let mut first = true;

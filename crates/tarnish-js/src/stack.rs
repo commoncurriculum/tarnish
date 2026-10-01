@@ -13,6 +13,14 @@ pub fn grow<R>(f: impl FnOnce() -> R) -> R {
     stacker::maybe_grow(RED_ZONE, SEGMENT, f)
 }
 
+/// Runs `f` where at least `room` bytes of stack are left: for a recursion that can't go
+/// through [`grow`] at each level, as another library's can't, given room for as deep as its
+/// input makes it go.
+#[inline]
+pub fn with_room<R>(room: usize, f: impl FnOnce() -> R) -> R {
+    stacker::maybe_grow(room, room.max(SEGMENT), f)
+}
+
 /// Runs `f` on a thread whose stack is smaller than a BEAM dirty CPU scheduler's 320 KiB, and
 /// gives what it returns, or carries on its panic: a test runs a deep recursion there to show
 /// that each of its levels goes through [`grow`].

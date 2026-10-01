@@ -261,6 +261,7 @@ impl Schema {
     }
 
     /// The value parsed from `value`: `value` itself wherever it passes as it is.
+    // bounded: as deep as the schema, which code builds, nests
     fn run<'v>(
         &'v self,
         value: Option<&'v Value>,
@@ -626,6 +627,7 @@ impl<'a> Path<'a> {
     }
 }
 
+// bounded: as long as a path into the schema, which code builds
 fn path_values(path: &Path) -> Vec<Value> {
     let Path::Step(parent, segment) = *path else {
         return Vec::new();

@@ -1,5 +1,8 @@
 //! The fixtures `npm run test:js` records from the JavaScript tarnish ports, as
-//! `harness/fixture.mjs` writes them, for tarnish's tests to expect.
+//! `harness/fixture.mjs` writes them, for tarnish's tests to expect. And [`recursion`], which
+//! holds a crate's source to growing the stack wherever it recurses.
+
+pub mod recursion;
 
 use tarnish::json::{self, Value, json};
 use tarnish::{Error, Schema, api};

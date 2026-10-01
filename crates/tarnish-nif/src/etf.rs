@@ -101,6 +101,7 @@ impl<'a> Reader<'a> {
 
     /// Reads a value into `slot`, which holds `null`: one read where it is kept isn't copied
     /// there from the stack.
+    // guarded: each level goes through `below`, which grows the stack every `LEVELS` levels
     fn value_into(&mut self, depth: usize, slot: &mut Value) -> Result<(), NotJson> {
         *slot = match self.byte()? {
             BINARY => {
@@ -436,6 +437,8 @@ pub fn write_fields<'c>(fields: impl Fields<'c>) -> Vec<u8> {
     out
 }
 
+// bounded: a mark's fields hold no content or marks, so writing one goes a single level down;
+// content grows the stack
 fn write_node<'c>(out: &mut Vec<u8>, fields: impl Fields<'c>) {
     out.push(MAP);
     out.extend_from_slice(&(fields.field_count() as u32).to_be_bytes());
@@ -663,6 +666,40 @@ mod tests {
             .map(|key| key.as_str())
             .collect();
         assert_eq!(keys, ["2", "10", "b", "a", "01"]);
+    }
+
+    /// What a batch reads and writes, nested far deeper than a pool thread's stack could recurse
+    /// through: a value, and a document whose nodes nest that deep and whose attribute does. The
+    /// attribute sits near the top, where an unguarded level would overflow.
+    #[test]
+    fn reads_and_writes_as_deeply_as_memory_allows() {
+        tarnish::js::stack::on_dirty_scheduler_stack(|| {
+            const DEPTH: usize = 100_000;
+            let deep = (0..DEPTH).fold(Value::Null, |inner, level| match level % 2 {
+                0 => tarnish::json::json!({"a": inner}),
+                _ => Value::Array(vec![inner]),
+            });
+            assert!(read(&write(&deep)).expect("a term") == deep);
+
+            let spec = tarnish::json::json!({"nodes": [
+                ["doc", {"content": "block+"}],
+                ["paragraph", {"group": "block"}],
+                ["quote", {"content": "block+", "group": "block", "attrs": {"data": {"default": null}}}],
+                ["text", {}],
+            ]});
+            let schema = tarnish::api::schema(&spec).expect("the schema");
+            let paragraph = tarnish::json::json!({"type": "paragraph"});
+            let holding = tarnish::json::json!({"type": "quote", "attrs": {"data": deep},
+                "content": [paragraph.clone()]});
+            let quotes = (0..DEPTH).fold(
+                paragraph,
+                |inner, _| tarnish::json::json!({"type": "quote", "content": [inner]}),
+            );
+            let json = tarnish::json::json!({"type": "doc", "content": [holding, quotes]});
+            let doc = tarnish::Node::from_json(&schema, &json).expect("the document");
+            let written = write_fields(doc.view());
+            assert!(read(&written).expect("a term") == doc.to_json());
+        });
     }
 
     #[test]

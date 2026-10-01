@@ -15,3 +15,7 @@ stylo = "=0.21.0"
 stylo_static_prefs = "=0.21.0"
 stylo_traits = "=0.21.0"
 url = "2"
+
+# WebAssembly's call stack is the engine's, which no new segment can extend.
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+tarnish-js = { path = "../tarnish-js", version = "0.1.0" }

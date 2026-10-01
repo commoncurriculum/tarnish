@@ -7,6 +7,7 @@ use napi::bindgen_prelude::{FnArgs, FromNapiValue, Object, Unknown};
 use napi::{Env, JsValue, Result, ValueType};
 use napi_derive::napi;
 use tarnish::dom::{DomSerializer, DomSpec, MarkToDom, NodeToDom, Rendered};
+use tarnish::js::stack;
 use tarnish::{Map, Value};
 
 use super::{JsDom, JsNode, attribute_value, dom_node, is_node};
@@ -30,7 +31,7 @@ fn spec(value: Unknown) -> Result<DomSpec<'static, JsNode>> {
                     {
                         DomSpec::Value(Value::Object(attrs))
                     } else {
-                        spec(item)?
+                        stack::grow(|| spec(item))?
                     },
                 );
             }

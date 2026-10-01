@@ -17,14 +17,71 @@ use selectors::matching::{
 use selectors::parser::{self, ParseRelative, SelectorList, SelectorParseErrorKind};
 use selectors::{Element, OpaqueElement};
 
+use tarnish::js::stack;
+
 use crate::tree::{Data, NodeId, Tree};
 
-pub(crate) type Selectors = SelectorList<Impl>;
+/// The stack `selectors` takes for a list, for each of its levels, and for each level of the
+/// tree that `:has()` looks down through, three times what the deepest found takes: a nested
+/// list takes 2.9 KiB optimized and 14 KiB unoptimized, a level of the tree a quarter of a KiB.
+const BASE: usize = if cfg!(debug_assertions) {
+    128 << 10
+} else {
+    64 << 10
+};
+const PER_LEVEL: usize = if cfg!(debug_assertions) {
+    48 << 10
+} else {
+    8 << 10
+};
+const PER_TREE_LEVEL: usize = 1 << 10;
+
+/// A selector list, and the room `selectors` needs on the stack for it: its parser, matching
+/// and destructor recurse once for each combinator and each list nested in another
+/// (`:is(:not(…))`), with no limit, and its matching of `:has()` once for each level of the
+/// tree below the element.
+pub(crate) struct Selectors {
+    list: SelectorList<Impl>,
+    /// How many combinators and nested lists it has at most.
+    levels: usize,
+    has: bool,
+}
+
+impl Selectors {
+    /// Runs `f`, which matches the list against elements of `tree`, where there is room for it.
+    fn room<R>(&self, tree: &Tree, f: impl FnOnce() -> R) -> R {
+        let below = match self.has {
+            true => tree.node_count().saturating_mul(PER_TREE_LEVEL),
+            false => 0,
+        };
+        stack::with_room(room(self.levels).saturating_add(below), f)
+    }
+}
+
+impl Drop for Selectors {
+    fn drop(&mut self) {
+        let list = std::mem::replace(&mut self.list, SelectorList::scope());
+        stack::with_room(room(self.levels), || drop(list));
+    }
+}
+
+fn room(levels: usize) -> usize {
+    BASE.saturating_add(levels.saturating_mul(PER_LEVEL))
+}
 
 fn parse(selector: &str) -> Option<Selectors> {
-    let mut input = cssparser::ParserInput::new(selector);
-    let mut input = cssparser::Parser::new(&mut input);
-    SelectorList::parse(&SelectorParser, &mut input, ParseRelative::No).ok()
+    // A combinator is CSS whitespace, `>`, `+` or `~`, and a nested list opens with `(`.
+    let levels = selector
+        .bytes()
+        .filter(|byte| b" \t\n\r\x0c>+~(".contains(byte))
+        .count();
+    stack::with_room(room(levels), || {
+        let mut input = cssparser::ParserInput::new(selector);
+        let mut input = cssparser::Parser::new(&mut input);
+        let list = SelectorList::parse(&SelectorParser, &mut input, ParseRelative::No).ok()?;
+        let has = list.to_css_string().contains(":has(");
+        Some(Selectors { list, levels, has })
+    })
 }
 
 thread_local! {
@@ -63,6 +120,38 @@ pub(crate) fn is_lower_type_selector(selector: &str) -> bool {
 
 /// Whether the element matches, with `scope` as `:scope`.
 pub(crate) fn matches(tree: &Tree, element: NodeId, selectors: &Selectors, scope: NodeId) -> bool {
+    selectors.room(tree, || matches_here(tree, element, selectors, scope))
+}
+
+/// `querySelector`: the first element inside `root`, in tree order, that matches.
+pub(crate) fn query(tree: &Tree, root: NodeId, selectors: &Selectors) -> Option<NodeId> {
+    selectors.room(tree, || {
+        let mut stack: Vec<NodeId> = tree.children(root).collect();
+        stack.reverse();
+        while let Some(node) = stack.pop() {
+            if matches_here(tree, node, selectors, root) {
+                return Some(node);
+            }
+            let start = stack.len();
+            stack.extend(tree.children(node));
+            stack[start..].reverse();
+        }
+        None
+    })
+}
+
+/// `closest`: the element, or the nearest element above it, that matches.
+pub(crate) fn closest(tree: &Tree, element: NodeId, selectors: &Selectors) -> Option<NodeId> {
+    selectors.room(tree, || {
+        std::iter::once(element)
+            .chain(tree.ancestors(element))
+            .filter(|&id| tree.element(id).is_some())
+            .find(|&id| matches_here(tree, id, selectors, id))
+    })
+}
+
+/// [`matches`], where the caller has made room for it.
+fn matches_here(tree: &Tree, element: NodeId, selectors: &Selectors, scope: NodeId) -> bool {
     let Some(element) = ElementRef::new(tree, element) else {
         return false;
     };
@@ -80,22 +169,7 @@ pub(crate) fn matches(tree: &Tree, element: NodeId, selectors: &Selectors, scope
         MatchingForInvalidation::No,
     );
     context.scope_element = ElementRef::new(tree, scope).map(|scope| scope.opaque());
-    matching::matches_selector_list(selectors, &element, &mut context)
-}
-
-/// `querySelector`: the first element inside `root`, in tree order, that matches.
-pub(crate) fn query(tree: &Tree, root: NodeId, selectors: &Selectors) -> Option<NodeId> {
-    let mut stack: Vec<NodeId> = tree.children(root).collect();
-    stack.reverse();
-    while let Some(node) = stack.pop() {
-        if matches(tree, node, selectors, root) {
-            return Some(node);
-        }
-        let start = stack.len();
-        stack.extend(tree.children(node));
-        stack[start..].reverse();
-    }
-    None
+    matching::matches_selector_list(&selectors.list, &element, &mut context)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

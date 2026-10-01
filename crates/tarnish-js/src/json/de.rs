@@ -8,7 +8,7 @@ use json_event_parser::{JsonEvent, LowLevelJsonParser, LowLevelJsonParserResult}
 use serde::de::{DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 
 use super::{Key, Map, Value};
-use crate::number;
+use crate::{number, stack};
 
 /// The text isn't JSON, so `JSON.parse` throws.
 #[derive(Debug)]
@@ -17,10 +17,20 @@ pub struct SyntaxError;
 /// Past this many keys, parsing an object finds repeated keys through a hash table.
 const LINEAR_KEYS: usize = 32;
 
+/// The stack serde_json takes for JSON nested as deep as it reads, 128 levels, with room to
+/// spare: 200 KiB unoptimized and 45 KiB optimized, more than a level of a recursion that calls
+/// this is sure of.
+const SERDE_ROOM: usize = if cfg!(debug_assertions) {
+    512 << 10
+} else {
+    128 << 10
+};
+
 /// `JSON.parse(text)`, as the value JavaScript holds: every number is a double, so an integral
 /// one is an integer and the rest are floats; a repeated key keeps its first place and its last
 /// value; and keys that are array indices come first, in ascending order. A lone surrogate,
 /// which a Rust string can't hold, is U+FFFD.
+// bounded: once, on the text with its lone surrogates replaced
 pub fn from_str(text: &str) -> Result<Value, SyntaxError> {
     // The parser skips a byte order mark, which `JSON.parse` doesn't take.
     if text.starts_with('\u{FEFF}') {
@@ -29,7 +39,7 @@ pub fn from_str(text: &str) -> Result<Value, SyntaxError> {
     // serde_json reads JSON far faster, and takes no text `JSON.parse` refuses. Text that ends
     // early is no JSON to either; what else serde_json refuses, nesting past its limit or a
     // number past a double, the event parser decides. Both refuse a lone surrogate.
-    match read_with_serde(text) {
+    match stack::with_room(SERDE_ROOM, || read_with_serde(text)) {
         Ok(value) => Ok(value),
         Err(error) if error.is_eof() => Err(SyntaxError),
         Err(_) => read_events(text).or_else(|error| match lone_surrogates_replaced(text) {
@@ -393,6 +403,7 @@ mod tests {
         fn space(next: &mut dyn FnMut() -> usize) -> &'static str {
             if next().is_multiple_of(4) { " " } else { "" }
         }
+        // bounded: past depth 3 a value is a scalar
         fn value(next: &mut dyn FnMut() -> usize, depth: usize, out: &mut String) {
             match next() % if depth > 3 { 5 } else { 7 } {
                 0 | 1 => out.push_str(pick(next, NUMBERS)),
