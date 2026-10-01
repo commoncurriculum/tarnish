@@ -110,36 +110,34 @@ impl<T> Request<T> {
     }
 }
 
-/// `serializeHTML`'s document as the request sent it, for [`Document::read`] to read.
-pub struct Document<'a>(Source<'a>);
+/// `serializeHTML`'s document as the request sent it, for [`Document::read`] to read against
+/// [`Conversions::schema`].
+pub struct Document<'a> {
+    source: Source<'a>,
+    schema: &'a Schema,
+}
 
 enum Source<'a> {
     Json(&'a Value),
-    /// Read straight from its terms, against [`Conversions::schema`], as the request was read.
+    /// Read straight from its terms, as the request was read.
     Terms(Result<Node<'static>, Error>),
 }
 
-impl Document<'_> {
-    /// `Node.fromJSON(schema, json)`.
-    pub fn read(self, schema: &Schema) -> Result<Node<'static>, Error> {
-        match self.0 {
-            Source::Json(json) => Node::from_json(schema, json),
-            Source::Terms(read) => {
-                if let Ok(document) = &read {
-                    assert!(
-                        document.schema() == schema,
-                        "a document sent as terms is read against the conversions' schema"
-                    );
-                }
-                read
-            }
+impl<'a> Document<'a> {
+    /// The document whose JSON is `json`, to be read against `schema`.
+    pub fn json(json: &'a Value, schema: &'a Schema) -> Self {
+        Document {
+            source: Source::Json(json),
+            schema,
         }
     }
-}
 
-impl<'a> From<&'a Value> for Document<'a> {
-    fn from(json: &'a Value) -> Document<'a> {
-        Document(Source::Json(json))
+    /// `Node.fromJSON(schema, json)`.
+    pub fn read(self) -> Result<Node<'static>, Error> {
+        match self.source {
+            Source::Json(json) => Node::from_json(self.schema, json),
+            Source::Terms(read) => read,
+        }
     }
 }
 
@@ -168,6 +166,7 @@ impl Answer {
 /// A request answered with its result, or its error.
 fn answer(conversions: &dyn Conversions, request: Request<Value, Input>) -> Result<Answer, String> {
     let options = request.options.as_ref();
+    let schema = conversions.schema();
     let serialized = |text| Answer::Json(Value::String(text));
     let answered = match (request.operation.as_str(), request.input) {
         (Some("parseMarkdown"), Input::Json(Value::String(ref markdown))) => conversions
@@ -180,11 +179,17 @@ fn answer(conversions: &dyn Conversions, request: Request<Value, Input>) -> Resu
             conversions.parse_html(html, options).map(Answer::Document)
         }
         (Some("serializeHTML"), Input::Json(ref document @ Value::Object(_))) => conversions
-            .serialize_html(document.into(), options)
+            .serialize_html(Document::json(document, schema), options)
             .map(serialized),
-        (Some("serializeHTML"), Input::Document(read)) => conversions
-            .serialize_html(Document(Source::Terms(read)), options)
-            .map(serialized),
+        (Some("serializeHTML"), Input::Document(read)) => {
+            let document = Document {
+                source: Source::Terms(read),
+                schema,
+            };
+            conversions
+                .serialize_html(document, options)
+                .map(serialized)
+        }
         _ => return Err(INVALID.into()),
     };
     answered.map_err(|error| error.message().into())

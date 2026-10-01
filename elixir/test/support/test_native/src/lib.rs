@@ -78,9 +78,9 @@ impl Conversions for Html {
         parse_html(&self.parser, html, ParseOptions::default())
     }
 
-    fn serialize_html(&self, json: Document, options: Option<&Value>) -> Result<String, Error> {
+    fn serialize_html(&self, document: Document, options: Option<&Value>) -> Result<String, Error> {
         refuse_options(options)?;
-        to_html(&self.serializer, json.read(&self.schema)?.content())
+        to_html(&self.serializer, document.read()?.content())
     }
 }
 
