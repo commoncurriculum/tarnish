@@ -7,7 +7,7 @@ use tarnish::js::stack;
 use tarnish::json::{Key, Map, Number, Value};
 use tarnish::{Field, Fields};
 
-use tarnish::js::{MAX_SAFE_INTEGER, number_to_string};
+use tarnish::js::{MAX_SAFE_INTEGER, WrittenNumber, written_number};
 
 const VERSION: u8 = 131;
 const NEW_FLOAT: u8 = 70;
@@ -101,6 +101,7 @@ impl<'a> Reader<'a> {
 
     /// Reads a value into `slot`, which holds `null`: one read where it is kept isn't copied
     /// there from the stack.
+    // guarded: each level goes through `below`, which grows the stack every `LEVELS` levels
     fn value_into(&mut self, depth: usize, slot: &mut Value) -> Result<(), NotJson> {
         *slot = match self.byte()? {
             BINARY => {
@@ -121,7 +122,7 @@ impl<'a> Reader<'a> {
             }
             NEW_FLOAT => {
                 let double = f64::from_be_bytes(self.array()?);
-                Value::Number(Number::from_f64(double).ok_or(NotJson)?)
+                Value::Number(Number::from(double))
             }
             tag @ (ATOM | SMALL_ATOM | ATOM_UTF8 | SMALL_ATOM_UTF8) => match self.atom(tag)? {
                 "nil" => Value::Null,
@@ -291,28 +292,23 @@ enum Integer<'a> {
 }
 
 impl Integer<'_> {
-    /// The integer as Jason writes it and `JSON.parse` reads it back: exactly within 64 bits,
-    /// as the nearest double past them.
+    /// The integer as Jason writes it and `JSON.parse` reads it back: the nearest double, which
+    /// past a double's range is ±Infinity.
     fn number(&self) -> Result<Number, NotJson> {
         match *self {
             Integer::Word(word) => Ok(word.into()),
             Integer::Big { negative, digits } if digits.len() <= 8 => {
                 let mut bytes = [0; 8];
                 bytes[..digits.len()].copy_from_slice(digits);
-                let magnitude = u64::from_le_bytes(bytes);
-                match negative {
-                    false => Ok(magnitude.into()),
-                    true if magnitude <= 1 << 63 => Ok((magnitude as i64).wrapping_neg().into()),
-                    true => self.double(),
-                }
+                // Rounding to the nearest is the same either side of zero.
+                let magnitude = u64::from_le_bytes(bytes) as f64;
+                Ok(Number::from(if negative { -magnitude } else { magnitude }))
             }
-            Integer::Big { .. } => self.double(),
+            Integer::Big { .. } => {
+                let double: f64 = self.text().parse().map_err(|_| NotJson)?;
+                Ok(Number::from(double))
+            }
         }
-    }
-
-    fn double(&self) -> Result<Number, NotJson> {
-        let double: f64 = self.text().parse().map_err(|_| NotJson)?;
-        Number::from_f64(double).ok_or(NotJson)
     }
 
     /// The integer's decimal digits, as Jason writes an integer key.
@@ -407,7 +403,7 @@ fn write_value(out: &mut Vec<u8>, value: &Value) {
         Value::Null => atom(out, "nil"),
         Value::Bool(true) => atom(out, "true"),
         Value::Bool(false) => atom(out, "false"),
-        Value::Number(number) => write_number(out, number),
+        Value::Number(number) => write_number(out, *number),
         Value::String(text) => binary(out, text),
         Value::Array(items) => {
             if !items.is_empty() {
@@ -436,6 +432,8 @@ pub fn write_fields<'c>(fields: impl Fields<'c>) -> Vec<u8> {
     out
 }
 
+// bounded: a mark's fields hold no content or marks, so writing one goes a single level down;
+// content grows the stack
 fn write_node<'c>(out: &mut Vec<u8>, fields: impl Fields<'c>) {
     out.push(MAP);
     out.extend_from_slice(&(fields.field_count() as u32).to_be_bytes());
@@ -470,7 +468,7 @@ fn write_value_ref(out: &mut Vec<u8>, value: ValueRef) {
         Kind::Null => atom(out, "nil"),
         Kind::Bool(true) => atom(out, "true"),
         Kind::Bool(false) => atom(out, "false"),
-        Kind::Number(number) => write_number(out, &number),
+        Kind::Number(number) => write_number(out, number),
         Kind::String(text) => binary(out, text),
         Kind::Array(len) => {
             if len > 0 {
@@ -512,27 +510,20 @@ fn binary(out: &mut Vec<u8>, text: &str) {
 
 /// JavaScript writes a number as an integer when it can, and Jason reads that as an integer,
 /// however large.
-fn write_number(out: &mut Vec<u8>, number: &Number) {
-    if let Some(value) = safe_integer(number) {
-        return integer(out, value.into());
-    }
-    let double = number.as_f64().unwrap_or(f64::NAN);
-    if !double.is_finite() {
-        return atom(out, "nil");
-    }
-    match number_to_string(double).parse::<i128>() {
-        // JavaScript writes integers below 10^21 as digits, and larger ones in exponent form.
-        Ok(value) => integer(out, value),
-        Err(_) => {
+fn write_number(out: &mut Vec<u8>, number: Number) {
+    match written_number(number) {
+        WrittenNumber::Integer(value) => integer(out, value),
+        WrittenNumber::Float(double) => {
             out.push(NEW_FLOAT);
             out.extend_from_slice(&double.to_bits().to_be_bytes());
         }
+        WrittenNumber::Null => atom(out, "nil"),
     }
 }
 
 /// The integer a number holds, if JavaScript holds it exactly, as it does every integer up to
 /// `Number.MAX_SAFE_INTEGER`.
-pub fn safe_integer(number: &Number) -> Option<i64> {
+pub fn safe_integer(number: Number) -> Option<i64> {
     number
         .as_i64()
         .filter(|integer| integer.unsigned_abs() as f64 <= MAX_SAFE_INTEGER)
@@ -607,6 +598,20 @@ mod tests {
         }
     }
 
+    /// 2^1024 and its negation, past the greatest double: `JSON.parse` reads the digits Jason
+    /// writes for them as ±Infinity, which JavaScript writes back as `null`.
+    #[test]
+    fn reads_integers_past_a_double_as_infinity() {
+        let mut digits = vec![0u8; 129];
+        digits[128] = 1;
+        for (sign, expected) in [(0, f64::INFINITY), (1, f64::NEG_INFINITY)] {
+            let bytes = term(&[&[SMALL_BIG, 129, sign][..], &digits].concat());
+            let value = read(&bytes).expect("a term");
+            assert_eq!(value.as_f64(), Some(expected));
+            assert_eq!(write(&value), term(&atom_ext("nil")));
+        }
+    }
+
     #[test]
     fn reads_a_list_of_bytes_as_numbers() {
         assert!(read(&term(&[STRING, 0, 3, 1, 2, 255])).expect("a term") == value("[1,2,255]"));
@@ -663,6 +668,40 @@ mod tests {
             .map(|key| key.as_str())
             .collect();
         assert_eq!(keys, ["2", "10", "b", "a", "01"]);
+    }
+
+    /// What a batch reads and writes, nested far deeper than a pool thread's stack could recurse
+    /// through: a value, and a document whose nodes nest that deep and whose attribute does. The
+    /// attribute sits near the top, where an unguarded level would overflow.
+    #[test]
+    fn reads_and_writes_as_deeply_as_memory_allows() {
+        tarnish::js::stack::on_dirty_scheduler_stack(|| {
+            const DEPTH: usize = 100_000;
+            let deep = (0..DEPTH).fold(Value::Null, |inner, level| match level % 2 {
+                0 => tarnish::json::json!({"a": inner}),
+                _ => Value::Array(vec![inner]),
+            });
+            assert!(read(&write(&deep)).expect("a term") == deep);
+
+            let spec = tarnish::json::json!({"nodes": [
+                ["doc", {"content": "block+"}],
+                ["paragraph", {"group": "block"}],
+                ["quote", {"content": "block+", "group": "block", "attrs": {"data": {"default": null}}}],
+                ["text", {}],
+            ]});
+            let schema = tarnish::api::schema(&spec).expect("the schema");
+            let paragraph = tarnish::json::json!({"type": "paragraph"});
+            let holding = tarnish::json::json!({"type": "quote", "attrs": {"data": deep},
+                "content": [paragraph.clone()]});
+            let quotes = (0..DEPTH).fold(
+                paragraph,
+                |inner, _| tarnish::json::json!({"type": "quote", "content": [inner]}),
+            );
+            let json = tarnish::json::json!({"type": "doc", "content": [holding, quotes]});
+            let doc = tarnish::Node::from_json(&schema, &json).expect("the document");
+            let written = write_fields(doc.view());
+            assert!(read(&written).expect("a term") == doc.to_json());
+        });
     }
 
     #[test]

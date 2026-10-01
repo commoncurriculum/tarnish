@@ -16,9 +16,8 @@ pub(crate) enum Tag {
     Null,
     False,
     True,
-    Int,
-    UInt,
-    Float,
+    /// A double, its bits low word first.
+    Number,
     String,
     Array,
     Object,
@@ -28,16 +27,13 @@ impl Tag {
     /// The value a record with this tag holds in its words `a` and `b`, `string` reading a
     /// string's text.
     pub fn kind<'v>(self, a: u32, b: u32, string: impl FnOnce(u32, u32) -> &'v str) -> Kind<'v> {
-        let bits = u64::from(a) | u64::from(b) << 32;
         match self {
             Tag::Null => Kind::Null,
             Tag::False => Kind::Bool(false),
             Tag::True => Kind::Bool(true),
-            Tag::Int => Kind::Number(Number::from(bits as i64)),
-            Tag::UInt => Kind::Number(Number::from(bits)),
-            Tag::Float => {
-                Kind::Number(Number::from_f64(f64::from_bits(bits)).unwrap_or_else(|| corrupt()))
-            }
+            Tag::Number => Kind::Number(Number::from(f64::from_bits(
+                u64::from(a) | u64::from(b) << 32,
+            ))),
             Tag::String => Kind::String(string(a, b)),
             Tag::Array => Kind::Array(b),
             Tag::Object => Kind::Object(b),
@@ -49,12 +45,10 @@ impl Tag {
             0 => Tag::Null,
             1 => Tag::False,
             2 => Tag::True,
-            3 => Tag::Int,
-            4 => Tag::UInt,
-            5 => Tag::Float,
-            6 => Tag::String,
-            7 => Tag::Array,
-            8 => Tag::Object,
+            3 => Tag::Number,
+            4 => Tag::String,
+            5 => Tag::Array,
+            6 => Tag::Object,
             _ => corrupt(),
         }
     }
@@ -134,7 +128,7 @@ impl<'c> ValueRef<'c> {
 
     pub fn as_f64(self) -> Option<f64> {
         match self.kind() {
-            Kind::Number(number) => number.as_f64(),
+            Kind::Number(number) => Some(number.as_f64()),
             _ => None,
         }
     }
@@ -179,7 +173,7 @@ impl<'c> ValueRef<'c> {
         Ok(match self.kind() {
             Kind::Null => 0.0,
             Kind::Bool(boolean) => f64::from(u8::from(boolean)),
-            Kind::Number(number) => number.as_f64().unwrap_or(f64::NAN),
+            Kind::Number(number) => number.as_f64(),
             Kind::String(string) => crate::js::string_to_number(string),
             Kind::Array(_) | Kind::Object(_) => crate::js::string_to_number(&self.to_js_string()?),
         })
@@ -277,7 +271,7 @@ impl<'c> ValueRef<'c> {
         match self.kind() {
             Kind::Null => out.push_str("null"),
             Kind::Bool(boolean) => out.push_str(if boolean { "true" } else { "false" }),
-            Kind::Number(number) => write_number(out, &number),
+            Kind::Number(number) => write_number(out, number),
             Kind::String(string) => write_string(out, string),
             Kind::Array(..) => {
                 out.push('[');
@@ -350,9 +344,7 @@ pub(crate) trait JsonView<'v>: Copy {
             Kind::Null => Cow::Borrowed("null"),
             Kind::Bool(true) => Cow::Borrowed("true"),
             Kind::Bool(false) => Cow::Borrowed("false"),
-            Kind::Number(number) => Cow::Owned(crate::js::number_to_string(
-                number.as_f64().unwrap_or(f64::NAN),
-            )),
+            Kind::Number(number) => Cow::Owned(crate::js::number_to_string(number.as_f64())),
             Kind::String(string) => Cow::Borrowed(string),
             Kind::Array(_) => {
                 let mut parts = Vec::new();
@@ -374,7 +366,7 @@ pub(crate) trait JsonView<'v>: Copy {
     fn truthy(self) -> bool {
         match self.kind() {
             Kind::Null | Kind::Bool(false) => false,
-            Kind::Number(number) => number.as_f64().is_some_and(|n| n != 0.0 && !n.is_nan()),
+            Kind::Number(number) => number.as_f64() != 0.0 && !number.as_f64().is_nan(),
             Kind::String(string) => !string.is_empty(),
             Kind::Bool(true) | Kind::Array(_) | Kind::Object(_) => true,
         }
@@ -437,7 +429,7 @@ impl<'c> JsonView<'c> for ValueRef<'c> {
         match Tag::from_word(self.chunk.value(self.index).0) {
             Tag::Null => TypeOf::Null,
             Tag::False | Tag::True => TypeOf::Boolean,
-            Tag::Int | Tag::UInt | Tag::Float => TypeOf::Number,
+            Tag::Number => TypeOf::Number,
             Tag::String => TypeOf::String,
             Tag::Array | Tag::Object => TypeOf::Object,
         }
@@ -450,7 +442,7 @@ impl<'v> JsonView<'v> for &'v Value {
         match self {
             Value::Null => Kind::Null,
             Value::Bool(boolean) => Kind::Bool(*boolean),
-            Value::Number(number) => Kind::Number(number.clone()),
+            Value::Number(number) => Kind::Number(*number),
             Value::String(string) => Kind::String(string),
             Value::Array(items) => Kind::Array(items.len() as u32),
             Value::Object(map) => Kind::Object(map.len() as u32),

@@ -29,7 +29,12 @@ defmodule Tarnish.OpsTest do
     %{schemas: schemas}
   end
 
-  fixtures = @fixtures |> File.read!() |> Jason.decode!()
+  # A section with no records would make no tests, so each must have some.
+  %{
+    "transforms" => [_ | _] = transforms,
+    "textBetween" => [_ | _] = text_between,
+    "textContent" => [_ | _] = text_content
+  } = @fixtures |> File.read!() |> Jason.decode!()
 
   defp doc(schemas, %{"schema" => schema, "doc" => json}) do
     {:ok, doc} = Tarnish.Node.from_json(Enum.at(schemas, schema), json)
@@ -43,11 +48,10 @@ defmodule Tarnish.OpsTest do
   defp expected(%{"result" => result}), do: {:ok, result}
 
   # Text with a lone surrogate is recorded as its JSON, and comes back with U+FFFD for each lone
-  # surrogate. JSON.stringify escapes a surrogate only when it's alone.
-  defp expected(%{"resultJSON" => json}),
-    do: {:ok, Jason.decode!(Regex.replace(~r/\\ud[89a-f][0-9a-f]{2}/i, json, "\\ufffd"))}
+  # surrogate.
+  defp expected(%{"resultJSON" => json}), do: {:ok, Tarnish.JSON.decode!(json)}
 
-  for {fixture, index} <- Enum.with_index(fixtures["transforms"]) do
+  for {fixture, index} <- Enum.with_index(transforms) do
     @fixture fixture
     test "op list #{index} gives what ProseMirror gives", %{schemas: schemas} do
       doc = doc(schemas, @fixture)
@@ -57,11 +61,11 @@ defmodule Tarnish.OpsTest do
                Tarnish.Transform.new(doc, @fixture["ops"]),
              do: {:ok, Tarnish.Node.to_json(changed), steps}
 
-      assert transformed == expected(@fixture)
+      assert transformed === expected(@fixture)
     end
   end
 
-  for {fixture, index} <- Enum.with_index(fixtures["textBetween"]) do
+  for {fixture, index} <- Enum.with_index(text_between) do
     @fixture fixture
     test "textBetween #{index} is ProseMirror's", %{schemas: schemas} do
       %{"from" => from, "to" => to} = @fixture
@@ -76,14 +80,14 @@ defmodule Tarnish.OpsTest do
           @fixture["leafText"]
         )
 
-      assert text == expected(@fixture)
+      assert text === expected(@fixture)
     end
   end
 
-  for {fixture, index} <- Enum.with_index(fixtures["textContent"]) do
+  for {fixture, index} <- Enum.with_index(text_content) do
     @fixture fixture
     test "textContent #{index} is ProseMirror's", %{schemas: schemas} do
-      assert Tarnish.Node.text_content(doc(schemas, @fixture)) == @fixture["result"]
+      assert Tarnish.Node.text_content(doc(schemas, @fixture)) === @fixture["result"]
     end
   end
 
@@ -101,31 +105,60 @@ defmodule Tarnish.OpsTest do
       {:ok, doc} = Tarnish.Node.from_json(schema, %{"type" => "doc", "content" => content})
       mark = %{"type" => "em"}
       ops = [%{"op" => "addMark", "from" => 6, "to" => 9, "mark" => mark}]
-      {:ok, %Tarnish.Transform{doc: changed, steps: [_step]}} = Tarnish.Transform.new(doc, ops)
-      %{"content" => [one, two, three]} = Tarnish.Node.to_json(changed)
+      {:ok, %Tarnish.Transform{doc: changed, steps: steps}} = Tarnish.Transform.new(doc, ops)
+      assert steps === [%{"stepType" => "addMark", "mark" => mark, "from" => 6, "to" => 9}]
+      %{"type" => "doc", "content" => [one, two, three]} = json = Tarnish.Node.to_json(changed)
+      assert map_size(json) === 2
       assert :erts_debug.same(one, first) and :erts_debug.same(three, third)
+
+      assert two === %{
+               second
+               | "content" => [%{"type" => "text", "text" => "two", "marks" => [mark]}]
+             }
+
       refute :erts_debug.same(two, second)
     end
 
     test "is the document given when there are no ops", %{schema: schema} do
       {:ok, doc} = Tarnish.Node.from_json(schema, paragraphs(2, "same"))
-      assert Tarnish.Transform.new(doc, []) == {:ok, %Tarnish.Transform{doc: doc, steps: []}}
+      assert Tarnish.Transform.new(doc, []) === {:ok, %Tarnish.Transform{doc: doc, steps: []}}
     end
 
     test "comes from a dirty scheduler past a normal one's limits", %{schema: schema} do
       {:ok, doc} = Tarnish.Node.from_json(schema, paragraphs(200, "text"))
-      insert = %{"op" => "insert", "pos" => 2, "content" => [%{"type" => "text", "text" => "x"}]}
-      ops = List.duplicate(insert, 200)
-      assert @native.transform(doc.ref, ops) == :dirty
+      x = [%{"type" => "text", "text" => "x"}]
+      ops = List.duplicate(%{"op" => "insert", "pos" => 2, "content" => x}, 200)
+      assert @native.transform(doc.ref, ops) === :dirty
       {:ok, %Tarnish.Transform{doc: changed, steps: steps}} = Tarnish.Transform.new(doc, ops)
-      assert length(steps) == 200
-      %{"content" => [first | _]} = Tarnish.Node.to_json(changed)
-      assert first == paragraph("t" <> String.duplicate("x", 200) <> "ext")
+      step = %{"stepType" => "replace", "from" => 2, "to" => 2, "slice" => %{"content" => x}}
+      assert steps === List.duplicate(step, 200)
+      %{"content" => [_ | rest]} = paragraphs(200, "text")
+      first = paragraph("t" <> String.duplicate("x", 200) <> "ext")
+      assert Tarnish.Node.to_json(changed) === %{"type" => "doc", "content" => [first | rest]}
 
       mark = %{"type" => "strong"}
       whole = [%{"op" => "addMark", "from" => 0, "to" => 1200, "mark" => mark}]
-      assert @native.transform(doc.ref, whole) == :dirty
-      assert {:ok, %Tarnish.Transform{steps: [_ | _]}} = Tarnish.Transform.new(doc, whole)
+      assert @native.transform(doc.ref, whole) === :dirty
+      {:ok, %Tarnish.Transform{doc: marked, steps: steps}} = Tarnish.Transform.new(doc, whole)
+
+      assert steps ===
+               for(
+                 start <- 1..1195//6,
+                 do: %{
+                   "stepType" => "addMark",
+                   "mark" => mark,
+                   "from" => start,
+                   "to" => start + 4
+                 }
+               )
+
+      strong = %{"type" => "text", "text" => "text", "marks" => [mark]}
+      strong_paragraph = %{"type" => "paragraph", "content" => [strong]}
+
+      assert Tarnish.Node.to_json(marked) === %{
+               paragraphs(200, "text")
+               | "content" => List.duplicate(strong_paragraph, 200)
+             }
     end
   end
 
@@ -136,16 +169,16 @@ defmodule Tarnish.OpsTest do
       long = String.duplicate("long ", 200_000)
       json = %{"type" => "doc", "content" => [paragraph(long)]}
       {:ok, doc} = Tarnish.Node.from_json(schema, json)
-      assert @native.text_content(doc.ref) == :dirty
-      assert Tarnish.Node.text_content(doc) == long
-      assert @native.text_between(doc.ref, 0, 1_000_002, "\n", nil) == :dirty
-      assert Tarnish.Node.text_between(doc, 0, 1_000_002, "\n") == {:ok, long}
+      assert @native.text_content(doc.ref) === :dirty
+      assert Tarnish.Node.text_content(doc) === long
+      assert @native.text_between(doc.ref, 0, 1_000_002, "\n", nil) === :dirty
+      assert Tarnish.Node.text_between(doc, 0, 1_000_002, "\n") === {:ok, long}
     end
 
     test "has U+FFFD for each half of a surrogate pair a position splits", %{schema: schema} do
       {:ok, doc} = Tarnish.Node.from_json(schema, paragraphs(1, "a😀b"))
-      assert Tarnish.Node.text_between(doc, 1, 3) == {:ok, "a�"}
-      assert Tarnish.Node.text_between(doc, 3, 5) == {:ok, "�b"}
+      assert Tarnish.Node.text_between(doc, 1, 3) === {:ok, "a�"}
+      assert Tarnish.Node.text_between(doc, 3, 5) === {:ok, "�b"}
     end
   end
 end

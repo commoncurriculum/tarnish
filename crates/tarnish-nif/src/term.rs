@@ -70,7 +70,7 @@ impl Reader {
             },
             TermType::Float => {
                 let double = term.decode::<f64>().map_err(|_| NotJson)?;
-                Value::Number(Number::from_f64(double).ok_or(NotJson)?)
+                Value::Number(Number::from(double))
             }
             TermType::List => return stack::grow(|| self.list(term, slot)),
             TermType::Map => return stack::grow(|| self.object(term, slot)),
@@ -205,7 +205,7 @@ impl<'a, 'v> Writer<'a, 'v> {
         match value {
             Value::Null => atom::nil().encode(env),
             Value::Bool(boolean) => boolean.encode(env),
-            Value::Number(number) => self.number(number),
+            Value::Number(number) => self.number(*number),
             Value::String(text) => binary(env, text),
             Value::Array(items) => stack::grow(|| {
                 let base = self.begin_list();
@@ -237,7 +237,7 @@ impl<'a, 'v> Writer<'a, 'v> {
         match value.kind() {
             Kind::Null => atom::nil().encode(env),
             Kind::Bool(boolean) => boolean.encode(env),
-            Kind::Number(number) => self.number(&number),
+            Kind::Number(number) => self.number(number),
             Kind::String(text) => binary(env, text),
             Kind::Array(_) => stack::grow(|| {
                 let base = self.begin_list();
@@ -294,11 +294,11 @@ impl<'a, 'v> Writer<'a, 'v> {
         })
     }
 
-    fn number(&mut self, number: &Number) -> Term<'a> {
+    fn number(&mut self, number: Number) -> Term<'a> {
         match etf::safe_integer(number) {
             Some(integer) => integer.encode(self.env),
             None => {
-                let value = Value::Number(number.clone());
+                let value = Value::Number(number);
                 self.env
                     .binary_to_term(&etf::write(&value))
                     .expect("the external format of a number")

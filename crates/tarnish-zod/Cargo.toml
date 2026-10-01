@@ -9,3 +9,6 @@ repository.workspace = true
 
 [dependencies]
 tarnish-js = { path = "../tarnish-js", version = "0.1.0" }
+
+[dev-dependencies]
+tarnish-fixtures = { path = "../tarnish-fixtures" }

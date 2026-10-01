@@ -69,6 +69,7 @@ fn merge_nested_span_styles(element: &HtmlNode) -> Result<()> {
     Ok(())
 }
 
+// bounded: it stops past depth 20
 fn find_child_spans(element: &HtmlNode, depth: usize) -> Vec<HtmlNode> {
     let children = element.children();
     if children.is_empty() || depth > 20 {

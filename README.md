@@ -133,9 +133,11 @@ This example is `tarnish-html`'s doctest.
   interface. The crate's tests write those schemas' rules and `toDOM`s in Rust, and must build
   the same trees, documents, HTML and strings. They render each spec as the value of a node's
   attribute too, as an application's `toDOM` may hand one over. They also check that the fork's
-  `element.style` runs the `tarnish-css` they do, by the `engine()` it recorded.
-- **Where the trees differ.** The tests print both trees for eight inputs, where html5ever
-  follows the HTML standard and parse5 8 doesn't, but for `<isindex>`:
+  `element.style` runs the `tarnish-css` they do, by the `engine()` `fixtures/versions.json`
+  records.
+- **Where the trees differ.** For eight inputs, where html5ever follows the HTML standard and
+  parse5 8 doesn't, but for `<isindex>`, the tests hold tarnish-html to html5ever's tree and to
+  the documents and slices parsed from it, and fail once the fork's tree comes to match:
   - elements in a `<select>`, which html5ever keeps, as the standard now does, and parse5
     drops;
   - a CDATA section in an element that isn't HTML's, such as MathML's `<mi>` or SVG's `<desc>`,
@@ -181,11 +183,18 @@ This example is `tarnish-tiptap`'s doctest.
 
 `npm run test:js` records what the JavaScript does, for the tests to hold these crates to:
 `fixtures/marked.json`, the tokens marked, with marked-more-lists, makes of 206 Markdown
-inputs, and `fixtures/tiptap.json`, the documents, Markdown and HTML that `MarkdownManager`,
+inputs; `fixtures/tiptap.json`, the documents, Markdown and HTML that `MarkdownManager`,
 `DOMParser` and `DOMSerializer` make with Tiptap's own extensions, among them V8's errors for
-documents holding what the manager can't read. `tarnish_markdown::MARKED` and
-`tarnish_tiptap::TIPTAP` name the versions ported, and the tests check them against the
-versions installed.
+documents holding what the manager can't read; and `fixtures/zod.json`, what zod's `safeParse`
+makes of every kind of JSON with each schema `tarnish-zod` ports, the data or the `ZodError`'s
+message, issues and paths in zod's order.
+
+`fixtures/versions.json` records the version installed of each package a crate ports or is held
+to, each as its dependent resolves it (`"@tiptap/pm > prosemirror-model"`), and the linkedom
+fork as the SHA-256 of its files. The crates' tests check the versions they name against it
+(`tarnish::PROSEMIRROR_MODEL`, `tarnish_markdown::MARKED`, `tarnish_tiptap::TIPTAP`,
+`tarnish_zod::ZOD`, `tarnish_css::ENGINE` and the rest), and an application checks that its
+JavaScript runs the same packages by comparing what it has installed with the same file.
 
 ### Elixir
 
@@ -307,8 +316,10 @@ text = Tarnish.Node.text_content(doc)
       tarnish_nif::parity::main(&tarnish_nif::parity::Parity {
           conversions: &MY_CONVERSIONS,
           module: Path::new("/path/to/conversions.mjs"),
-          // Whether two values the answers differ in are the same answer all the same.
-          same: |_input, _theirs, _ours| false,
+          // Whether two differing values are each made up anew by its answer, as an id is.
+          made_up: |_request, _path, _theirs, _ours| false,
+          // Why the answers to a request differ, where you decided that they should.
+          expected: |_request, _theirs, _ours| None,
       })
   }
   ```
@@ -321,14 +332,32 @@ text = Tarnish.Node.text_content(doc)
   ```
 
   A request file is a JSON array of `{"operation", "input", "options"}`. `record` writes each
-  request with the worker's `"output"` or `"error"`, from a worker the pool's way: tarnish's
-  `worker.mjs`, of the commit `tarnish-nif` is built from, on the `node` on your `PATH`.
-  `replay` answers each record's request in the NIF and prints how many answers differ in each
-  way, with the first few of each, and fails if any do. An object's keys may come in any order.
+  request with the worker's `"output"` or `"error"`, and `"answered"`, the milliseconds since
+  the epoch the worker answered between, from a worker the pool's way: tarnish's `worker.mjs`,
+  of the commit `tarnish-nif` is built from, on the `node` on your `PATH`.
+
+  `replay` answers each record's request through the conversions you pass, as
+  `tarnish_nif::parity::answer` does: the request is read from the record's JSON and the answer
+  made into JSON. It doesn't run the NIF's terms in the VM, which reading a request from Elixir
+  and writing its answer back go through; tarnish's Elixir tests hold those, as your tests of
+  `Tarnish.Bridge` on the NIF backend should. It compares the two answers exactly: an object's
+  keys in any order but each once, an array's items in order, numbers by value, as
+  `JSON.stringify` writes 2 and 2.0 alike, and strings and error messages character for
+  character. Where two values differ, `made_up` may take them as the same, as two ids each
+  answer made up anew are: it's given the path to them and both whole answers, with when each
+  was made, and replay holds the values it takes so to pair the worker's with the NIF's one to
+  one. It groups the answers that differ by operation, by the path to where they first differ,
+  any index standing for every index, and by how they differ, and prints the first few of each,
+  a text shown around the first character where it differs. Those `expected` gives a reason for
+  are counted apart, and replay fails if any others differ.
+
   `reduce` shrinks each request the NIF gets wrong to a smallest input it still gets wrong the
-  same way, asking the worker for its answer to each smaller one, and prints the inputs it ends
-  at. `speed` times the NIF's conversions of a request file, without terms: the median of 5
-  rounds after a warm-up, per request, for each operation, or the one named.
+  same way, asking the worker for its answer to each smaller one: the answers differ in the same
+  group, and each side that erred errs with the same message. It cuts an array's items, an
+  object's entries, and a text whole, by halves, by lines and then by ever smaller pieces, and
+  prints the inputs it ends at. `speed` times the NIF's conversions of a request file, without
+  terms: the median of 5 rounds after a warm-up, per request, for each operation, or the one
+  named, leaving out the requests the NIF refuses, which it counts.
 
 ### C, and other languages through it
 

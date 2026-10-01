@@ -213,9 +213,9 @@ impl<'a, 'r> Json<'a, 'r> {
                 }
                 None => self.refuse(Kind::Null),
             },
-            TermType::Float => match term.decode::<f64>().ok().and_then(Number::from_f64) {
+            TermType::Float => match term.decode::<f64>().ok().map(Number::from) {
                 Some(number) => {
-                    if !matches!(js::written_number(&number), WrittenNumber::Float(_)) {
+                    if !matches!(js::written_number(number), WrittenNumber::Float(_)) {
                         self.reading.irregular();
                     }
                     Kind::Number(number)
@@ -618,23 +618,20 @@ fn fits_64_bits(term: Term) -> bool {
     term.decode::<i64>().is_ok() || term.decode::<u64>().is_ok()
 }
 
-/// An integer as JSON reads what Jason writes for it: exactly within 64 bits, and as the
-/// nearest double past them. And whether JavaScript writes it back as the same integer.
+/// An integer as JSON reads what Jason writes for it: the nearest double, which past a
+/// double's range is ±Infinity. And whether JavaScript writes it back as the same integer.
 fn integer(term: Term) -> Option<(Number, bool)> {
     let integer: i128 = match (term.decode::<i64>(), term.decode::<u64>()) {
         (Ok(integer), _) => integer.into(),
         (_, Ok(integer)) => integer.into(),
         _ => {
             let digits = term.decode::<BigInt>().ok()?.to_string();
-            return Some((Number::from_f64(digits.parse().ok()?)?, false));
+            return Some((Number::from(digits.parse::<f64>().ok()?), false));
         }
     };
-    let number = match i64::try_from(integer) {
-        Ok(integer) => Number::from(integer),
-        Err(_) => Number::from(integer as u64),
-    };
+    let number = Number::from(integer as f64);
     let written =
-        matches!(js::written_number(&number), WrittenNumber::Integer(same) if same == integer);
+        matches!(js::written_number(number), WrittenNumber::Integer(same) if same == integer);
     Some((number, written))
 }
 

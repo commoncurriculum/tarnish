@@ -1,5 +1,8 @@
 //! The fixtures `npm run test:js` records from the JavaScript tarnish ports, as
-//! `harness/fixture.mjs` writes them, for tarnish's tests to expect.
+//! `harness/fixture.mjs` writes them, for tarnish's tests to expect. And [`recursion`], which
+//! holds a crate's source to growing the stack wherever it recurses.
+
+pub mod recursion;
 
 use tarnish::json::{self, Value, json};
 use tarnish::{Error, Schema, api};
@@ -11,11 +14,26 @@ pub fn read(name: &str) -> Value {
     json::from_str(&text).unwrap_or_else(|_| panic!("{path} is JSON"))
 }
 
+/// The installed version of a package `fixtures/versions.json` names, as a dependent resolves it:
+/// `"@tiptap/pm > prosemirror-model"` is the prosemirror-model `@tiptap/pm` loads.
+#[track_caller]
+pub fn version(package: &str) -> String {
+    let version = read("versions")[package].as_str().map(str::to_owned);
+    version.unwrap_or_else(|| panic!("no version of {package}"))
+}
+
+/// The records of a fixture's `section`, of which there must be some: a loop over none passes.
+#[track_caller]
+pub fn records<'f>(fixture: &'f Value, section: &str) -> &'f [Value] {
+    let records = fixture[section].as_array();
+    let records = records.unwrap_or_else(|| panic!("no section {section}"));
+    assert!(!records.is_empty(), "no records in {section}");
+    records
+}
+
 /// The schemas of the specs a fixture's `schemas` lists.
 pub fn schemas(fixture: &Value) -> Vec<Schema> {
-    fixture["schemas"]
-        .as_array()
-        .expect("schemas")
+    records(fixture, "schemas")
         .iter()
         .map(|spec| api::schema(spec).expect("a schema"))
         .collect()
@@ -29,13 +47,16 @@ pub fn outcome<T: Into<Value>>(result: Result<T, Error>) -> Value {
     }
 }
 
-/// Asserts that `record` holds each field of `outcome` as `outcome` has it.
+/// Asserts that `record`, without the fields `inputs` names, is `outcome`: each field the run
+/// gave as the record has it, and no field the record has that the run didn't give.
 #[track_caller]
-pub fn expect(record: &Value, outcome: Value) {
-    for (field, value) in outcome.as_object().expect("an outcome's fields") {
-        assert!(
-            record.get(field.as_str()) == Some(value),
-            "{field}: {value} in {record}"
-        );
+pub fn expect(record: &Value, inputs: &[&str], outcome: Value) {
+    let mut recorded = record.as_object().expect("a record's fields").clone();
+    for input in inputs {
+        recorded.remove(input);
     }
+    assert!(
+        Value::Object(recorded) == outcome,
+        "{outcome} where {record} was recorded"
+    );
 }

@@ -234,6 +234,7 @@ impl<'a> ResolvedPos<'a> {
 
     /// The range around the block content where this position and `other` diverge, in the
     /// deepest ancestor `pred` accepts.
+    // bounded: once, with the two positions in order
     pub fn block_range(
         &self,
         other: &ResolvedPos<'a>,

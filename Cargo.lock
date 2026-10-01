@@ -1833,6 +1833,7 @@ dependencies = [
  "stylo",
  "stylo_static_prefs",
  "stylo_traits",
+ "tarnish-js",
  "url",
 ]
 
@@ -1848,6 +1849,8 @@ dependencies = [
 name = "tarnish-fixtures"
 version = "0.0.0"
 dependencies = [
+ "proc-macro2",
+ "syn 2.0.119",
  "tarnish",
 ]
 
@@ -1931,6 +1934,7 @@ dependencies = [
 name = "tarnish-zod"
 version = "0.1.0"
 dependencies = [
+ "tarnish-fixtures",
  "tarnish-js",
 ]
 

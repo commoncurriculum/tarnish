@@ -10,6 +10,7 @@ use napi::bindgen_prelude::{
 };
 use napi::{Env, Error, JsString, JsValue, Result, Status, ValueType};
 use tarnish::chunk::ValueRef;
+use tarnish::js::stack;
 use tarnish::{Attrs, Map, Text, TextRef, Value};
 
 thread_local! {
@@ -223,14 +224,15 @@ pub fn value_from_js(value: Unknown) -> Result<Option<Value>> {
         ValueType::Object if value.is_array()? => Value::Array(
             Vec::<Unknown>::from_unknown(value)?
                 .into_iter()
-                .map(|item| Ok(value_from_js(item)?.unwrap_or(Value::Null)))
+                .map(|item| Ok(stack::grow(|| value_from_js(item))?.unwrap_or(Value::Null)))
                 .collect::<Result<_>>()?,
         ),
         ValueType::Object => {
             let object = Object::from_unknown(value)?;
             let mut map = Map::new();
             for key in Object::keys(&object)? {
-                if let Some(item) = value_from_js(get(&object, &key)?)? {
+                let item = get(&object, &key)?;
+                if let Some(item) = stack::grow(|| value_from_js(item))? {
                     map.insert(key.into(), item);
                 }
             }
@@ -299,7 +301,7 @@ pub fn attrs_to_js<'env>(env: &'env Env, attrs: &Attrs<'static>) -> Result<Unkno
 pub fn map_to_js<'env>(env: &'env Env, attrs: &Map) -> Result<Unknown<'env>> {
     let mut object = Object::new(env)?;
     for (key, item) in attrs.iter() {
-        object.set(key, to_js(env, item)?)?;
+        object.set(key, stack::grow(|| to_js(env, item))?)?;
     }
     Ok(object.to_unknown())
 }
@@ -324,7 +326,7 @@ fn ref_to_js<'env>(
     if value.is_array() {
         let mut array = env.create_array(value.len() as u32)?;
         for (index, item) in value.items().enumerate() {
-            array.set(index as u32, ref_to_js(env, item, attrs)?)?;
+            array.set(index as u32, stack::grow(|| ref_to_js(env, item, attrs))?)?;
         }
         let origin = Origin {
             _attrs: attrs.clone(),
@@ -335,7 +337,7 @@ fn ref_to_js<'env>(
     }
     let mut object = Object::new(env)?;
     for (key, item) in value.entries() {
-        object.set(key, ref_to_js(env, item, attrs)?)?;
+        object.set(key, stack::grow(|| ref_to_js(env, item, attrs))?)?;
     }
     Ok(object.to_unknown())
 }
@@ -344,12 +346,12 @@ fn to_js<'env>(env: &'env Env, value: &Value) -> Result<Unknown<'env>> {
     match value {
         Value::Null => Null.into_unknown(env),
         Value::Bool(value) => value.into_unknown(env),
-        Value::Number(value) => value.as_f64().unwrap_or(f64::NAN).into_unknown(env),
+        Value::Number(value) => value.as_f64().into_unknown(env),
         Value::String(value) => value.as_str().into_unknown(env),
         Value::Array(items) => {
             let mut array = env.create_array(items.len() as u32)?;
             for (index, item) in items.iter().enumerate() {
-                array.set(index as u32, to_js(env, item)?)?;
+                array.set(index as u32, stack::grow(|| to_js(env, item))?)?;
             }
             Ok(array.to_unknown())
         }

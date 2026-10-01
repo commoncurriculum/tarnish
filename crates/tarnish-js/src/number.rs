@@ -1,17 +1,74 @@
-use crate::json::{Number, Value};
+use std::fmt;
+
+use crate::json::Value;
 use crate::{Result, to_string, trim};
 
 /// `Number.MAX_SAFE_INTEGER`.
 pub const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
 
-/// A JavaScript number as JSON holds it: an integer where JavaScript holds one exactly, and
-/// `null` where it isn't finite, which is what `JSON.stringify` writes.
-pub fn number(double: f64) -> Value {
-    if double.fract() == 0.0 && double.abs() <= MAX_SAFE_INTEGER {
-        Value::Number(Number::from(double as i64))
-    } else {
-        Number::from_f64(double).map_or(Value::Null, Value::Number)
+/// A JavaScript number: a double, which is what `JSON.parse` reads every number as, so one past
+/// a double's range is ±Infinity. Two are equal as `===` compares them: 0 equals -0, and NaN
+/// equals nothing, itself included.
+#[derive(Clone, Copy, PartialEq)]
+pub struct Number(f64);
+
+impl Number {
+    #[inline]
+    pub fn as_f64(self) -> f64 {
+        self.0
     }
+
+    /// The number as an `i64`, when it is an integer an `i64` holds.
+    #[inline]
+    pub fn as_i64(self) -> Option<i64> {
+        // From -2^63, the least `i64`, to 2^63, one past the greatest.
+        const RANGE: std::ops::Range<f64> = -9.223_372_036_854_776e18..9.223_372_036_854_776e18;
+        (self.0.fract() == 0.0 && RANGE.contains(&self.0)).then_some(self.0 as i64)
+    }
+
+    /// The number as a `u64`, when it is an integer a `u64` holds.
+    #[inline]
+    pub fn as_u64(self) -> Option<u64> {
+        // Up to 2^64, one past the greatest `u64`.
+        const RANGE: std::ops::Range<f64> = 0.0..1.844_674_407_370_955_2e19;
+        (self.0.fract() == 0.0 && RANGE.contains(&self.0)).then_some(self.0 as u64)
+    }
+}
+
+impl From<f64> for Number {
+    #[inline]
+    fn from(double: f64) -> Number {
+        Number(double)
+    }
+}
+
+/// An integer as JavaScript holds it: the double nearest it, as `JSON.parse` reads its digits.
+macro_rules! number_from_integer {
+    ($($integer:ty),*) => {
+        $(
+            impl From<$integer> for Number {
+                #[inline]
+                fn from(integer: $integer) -> Number {
+                    Number(integer as f64)
+                }
+            }
+        )*
+    };
+}
+
+number_from_integer!(i8, i16, i32, i64, isize, u8, u16, u32, u64, usize);
+
+/// A number debugs as `String(number)`.
+impl fmt::Debug for Number {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(ryu_js::Buffer::new().format(self.0))
+    }
+}
+
+/// A JavaScript number as a JSON value, which `JSON.stringify` writes as `null` when it isn't
+/// finite.
+pub fn number(double: f64) -> Value {
+    Value::Number(Number(double))
 }
 
 /// `String(double)`.
@@ -29,14 +86,12 @@ pub enum WrittenNumber {
     Null,
 }
 
-pub fn written_number(number: &Number) -> WrittenNumber {
-    if let Some(integer) = number
-        .as_i64()
-        .filter(|integer| integer.unsigned_abs() as f64 <= MAX_SAFE_INTEGER)
-    {
-        return WrittenNumber::Integer(integer.into());
+pub fn written_number(number: Number) -> WrittenNumber {
+    let double = number.as_f64();
+    // Every integer up to 2^53 is its own shortest digits, which JavaScript writes.
+    if double.fract() == 0.0 && double.abs() <= MAX_SAFE_INTEGER {
+        return WrittenNumber::Integer(double as i128);
     }
-    let double = number.as_f64().unwrap_or(f64::NAN);
     if !double.is_finite() {
         return WrittenNumber::Null;
     }
@@ -44,11 +99,6 @@ pub fn written_number(number: &Number) -> WrittenNumber {
         Ok(integer) => WrittenNumber::Integer(integer),
         Err(_) => WrittenNumber::Float(double),
     }
-}
-
-/// `a === b` for numbers, which JavaScript holds as doubles, however JSON wrote them.
-pub fn same_number(a: &Number, b: &Number) -> bool {
-    a.as_f64() == b.as_f64()
 }
 
 /// `Number.parseInt(string)`.
@@ -88,7 +138,7 @@ pub fn to_number(value: Option<&Value>) -> Result<f64> {
         None => f64::NAN,
         Some(Value::Null) => 0.0,
         Some(Value::Bool(boolean)) => f64::from(u8::from(*boolean)),
-        Some(Value::Number(number)) => number.as_f64().unwrap_or(f64::NAN),
+        Some(Value::Number(number)) => number.as_f64(),
         Some(Value::String(string)) => string_to_number(string),
         Some(value) => string_to_number(&to_string(value)?),
     })

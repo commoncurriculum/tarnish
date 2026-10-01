@@ -7,8 +7,7 @@
 // - Each document, from fixtures/transform.json, the parses and a few of its own, records the
 //   innerHTML of an element that DOMSerializer.serializeFragment fills.
 // - Each inline style records what an element's style holds with the style attribute set to it,
-//   and the attribute that setting style.cssText to it writes. The engine's engine() is recorded
-//   too, for the tests to check that they run the same tarnish-css natively.
+//   and the attribute that setting style.cssText to it writes.
 // - Each DOM output spec records the outerHTML of what DOMSerializer.renderSpec makes of it.
 // - Each node records what an attribute set to it holds, as renderSpec sets one to a
 //   {dom, contentDOM}: a link's href, resolved against its document's base URL, or else the name
@@ -555,8 +554,6 @@ const styles = css.map(text => {
     cssText: written.getAttribute("style"),
   }
 })
-// The same module instance as element.style's, which the styles above have started.
-const { engine } = await import(new URL("shared/css/engine.js", import.meta.resolve("linkedom")))
 
 const specs = [
   ["div", { class: "a", "data-X": "1", title: `a "b" & c${nbsp}<d>` }, "text & <more>", ["span", 0]],
@@ -706,7 +703,6 @@ function nodeOf(owner, { element, href, node }) {
 
 const spec = { topNode: schema.topNodeType.name, nodes: schema.spec.nodes.toObject(), marks: schema.spec.marks.toObject() }
 writeFixture("dom", {
-  engine: engine(),
   schema: spec,
   parses,
   serializes,

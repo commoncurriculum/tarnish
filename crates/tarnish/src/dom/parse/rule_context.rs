@@ -7,6 +7,7 @@ use crate::js::is_whitespace_unit;
 
 impl<'p, D: Dom> ParseContext<'p, D> {
     /// Whether the context string matches the nodes being parsed into.
+    // bounded: once, as the alternatives split at `|` hold none
     pub(super) fn matches_context(&self, context: &str) -> Result<bool> {
         if context.contains('|') {
             for part in split_alternatives(context) {
@@ -36,6 +37,7 @@ impl<'p, D: Dom> ParseContext<'p, D> {
         )
     }
 
+    // bounded: as deep as a parse rule's context has parts, which the schema gives
     fn match_parts(
         &self,
         parts: &[&str],

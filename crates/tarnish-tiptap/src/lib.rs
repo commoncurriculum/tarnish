@@ -62,3 +62,6 @@ pub type DomSpec<'a> = tarnish::dom::DomSpec<'a, HtmlNode>;
 
 /// The version of `@tiptap/core`, `@tiptap/markdown` and Tiptap's extensions this crate ports.
 pub const TIPTAP: &str = "3.30.0";
+
+/// The version of `tiptap-extension-flat-list` `extensions::flat_list` ports.
+pub const FLAT_LIST: &str = "0.1.1";

@@ -18,7 +18,6 @@ use crate::model::{Fragment, Mark, Node, TextRef};
 use crate::{Error, Result};
 
 /// What a node's or mark's `toDOM` gives: ProseMirror's `DOMOutputSpec`.
-#[derive(Clone)]
 pub enum DomSpec<'a, N> {
     /// A DOM element to use as it is.
     Node(N),
@@ -68,12 +67,14 @@ impl<N> From<Value> for DomSpec<'_, N> {
     }
 }
 
-/// An array read from JSON nests as deeply as the JSON does, so each level drops on the stack
-/// segments `stack::grow` adds.
+/// An array read from JSON nests as deeply as the JSON does, and an element as deeply as what
+/// built it, so each level drops on the stack segments `stack::grow` adds.
 impl<N> Drop for DomSpec<'_, N> {
     fn drop(&mut self) {
-        if let DomSpec::Array { items, .. } = self {
-            stack::drop_nested(items);
+        match self {
+            DomSpec::Array { items, .. } => stack::drop_nested(items),
+            DomSpec::Element { children, .. } => stack::drop_nested(children),
+            _ => {}
         }
     }
 }
@@ -317,6 +318,7 @@ impl<N: Clone> DomSerializer<N> {
     }
 
     /// `serializeFragment`'s walk, rendering to `target`.
+    // guarded: `fill` grows the stack before it writes a node's content
     pub fn write_fragment<T: Target<N>>(
         &self,
         fragment: &Fragment<'static>,
@@ -604,6 +606,8 @@ fn text<D: Dom>(dom: &D, text: &str) -> Result<Rendered<D::Node>> {
     })
 }
 
+// bounded: once, for a value's array, which renders as the array spec it reads as; children
+// render through `fill`, which grows the stack
 fn render<D: Dom>(
     dom: &D,
     structure: &DomSpec<D::Node>,
@@ -728,7 +732,7 @@ fn fill<D: Dom>(
 pub fn is_hole<N>(child: &DomSpec<N>) -> bool {
     match child {
         DomSpec::Hole => true,
-        DomSpec::Value(Value::Number(number)) => number.as_f64() == Some(0.0),
+        DomSpec::Value(Value::Number(number)) => number.as_f64() == 0.0,
         DomSpec::Attr(value) => value.as_f64() == Some(0.0),
         _ => false,
     }

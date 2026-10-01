@@ -4,8 +4,11 @@
 
 use std::borrow::Cow;
 
-use tarnish_js::json::{self, Map, Value, json};
+use tarnish_js::json::{self, Map, Value, array_index, json};
 use tarnish_js::{Class, Error, MAX_SAFE_INTEGER};
+
+/// The version of zod this crate ports.
+pub const ZOD: &str = "4.5.4";
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Schema {
@@ -127,7 +130,7 @@ impl Schema {
 
     /// `schema.pick(mask)`, for an object schema: the mask's fields, in the mask's order.
     pub fn pick(&self, mask: &[&str]) -> Schema {
-        Schema::Object(mask.iter().map(|key| self.entry(key).clone()).collect())
+        self.reshaped(mask.iter().map(|key| self.entry(key).clone()).collect())
     }
 
     /// `schema.omit(mask)`, for an object schema: the other fields, in the shape's order.
@@ -137,13 +140,13 @@ impl Schema {
             self.entry(key);
         }
         let kept = self.shape().iter().filter(|(key, _)| !mask.contains(key));
-        Schema::Object(kept.cloned().collect())
+        self.reshaped(kept.cloned().collect())
     }
 
     /// `schema.partial()`, for an object schema: each field `.optional()`.
     pub fn partial(&self) -> Schema {
         let fields = self.shape().iter();
-        Schema::Object(
+        self.reshaped(
             fields
                 .map(|(key, field)| (*key, field.clone().optional()))
                 .collect(),
@@ -160,7 +163,30 @@ impl Schema {
                 None => fields.push((key, field)),
             }
         }
-        Schema::Object(fields)
+        self.reshaped(fields)
+    }
+
+    /// An object schema with `shape`, strict where this one is, as zod's object methods keep
+    /// the rest of the schema they're called on.
+    fn reshaped(&self, shape: Vec<(&'static str, Schema)>) -> Schema {
+        match self {
+            Schema::StrictObject(_) => Schema::StrictObject(shape),
+            _ => Schema::Object(shape),
+        }
+    }
+
+    /// Whether the schema puts a value in place of `undefined`, as `.default()` does, which zod
+    /// calls an `optin` of `"defaulted"`: `.optional()` and `.catch()` keep it from the schema
+    /// they wrap.
+    // bounded: as deep as the schema, which code builds, nests
+    fn defaults(&self) -> bool {
+        match self {
+            Schema::Default(..) => true,
+            Schema::Optional(inner) | Schema::Nullable(inner) | Schema::Catch(inner, _) => {
+                inner.defaults()
+            }
+            _ => false,
+        }
     }
 
     /// `schema.unwrap()` of the schemas that wrap one: optional, nullable, default and catch.
@@ -192,7 +218,7 @@ impl Schema {
 
     /// `schema.parse(value)` where `None` is `undefined`. `Ok(None)` is an `undefined` result.
     pub fn parse(&self, value: Option<&Value>) -> Parsed {
-        let parsed = collecting(|issues| self.run(value, &Path::Root, issues))?;
+        let parsed = collecting(|issues| self.run(value.into(), &Path::Root, issues))?;
         Ok(parsed.map(Cow::into_owned))
     }
 
@@ -238,7 +264,7 @@ impl Schema {
         match value {
             Some(Value::Object(entries)) => self.properties(map_properties(entries), issues),
             _ => {
-                type_issue(value, "object", &Path::Root, issues);
+                type_issue(value.into(), "object", &Path::Root, issues);
                 Fields(Vec::new())
             }
         }
@@ -260,40 +286,62 @@ impl Schema {
         Fields(fields)
     }
 
-    /// The value parsed from `value`: `value` itself wherever it passes as it is.
+    /// The value parsed from `input`: the value itself wherever it passes as it is.
+    // bounded: as deep as the schema, which code builds, nests
     fn run<'v>(
         &'v self,
-        value: Option<&'v Value>,
+        input: Input<'v>,
         path: &Path,
         issues: &mut Sink,
     ) -> Option<Cow<'v, Value>> {
         match self {
-            Schema::Optional(inner) => value.and_then(|value| inner.run(Some(value), path, issues)),
-            Schema::Nullable(inner) => match value {
-                Some(null @ Value::Null) => Some(Cow::Borrowed(null)),
-                other => inner.run(other, path, issues),
+            Schema::Optional(inner) => match input {
+                // `undefined` passes as it is, unless the schema wrapped puts a value in its
+                // place: then that value, or `undefined` where it raises an issue, which zod
+                // drops.
+                Input::Undefined if inner.defaults() => {
+                    let mut inner_issues = Sink::Count(0);
+                    let parsed = inner.run(input, path, &mut inner_issues);
+                    parsed.filter(|_| inner_issues.is_empty())
+                }
+                Input::Undefined => None,
+                _ => inner.run(input, path, issues),
             },
-            Schema::Default(inner, default) => match value {
-                None => Some(Cow::Borrowed(default)),
-                Some(value) => inner.run(Some(value), path, issues),
+            Schema::Nullable(inner) => match input {
+                Input::Value(null @ Value::Null) => Some(Cow::Borrowed(null)),
+                _ => inner.run(input, path, issues),
+            },
+            // The default stands for `undefined`, given or parsed.
+            Schema::Default(inner, default) => match input {
+                Input::Undefined => Some(Cow::Borrowed(default)),
+                _ => inner
+                    .run(input, path, issues)
+                    .or(Some(Cow::Borrowed(default))),
             },
             Schema::Catch(inner, caught) => {
                 let mut inner_issues = Sink::Count(0);
-                let parsed = inner.run(value, path, &mut inner_issues);
+                let parsed = inner.run(input, path, &mut inner_issues);
                 if inner_issues.is_empty() {
                     parsed
                 } else {
                     caught.as_ref().map(Cow::Borrowed)
                 }
             }
-            Schema::String => check_type(value, "string", Value::is_string, path, issues),
-            Schema::Boolean => check_type(value, "boolean", Value::is_boolean, path, issues),
-            Schema::Number => match value.and_then(Value::as_f64) {
-                Some(number) if number.is_finite() => value.map(Cow::Borrowed),
-                _ => type_issue(value, "number", path, issues),
+            Schema::String => check_type(input, "string", Value::is_string, path, issues),
+            Schema::Boolean => check_type(input, "boolean", Value::is_boolean, path, issues),
+            Schema::Number => match input.value() {
+                Some(value @ Value::Number(number)) if number.as_f64().is_finite() => {
+                    Some(Cow::Borrowed(value))
+                }
+                _ => type_issue(input, "number", path, issues),
             },
-            Schema::Int => match value.and_then(Value::as_f64) {
-                None => type_issue(value, "number", path, issues),
+            // `z.int()` checks the numbers `z.number()` passes.
+            Schema::Int => match input
+                .value()
+                .and_then(Value::as_f64)
+                .filter(|number| number.is_finite())
+            {
+                None => type_issue(input, "number", path, issues),
                 Some(number) if number.fract() != 0.0 => {
                     issues.add(|| Issue {
                         fields: vec![
@@ -312,39 +360,26 @@ impl Schema {
                 Some(number) if number < -MAX_SAFE_INTEGER => {
                     bound_issue("too_small", "minimum", ">=", -1.0, path, issues)
                 }
-                Some(_) => value.map(Cow::Borrowed),
+                Some(_) => input.value().map(Cow::Borrowed),
             },
-            Schema::Enum(options) => match value.and_then(Value::as_str) {
-                Some(string) if options.contains(&string) => value.map(Cow::Borrowed),
+            Schema::Enum(options) => match input.value() {
+                Some(value @ Value::String(string)) if options.contains(&string.as_str()) => {
+                    Some(Cow::Borrowed(value))
+                }
                 _ => {
-                    issues.add(|| {
-                        let listed = options
-                            .iter()
-                            .map(|option| format!("\"{option}\""))
-                            .collect::<Vec<_>>();
-                        Issue {
-                            fields: vec![
-                                ("code", json!("invalid_value")),
-                                ("values", json!(options)),
-                            ],
-                            path: path_values(path),
-                            message: format!(
-                                "Invalid option: expected one of {}",
-                                listed.join("|")
-                            ),
-                        }
-                    });
+                    issues.add(|| enum_issue(options, path));
                     None
                 }
             },
             Schema::Array(item) => {
-                let Some(array @ Value::Array(items)) = value else {
-                    return type_issue(value, "array", path, issues);
+                let Some(array @ Value::Array(items)) = input.value() else {
+                    return type_issue(input, "array", path, issues);
                 };
                 // A copy of the items, made from the first one that parses to something else.
                 let mut parsed: Option<Vec<Value>> = None;
                 for (index, entry) in items.iter().enumerate() {
-                    let result = item.run(Some(entry), &path.join(Segment::Index(index)), issues);
+                    let path = path.join(Segment::Index(index));
+                    let result = item.run(Input::Value(entry), &path, issues);
                     if parsed.is_none() && is_itself(&result, entry) {
                         continue;
                     }
@@ -357,8 +392,8 @@ impl Schema {
                 }))
             }
             Schema::Object(shape) | Schema::StrictObject(shape) => {
-                let Some(Value::Object(entries)) = value else {
-                    return type_issue(value, "object", path, issues);
+                let Some(Value::Object(entries)) = input.value() else {
+                    return type_issue(input, "object", path, issues);
                 };
                 let mut object = Map::with_capacity(shape.len());
                 // The shape's keys are distinct.
@@ -382,14 +417,18 @@ impl Schema {
                 Some(Cow::Owned(Value::Object(object)))
             }
             Schema::Record(item) => {
-                let Some(record @ Value::Object(entries)) = value else {
-                    return type_issue(value, "record", path, issues);
+                let Some(record @ Value::Object(entries)) = input.value() else {
+                    return type_issue(input, "record", path, issues);
                 };
-                // A copy of the entries, made from the first one that parses to something else.
+                // A copy of the entries, made from the first one that parses to something else
+                // or that a record leaves out.
                 let mut parsed: Option<Map> = None;
                 for (index, (key, entry)) in entries.iter().enumerate() {
-                    let result = item.run(Some(entry), &path.join(Segment::Key(key)), issues);
-                    if parsed.is_none() && is_itself(&result, entry) {
+                    let result = match key.as_str() {
+                        PROTO => None,
+                        _ => item.run(Input::Value(entry), &path.join(Segment::Key(key)), issues),
+                    };
+                    if parsed.is_none() && key != PROTO && is_itself(&result, entry) {
                         continue;
                     }
                     let parsed = parsed.get_or_insert_with(|| {
@@ -410,8 +449,61 @@ impl Schema {
     }
 }
 
-/// An object schema's fields parsed from the object `property` reads, in the shape's order,
-/// without the keys it doesn't have.
+/// What JavaScript reads where a parse reads a value: `undefined`, a JSON value, or, for a
+/// property an object doesn't have of its own, the function every object inherits from
+/// `Object.prototype` under that name.
+#[derive(Clone, Copy)]
+enum Input<'v> {
+    Undefined,
+    Value(&'v Value),
+    Inherited,
+}
+
+impl<'v> Input<'v> {
+    fn value(self) -> Option<&'v Value> {
+        match self {
+            Input::Value(value) => Some(value),
+            Input::Undefined | Input::Inherited => None,
+        }
+    }
+
+    /// The property `key` of an object, which has `own` of its own under that name.
+    fn property(key: &str, own: Option<&'v Value>) -> Input<'v> {
+        match own {
+            Some(value) => Input::Value(value),
+            None if INHERITED.contains(&key) => Input::Inherited,
+            None => Input::Undefined,
+        }
+    }
+}
+
+impl<'v> From<Option<&'v Value>> for Input<'v> {
+    fn from(value: Option<&'v Value>) -> Input<'v> {
+        value.map_or(Input::Undefined, Input::Value)
+    }
+}
+
+/// The key under which a JavaScript object's prototype is, which neither an object schema nor a
+/// record parses: zod leaves it out of what it makes.
+const PROTO: &str = "__proto__";
+
+/// The functions every JavaScript object inherits from `Object.prototype`, by name.
+const INHERITED: &[&str] = &[
+    "constructor",
+    "hasOwnProperty",
+    "isPrototypeOf",
+    "propertyIsEnumerable",
+    "toLocaleString",
+    "toString",
+    "valueOf",
+    "__defineGetter__",
+    "__defineSetter__",
+    "__lookupGetter__",
+    "__lookupSetter__",
+];
+
+/// An object schema's fields parsed from the object `property` reads, in the order a JavaScript
+/// object holds the shape's keys, without the keys it doesn't have.
 fn object_entries<'v>(
     shape: &'v [(&'static str, Schema)],
     mut property: impl FnMut(&str) -> Option<&'v Value>,
@@ -419,11 +511,29 @@ fn object_entries<'v>(
     issues: &mut Sink,
     mut field_parsed: impl FnMut(&'static str, Cow<'v, Value>),
 ) {
-    for (key, field) in shape {
-        if let Some(result) = field.run(property(key), &path.join(Segment::Key(key)), issues) {
+    for (key, field) in in_js_order(shape) {
+        if *key == PROTO {
+            continue;
+        }
+        let input = Input::property(key, property(key));
+        if let Some(result) = field.run(input, &path.join(Segment::Key(key)), issues) {
             field_parsed(key, result);
         }
     }
+}
+
+/// The shape's entries in the order a JavaScript object holds keys: array indices first,
+/// ascending, then the rest in their order.
+fn in_js_order<'s>(
+    shape: &'s [(&'static str, Schema)],
+) -> impl Iterator<Item = &'s (&'static str, Schema)> {
+    let mut indices: Vec<_> = shape
+        .iter()
+        .filter_map(|entry| Some((array_index(entry.0)?, entry)))
+        .collect();
+    indices.sort_by_key(|(index, _)| *index);
+    let rest = shape.iter().filter(|(key, _)| array_index(key).is_none());
+    indices.into_iter().map(|(_, entry)| entry).chain(rest)
 }
 
 /// The properties of an object's `entries`, as a shape reads them. The shape's keys are
@@ -522,15 +632,40 @@ impl Sink {
 }
 
 fn check_type<'v>(
-    value: Option<&'v Value>,
+    input: Input<'v>,
     expected: &str,
     matches: fn(&Value) -> bool,
     path: &Path,
     issues: &mut Sink,
 ) -> Option<Cow<'v, Value>> {
-    match value {
-        Some(value) if matches(value) => Some(Cow::Borrowed(value)),
-        _ => type_issue(value, expected, path, issues),
+    match input {
+        Input::Value(value) if matches(value) => Some(Cow::Borrowed(value)),
+        _ => type_issue(input, expected, path, issues),
+    }
+}
+
+/// The issue of a value an enum doesn't list. zod lists the options as the keys of an object
+/// holding them: each once, array indices first.
+fn enum_issue(options: &[&str], path: &Path) -> Issue {
+    let mut values: Vec<&str> = Vec::with_capacity(options.len());
+    for option in options {
+        if !values.contains(option) {
+            values.push(option);
+        }
+    }
+    values.sort_by_key(|value| array_index(value).map_or((1, 0), |index| (0, index)));
+    let message = match values[..] {
+        [only] => format!("Invalid input: expected \"{only}\""),
+        _ => {
+            let listed = values.iter().map(|value| format!("\"{value}\""));
+            let listed: Vec<_> = listed.collect();
+            format!("Invalid option: expected one of {}", listed.join("|"))
+        }
+    };
+    Issue {
+        fields: vec![("code", json!("invalid_value")), ("values", json!(values))],
+        path: path_values(path),
+        message,
     }
 }
 
@@ -548,26 +683,36 @@ fn unrecognized_keys(keys: &[&str], path: &Path) -> Issue {
 }
 
 fn type_issue<'v>(
-    value: Option<&Value>,
+    input: Input,
     expected: &str,
     path: &Path,
     issues: &mut Sink,
 ) -> Option<Cow<'v, Value>> {
     issues.add(|| {
-        let received = match value {
-            None => "undefined",
-            Some(Value::Null) => "null",
-            Some(Value::Bool(_)) => "boolean",
-            Some(Value::Number(_)) => "number",
-            Some(Value::String(_)) => "string",
-            Some(Value::Array(_)) => "array",
-            Some(Value::Object(_)) => "object",
+        let received = match input {
+            Input::Undefined => "undefined".into(),
+            Input::Inherited => "function".into(),
+            Input::Value(Value::Null) => "null".into(),
+            Input::Value(Value::Bool(_)) => "boolean".into(),
+            Input::Value(Value::Number(number)) if number.as_f64().is_finite() => "number".into(),
+            // NaN and ±Infinity are named by their value.
+            Input::Value(Value::Number(number)) => {
+                Cow::Owned(tarnish_js::number_to_string(number.as_f64()))
+            }
+            Input::Value(Value::String(_)) => "string".into(),
+            Input::Value(Value::Array(_)) => "array".into(),
+            Input::Value(Value::Object(_)) => "object".into(),
         };
+        let mut fields = vec![
+            ("expected", json!(expected)),
+            ("code", json!("invalid_type")),
+        ];
+        // A number `z.number()` refuses, which is NaN or ±Infinity, it names in the issue too.
+        if expected == "number" && matches!(input, Input::Value(Value::Number(_))) {
+            fields.push(("received", json!(received.as_ref())));
+        }
         Issue {
-            fields: vec![
-                ("expected", json!(expected)),
-                ("code", json!("invalid_type")),
-            ],
+            fields,
             path: path_values(path),
             message: format!("Invalid input: expected {expected}, received {received}"),
         }
@@ -626,6 +771,7 @@ impl<'a> Path<'a> {
     }
 }
 
+// bounded: as long as a path into the schema, which code builds
 fn path_values(path: &Path) -> Vec<Value> {
     let Path::Step(parent, segment) = *path else {
         return Vec::new();

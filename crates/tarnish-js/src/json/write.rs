@@ -37,7 +37,7 @@ pub fn write_value(out: &mut String, value: &Value) {
             Event::Scalar(Value::Bool(boolean)) => {
                 out.push_str(if *boolean { "true" } else { "false" })
             }
-            Event::Scalar(Value::Number(number)) => write_number(out, number),
+            Event::Scalar(Value::Number(number)) => write_number(out, *number),
             Event::Scalar(Value::String(string)) => write_string(out, string),
             Event::Open(Value::Array(_)) => {
                 out.push('[');
@@ -71,10 +71,9 @@ impl fmt::Debug for Value {
     }
 }
 
-// JavaScript holds every number as a double, so a parsed integer beyond 2^53 has already lost
-// its low digits by the time it is written back out.
-pub fn write_number(out: &mut String, number: &Number) {
-    let double = number.as_f64().unwrap_or(f64::NAN);
+/// `JSON.stringify(number)`, which is `null` for a number that isn't finite.
+pub fn write_number(out: &mut String, number: Number) {
+    let double = number.as_f64();
     if double.is_finite() {
         out.push_str(ryu_js::Buffer::new().format_finite(double));
     } else {

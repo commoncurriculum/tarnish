@@ -95,12 +95,7 @@ impl HtmlNode {
     /// `closest`: this element or the nearest one above it that matches the selector.
     pub fn closest(&self, selector: &str) -> Result<Option<HtmlNode>> {
         let selectors = self.dom.selectors(selector)?;
-        let tree = self.dom.tree();
-        let found = std::iter::once(self.id)
-            .chain(tree.ancestors(self.id))
-            .filter(|&id| tree.element(id).is_some())
-            .find(|&id| select::matches(&tree, id, &selectors, id));
-        drop(tree);
+        let found = select::closest(&self.dom.tree(), self.id, &selectors);
         Ok(found.map(|id| self.dom.node(id)))
     }
 

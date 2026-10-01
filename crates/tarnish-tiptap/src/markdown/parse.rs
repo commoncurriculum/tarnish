@@ -388,8 +388,31 @@ fn apply_mark_to_content(mark: &str, content: Vec<Value>, attrs: Option<&Map>) -
 
 #[cfg(test)]
 mod tests {
+    use tarnish_js::json::{Value, json};
     use tarnish_js::random::strings;
     use tarnish_js::regexp::RegExp;
+    use tarnish_js::stack::on_dirty_scheduler_stack;
+
+    /// A mark around inline nodes that hold content, nested far deeper than a small stack could
+    /// recurse through, as an extension's may: the mark goes on the text at the bottom.
+    #[test]
+    fn marks_apply_to_content_as_deep_as_memory_allows() {
+        on_dirty_scheduler_stack(|| {
+            const DEPTH: usize = 20_000;
+            let text = json!({"type": "text", "text": "x"});
+            let nested =
+                (0..DEPTH).fold(text, |inner, _| json!({"type": "span", "content": [inner]}));
+            let mut marked = super::apply_mark_to_content("bold", vec![nested], None);
+            let mut depth = 0;
+            while let Some(Value::Array(content)) = marked[0].get_mut("content") {
+                marked = std::mem::take(content);
+                depth += 1;
+            }
+            assert_eq!(depth, DEPTH);
+            let text = json!({"type": "text", "text": "x", "marks": [{"type": "bold"}]});
+            assert_eq!(marked, vec![text]);
+        });
+    }
 
     #[test]
     fn count_paragraph_separators_matches_its_regexes() {

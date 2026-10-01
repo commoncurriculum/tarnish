@@ -3,7 +3,6 @@
 
 use crate::chunk::JsonView;
 use crate::chunk::Kind;
-use crate::js;
 use crate::js::stack;
 use crate::json::{Map, Value};
 
@@ -26,7 +25,7 @@ pub(crate) fn deep_equal<'a, 'b>(a: impl JsonView<'a>, b: impl JsonView<'b>) -> 
     match (a.kind(), b.kind()) {
         (Kind::Null, Kind::Null) => true,
         (Kind::Bool(a), Kind::Bool(b)) => a == b,
-        (Kind::Number(a), Kind::Number(b)) => js::same_number(&a, &b),
+        (Kind::Number(a), Kind::Number(b)) => a == b,
         (Kind::String(a), Kind::String(b)) => a == b,
         (Kind::Array(_), Kind::Array(_)) => {
             let (a, b) = (a.items(), b.items());

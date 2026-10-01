@@ -110,8 +110,7 @@ impl<'a> Slice<'a> {
         }
         let depth = |value: Option<&Value>| match value {
             value if !js::truthy(value) => Some(0),
-            Some(Value::Number(number)) => number
-                .as_f64()
+            Some(Value::Number(number)) => Some(number.as_f64())
                 .filter(|number| number.fract() == 0.0 && *number >= 0.0)
                 .map(|number| number as usize),
             _ => None,

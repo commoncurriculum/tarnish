@@ -30,6 +30,6 @@ defmodule Tarnish.NIFTest do
     nif = Path.expand("../lib/tarnish/nif.ex", __DIR__)
     library = Application.app_dir(:tarnish, "priv/native/tarnish_test_native")
 
-    assert {"loaded", 0} = System.cmd("elixir", [script, nif, library], stderr_to_stdout: true)
+    assert System.cmd("elixir", [script, nif, library], stderr_to_stdout: true) === {"loaded", 0}
   end
 end
