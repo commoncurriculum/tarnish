@@ -1,9 +1,8 @@
 //! `@tiptap/extension-bold`.
 
 use crate::DomSpec;
-use crate::GetAttrs;
 use crate::markdown::{RenderContext, RenderHelpers};
-use crate::{MarkExtension, ParseHtml};
+use crate::{GetAttrsResult, MarkExtension, ParseHtml};
 use tarnish::Map as Attrs;
 use tarnish::json::Value;
 use tarnish_js::Error;
@@ -17,9 +16,12 @@ pub fn bold() -> MarkExtension {
                 .into(),
             ParseHtml::style("font-weight=400").clears_mark().into(),
             ParseHtml::style("font-weight")
-                .get_attrs(|value| match is_bold_weight(value) {
-                    true => GetAttrs::Null,
-                    false => GetAttrs::False,
+                .get_attrs(|value| {
+                    Ok(if is_bold_weight(value) {
+                        GetAttrsResult::Defaults
+                    } else {
+                        GetAttrsResult::Reject
+                    })
                 })
                 .into(),
         ])

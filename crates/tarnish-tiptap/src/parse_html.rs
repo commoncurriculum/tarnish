@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use tarnish::dom::{
     Content, ContentElement, ElementRule, GetAttrsResult, Namespace, ParseRule, Rule,
-    StyleRule as DomStyleRule, TagRule as DomTagRule,
+    StyleAttrsHook, StyleRule as DomStyleRule, TagRule as DomTagRule,
 };
 use tarnish::{Map, Result, Value, js};
 use tarnish_html::HtmlNode;
@@ -12,20 +12,9 @@ use tarnish_html::HtmlNode;
 use super::attributes::ExtensionAttribute;
 
 /// A tag rule's `getAttrs`, given the element: `None` for `false`.
-pub type TagAttrs = Arc<dyn Fn(&HtmlNode) -> Result<Option<Map>> + Send + Sync>;
+type TagAttrs = Arc<dyn Fn(&HtmlNode) -> Result<Option<Map>> + Send + Sync>;
 /// A tag rule's `contentElement`, given the element.
-pub type ContentHook = Arc<dyn Fn(&HtmlNode) -> Result<HtmlNode> + Send + Sync>;
-/// A style rule's `getAttrs`, given the style's value.
-pub type StyleAttrs = fn(&str) -> GetAttrs;
-
-/// What a style rule's `getAttrs` returns.
-pub enum GetAttrs {
-    /// `false`: the rule doesn't match.
-    False,
-    /// `null`: it matches, with no attributes.
-    Null,
-    Attrs(Map),
-}
+type ContentHook = Arc<dyn Fn(&HtmlNode) -> Result<HtmlNode> + Send + Sync>;
 
 #[derive(Clone)]
 pub enum ParseHtml {
@@ -51,7 +40,7 @@ pub struct TagRule {
 pub struct StyleRule {
     style: &'static str,
     consuming: bool,
-    get_attrs: Option<StyleAttrs>,
+    get_attrs: Option<StyleAttrsHook>,
     clear_mark: bool,
 }
 
@@ -116,8 +105,11 @@ impl StyleRule {
         self
     }
 
-    pub fn get_attrs(mut self, get_attrs: StyleAttrs) -> Self {
-        self.get_attrs = Some(get_attrs);
+    pub fn get_attrs(
+        mut self,
+        get_attrs: impl Fn(&str) -> Result<GetAttrsResult> + Send + Sync + 'static,
+    ) -> Self {
+        self.get_attrs = Some(Arc::new(get_attrs));
         self
     }
 
@@ -206,15 +198,7 @@ pub(crate) fn parse_rules(
                 consuming,
                 ..Rule::new(DomStyleRule {
                     style: style.into(),
-                    get_attrs: get_attrs.map(|get_attrs| {
-                        Arc::new(move |value: &str| {
-                            Ok(match get_attrs(value) {
-                                GetAttrs::False => GetAttrsResult::Reject,
-                                GetAttrs::Null => GetAttrsResult::Defaults,
-                                GetAttrs::Attrs(attrs) => GetAttrsResult::Attrs(attrs),
-                            })
-                        }) as _
-                    }),
+                    get_attrs,
                     clear_mark: clear_mark.then(|| {
                         Arc::new(move |mark: &tarnish::Mark<'static>| {
                             Ok(mark.mark_type().name() == name)

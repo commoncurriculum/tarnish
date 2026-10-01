@@ -3,8 +3,7 @@
 use std::sync::LazyLock;
 
 use crate::DomSpec;
-use crate::GetAttrs;
-use crate::{MarkExtension, ParseHtml};
+use crate::{GetAttrsResult, MarkExtension, ParseHtml};
 use tarnish::Map as Attrs;
 use tarnish_js::Error;
 use tarnish_js::regexp::RegExp;
@@ -18,9 +17,12 @@ pub fn underline() -> MarkExtension {
             ParseHtml::tag("u").into(),
             ParseHtml::style("text-decoration")
                 .not_consuming()
-                .get_attrs(|value| match value.contains("underline") {
-                    true => GetAttrs::Attrs(Attrs::new()),
-                    false => GetAttrs::False,
+                .get_attrs(|value| {
+                    Ok(if value.contains("underline") {
+                        GetAttrsResult::Attrs(Attrs::new())
+                    } else {
+                        GetAttrsResult::Reject
+                    })
                 })
                 .into(),
         ])

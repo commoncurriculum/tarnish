@@ -1,9 +1,8 @@
 //! `@tiptap/extension-strike`.
 
 use crate::DomSpec;
-use crate::GetAttrs;
 use crate::markdown::{RenderContext, RenderHelpers};
-use crate::{MarkExtension, ParseHtml};
+use crate::{GetAttrsResult, MarkExtension, ParseHtml};
 use tarnish::Map as Attrs;
 use tarnish::json::Value;
 use tarnish_js::Error;
@@ -16,9 +15,12 @@ pub fn strike() -> MarkExtension {
             ParseHtml::tag("strike").into(),
             ParseHtml::style("text-decoration")
                 .not_consuming()
-                .get_attrs(|value| match value.contains("line-through") {
-                    true => GetAttrs::Attrs(Attrs::new()),
-                    false => GetAttrs::False,
+                .get_attrs(|value| {
+                    Ok(if value.contains("line-through") {
+                        GetAttrsResult::Attrs(Attrs::new())
+                    } else {
+                        GetAttrsResult::Reject
+                    })
                 })
                 .into(),
         ])
