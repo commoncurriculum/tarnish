@@ -10,6 +10,7 @@
 use std::ops::{Range, RangeInclusive};
 use std::sync::LazyLock;
 
+use super::matchers::run;
 use tarnish_js as js;
 use tarnish_js::utf16::{find, unit};
 
@@ -180,11 +181,6 @@ fn flank(before: Kind, after: Kind, between_others: bool) -> Option<Flank> {
         (Other, Other) if between_others => Some(Flank::Either),
         _ => None,
     }
-}
-
-/// How many units from `at` on `each` holds for.
-fn run(src: &[u16], at: usize, each: impl Fn(u16) -> bool) -> usize {
-    src[at..].iter().take_while(|&&unit| each(unit)).count()
 }
 
 /// The code point at `at`, as a regex with the `u` flag reads it: a surrogate pair's, or a

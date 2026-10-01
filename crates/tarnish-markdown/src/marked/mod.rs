@@ -11,7 +11,7 @@ mod tokenizer;
 mod tokens;
 
 pub use lexer::Lexer;
-pub(crate) use matchers::{hr, indent};
+pub(crate) use matchers::{hr, indent, run};
 pub use tokens::{Cell, Def, Destination, List, Table, Token, TokenData, Tokens};
 
 use tarnish_js::Error;
