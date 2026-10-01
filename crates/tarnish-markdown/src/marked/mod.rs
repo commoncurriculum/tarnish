@@ -6,7 +6,7 @@ mod helpers;
 mod json;
 mod lexer;
 mod matchers;
-pub mod rules;
+mod rules;
 mod tokenizer;
 mod tokens;
 
