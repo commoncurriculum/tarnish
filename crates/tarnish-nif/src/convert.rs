@@ -11,10 +11,8 @@
 use std::any::Any;
 use std::panic::AssertUnwindSafe;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 
-use rustler::types::atom;
 use rustler::types::tuple::get_tuple;
 use rustler::{Encoder, Env, Term, TermType};
 use tarnish::js::deadline;
@@ -147,9 +145,10 @@ enum Input {
     Document(Result<Node<'static>, Error>),
 }
 
-/// A request's result: its JSON, or the document `parseHTML` made, whose JSON can be written
-/// straight from its nodes.
+/// A request's result: a serialization's text, `parseMarkdown`'s JSON, or the document
+/// `parseHTML` made, whose JSON can be written straight from its nodes.
 enum Answer {
+    Text(String),
     Json(Value),
     Document(Node<'static>),
 }
@@ -157,8 +156,21 @@ enum Answer {
 impl Answer {
     fn into_json(self) -> Value {
         match self {
+            Answer::Text(text) => Value::String(text),
             Answer::Json(json) => json,
             Answer::Document(document) => document.to_json(),
+        }
+    }
+}
+
+/// The term Jason decodes from the result's JSON.
+impl Encoder for Answer {
+    fn encode<'a>(&self, env: Env<'a>) -> Term<'a> {
+        let mut writer = Writer::new(env);
+        match self {
+            Answer::Text(text) => writer.text(text),
+            Answer::Json(json) => writer.write(json),
+            Answer::Document(document) => writer.fields(document.view()),
         }
     }
 }
@@ -167,20 +179,19 @@ impl Answer {
 fn answer(conversions: &dyn Conversions, request: Request<Value, Input>) -> Result<Answer, String> {
     let options = request.options.as_ref();
     let schema = conversions.schema();
-    let serialized = |text| Answer::Json(Value::String(text));
     let answered = match (request.operation.as_str(), request.input) {
         (Some("parseMarkdown"), Input::Json(Value::String(ref markdown))) => conversions
             .parse_markdown(markdown, options)
             .map(Answer::Json),
         (Some("serializeMarkdown"), Input::Json(ref document @ Value::Object(_))) => conversions
             .serialize_markdown(document, options)
-            .map(serialized),
+            .map(Answer::Text),
         (Some("parseHTML"), Input::Json(Value::String(ref html))) => {
             conversions.parse_html(html, options).map(Answer::Document)
         }
         (Some("serializeHTML"), Input::Json(ref document @ Value::Object(_))) => conversions
             .serialize_html(Document::json(document, schema), options)
-            .map(serialized),
+            .map(Answer::Text),
         (Some("serializeHTML"), Input::Document(read)) => {
             let document = Document {
                 source: Source::Terms(read),
@@ -188,7 +199,7 @@ fn answer(conversions: &dyn Conversions, request: Request<Value, Input>) -> Resu
             };
             conversions
                 .serialize_html(document, options)
-                .map(serialized)
+                .map(Answer::Text)
         }
         _ => return Err(INVALID.into()),
     };
@@ -252,7 +263,7 @@ fn answer_term<'a>(env: Env<'a>, parts: Request<Term<'a>>, budget: Budget) -> Op
         Some(limit) => deadline::within(limit, || answer(conversions, request))?,
         None => answer(conversions, request),
     };
-    Some(Reply(answered).encode(env))
+    Some(answered.encode(env))
 }
 
 /// A request's parts read as the JSON Jason encodes them, each weighing no more than `weight`,
@@ -290,11 +301,10 @@ fn read(
 /// answer's term from what the pool thread sends back. It makes the answers that have come in
 /// after each request it sends, so that making terms overlaps the conversions still running.
 ///
-/// A conversion that panics fails the batch, and the requests after it go unconverted. The
-/// first panic in order is the one raised, as it would be converting the requests one at a time.
+/// A conversion that panics fails the batch, with the first panic in order, as converting the
+/// requests one at a time would.
 fn convert_on_pool<'a>(env: Env<'a>, requests: &[Term<'a>]) -> Vec<Term<'a>> {
     let Served { conversions, pool } = served();
-    let first_panic = AtomicUsize::new(usize::MAX);
     let (sender, receiver) = mpsc::channel();
     let mut answers = vec![None; requests.len()];
     let mut panic: Option<(usize, Box<dyn Any + Send>)> = None;
@@ -302,7 +312,6 @@ fn convert_on_pool<'a>(env: Env<'a>, requests: &[Term<'a>]) -> Vec<Term<'a>> {
         let mut take = |(index, outcome)| match outcome {
             Outcome::Converted(handled) => answers[index] = Some(handled.encode(env)),
             Outcome::NotJson => answers[index] = Some(atoms::not_json().encode(env)),
-            Outcome::Skipped => {}
             Outcome::Panicked(payload) => {
                 if panic.as_ref().is_none_or(|(first, _)| index < *first) {
                     panic = Some((index, payload));
@@ -310,31 +319,21 @@ fn convert_on_pool<'a>(env: Env<'a>, requests: &[Term<'a>]) -> Vec<Term<'a>> {
             }
         };
         for (index, &request) in requests.iter().enumerate() {
-            if index > first_panic.load(Ordering::Relaxed) {
-                break;
-            }
             let Ok(parts) = parts(request) else {
                 take((index, Outcome::NotJson));
                 continue;
             };
             let parts = parts.map(Term::to_binary);
-            let (sender, first_panic) = (sender.clone(), &first_panic);
+            let sender = sender.clone();
             scope.spawn(move |_| {
-                let outcome = if index > first_panic.load(Ordering::Relaxed) {
-                    Outcome::Skipped
-                } else {
-                    let converted = std::panic::catch_unwind(AssertUnwindSafe(move || {
-                        let request = parts.read(|part| etf::read(&part))?;
-                        Ok(answer_json(*conversions, request).map(Sent::of))
-                    }));
-                    match converted {
-                        Ok(Ok(handled)) => Outcome::Converted(handled),
-                        Ok(Err(NotJson)) => Outcome::NotJson,
-                        Err(panic) => {
-                            first_panic.fetch_min(index, Ordering::Relaxed);
-                            Outcome::Panicked(panic)
-                        }
-                    }
+                let converted = std::panic::catch_unwind(AssertUnwindSafe(move || {
+                    let request = parts.read(|part| etf::read(&part))?;
+                    Ok(answer_json(*conversions, request).map(Sent::of))
+                }));
+                let outcome = match converted {
+                    Ok(Ok(handled)) => Outcome::Converted(handled),
+                    Ok(Err(NotJson)) => Outcome::NotJson,
+                    Err(panic) => Outcome::Panicked(panic),
                 };
                 sender
                     .send((index, outcome))
@@ -364,8 +363,6 @@ enum Outcome {
     Converted(Result<Sent, String>),
     NotJson,
     Panicked(Box<dyn Any + Send>),
-    /// Left unconverted, since a request before it panicked.
-    Skipped,
 }
 
 /// A `Tarnish.Bridge.request()`'s parts: `{operation, input}`, or `{operation, input, options}`.
@@ -385,20 +382,6 @@ fn parts(request: Term) -> Result<Request<Term>, NotJson> {
     }
 }
 
-/// A conversion's result as `Tarnish.Bridge` gets it: `{:ok, result}` or `{:error, message}`.
-struct Reply(Result<Answer, String>);
-
-impl Encoder for Reply {
-    fn encode<'a>(&self, env: Env<'a>) -> Term<'a> {
-        let result = match &self.0 {
-            Ok(Answer::Json(json)) => crate::term::write(env, json),
-            Ok(Answer::Document(document)) => Writer::new(env).fields(document.view()),
-            Err(message) => return (atom::error(), message).encode(env),
-        };
-        (atom::ok(), result).encode(env)
-    }
-}
-
 /// A result a pool thread sends back, for this thread to make its term from.
 enum Sent {
     /// A serialization, which goes into a binary as it is: the external format's binaries hold
@@ -411,9 +394,7 @@ enum Sent {
 impl Sent {
     fn of(answer: Answer) -> Sent {
         match answer {
-            Answer::Json(Value::String(_)) => {
-                Sent::Text(answer.into_json().into_string().expect("a string"))
-            }
+            Answer::Text(text) => Sent::Text(text),
             Answer::Json(json) => Sent::Term(etf::write(&json)),
             Answer::Document(document) => Sent::Term(etf::write_fields(document.view())),
         }
