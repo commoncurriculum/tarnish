@@ -5,10 +5,10 @@ use tarnish_js::stack;
 
 use super::delimiters::{self, Flank};
 use super::helpers::{find_closing_bracket, rtrim, split_cells};
-use super::lexer::{Lexer, Link};
+use super::lexer::Lexer;
 use super::matchers;
 use super::rules::{BLOCK, INLINE, OTHER};
-use super::{Cell, Def, Destination, Table, Token, TokenData, Tokens};
+use super::{Cell, Def, Destination, Table, Token, TokenData};
 use tarnish_js::Error;
 use tarnish_js::units::Units;
 use tarnish_js::utf16;
@@ -103,12 +103,10 @@ impl Lexer<'_> {
         let text = src.slice_of(text);
         let depth = cap.depth;
         let raw = src.slice(0..cap.end);
-        let queued = self.inline(text.clone());
         Some(Token {
             data: TokenData::Heading { depth },
+            tokens: Some(self.inline(text.clone())),
             text: Some(text),
-            tokens: Some(Tokens::default()),
-            queued: Some(queued),
             ..Token::new("heading", raw)
         })
     }
@@ -301,10 +299,8 @@ impl Lexer<'_> {
     }
 
     fn cell(&mut self, text: Vec<u16>) -> Cell {
-        let queued = self.inline(Units::from(text));
         Cell {
-            tokens: Vec::new(),
-            queued: Some(queued),
+            tokens: self.inline(Units::from(text)),
         }
     }
 
@@ -317,12 +313,10 @@ impl Lexer<'_> {
             2
         };
         let raw = src.slice_of(cap.all());
-        let queued = self.inline(text.clone());
         Some(Token {
             data: TokenData::Heading { depth },
+            tokens: Some(self.inline(text.clone())),
             text: Some(text),
-            tokens: Some(Tokens::default()),
-            queued: Some(queued),
             ..Token::new("heading", raw)
         })
     }
@@ -336,11 +330,9 @@ impl Lexer<'_> {
             _ => first,
         });
         let raw = src.slice(0..length);
-        let queued = self.inline(text.clone());
         Some(Token {
+            tokens: Some(self.inline(text.clone())),
             text: Some(text),
-            tokens: Some(Tokens::default()),
-            queued: Some(queued),
             ..Token::new("paragraph", raw)
         })
     }
@@ -348,11 +340,9 @@ impl Lexer<'_> {
     pub(super) fn text(&mut self, src: &Units) -> Option<Token> {
         let cap = BLOCK.text.exec(src)?;
         let text = src.slice_of(cap.all());
-        let queued = self.inline(text.clone());
         Some(Token {
+            tokens: Some(self.inline(text.clone())),
             text: Some(text.clone()),
-            tokens: Some(Tokens::default()),
-            queued: Some(queued),
             ..Token::new("text", text)
         })
     }
@@ -445,7 +435,8 @@ impl Lexer<'_> {
         };
         let label = cap.truthy(2).or(cap.get(1)).unwrap_or_default();
         let link_string = OTHER.multiple_space_global.replace(label, " ");
-        let Some(Link { href, title }) = self.links.get(&utf16::to_lower_case(&link_string)) else {
+        let Some(Destination { href, title }) = self.links.get(&utf16::to_lower_case(&link_string))
+        else {
             let text = src.slice_of(&cap.all()[..1]);
             return Ok(Some(Token {
                 text: Some(text.clone()),

@@ -2,9 +2,10 @@
 //! style property.
 
 use tarnish::chunk::ValueRef;
-use tarnish::json::Value;
 use tarnish::{Mark, Node};
 use tarnish_html::HtmlNode;
+use tarnish_js::json::Value;
+use tarnish_js::{self as js, value};
 
 /// `node.attrs[name]`, of one of the node's type's attributes, which a node always holds.
 pub fn node_attr<'a>(node: &'a Node, name: &str) -> ValueRef<'a> {
@@ -15,8 +16,6 @@ pub fn node_attr<'a>(node: &'a Node, name: &str) -> ValueRef<'a> {
 pub fn mark_attr<'a>(mark: &'a Mark, name: &str) -> ValueRef<'a> {
     mark.attrs_view().get(name).expect("its type's attribute")
 }
-use tarnish_js as js;
-use tarnish_js::value;
 
 /// `attrsEqual`: the same value, or shallowly the same own properties, compared with
 /// `Object.is`, so nested objects are equal only if they are the same object.
@@ -87,8 +86,6 @@ pub fn get_style_property(element: &HtmlNode, property: &str) -> Option<String> 
         .split(';')
         .map(js::trim)
         .filter(|declaration| !declaration.is_empty())
-        .collect::<Vec<_>>()
-        .into_iter()
         .rev()
         .find_map(|declaration| {
             let (name, value) = declaration.split_once(':')?;

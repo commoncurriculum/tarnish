@@ -1,8 +1,9 @@
 //! HTML to documents and back, as a browser's DOM does it.
 
+use tarnish::Node;
 use tarnish::dom::ParseOptions;
-use tarnish::{Node, Result};
 use tarnish_html::HtmlDom;
+use tarnish_js::Result;
 
 use crate::TiptapSchema;
 

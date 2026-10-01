@@ -1,8 +1,11 @@
-//! `tiptap-extension-flat-list`: `FlatListCore` and the three flat list item nodes.
+//! `tiptap-extension-flat-list`: `FlatListCore` and the three flat list item nodes. Their `li`
+//! parse rules, which prop up an item through the page's global `document`, are left to the
+//! application.
 
+use tarnish::Node;
 use tarnish::chunk::ValueRef;
-use tarnish::json::json;
-use tarnish::{Error, Node, js};
+use tarnish_js::json::json;
+use tarnish_js::{self as js, Error};
 
 use crate::{DomSpec, SpecAttrs, node_attr};
 use crate::{ExtensionAttribute, NodeExtension, PlainExtension};
@@ -16,7 +19,9 @@ pub fn flat_list_ordered() -> NodeExtension {
         .group("block")
         .content("inline*")
         .priority(230)
-        .add_attributes(attributes(Some("counter"), None))
+        .add_attributes(attributes(Some(
+            ExtensionAttribute::new("counter", json!(1)).not_rendered(),
+        )))
         .render_html(|node, _| {
             Ok(DomSpec::element(
                 "ol",
@@ -34,7 +39,7 @@ pub fn flat_list_unordered() -> NodeExtension {
         .group("block")
         .content("inline*")
         .priority(210)
-        .add_attributes(attributes(None, None))
+        .add_attributes(attributes(None))
         .render_html(|node, _| {
             Ok(DomSpec::element(
                 "ul",
@@ -49,23 +54,21 @@ pub fn flat_list_task() -> NodeExtension {
         .group("block")
         .content("inline*")
         .priority(220)
-        .add_attributes(attributes(None, Some("checked")))
+        .add_attributes(attributes(Some(ExtensionAttribute::new(
+            "checked",
+            json!(false),
+        ))))
         .render_html(|node, _| render_task(node))
 }
 
-fn attributes(
-    counter: Option<&'static str>,
-    checked: Option<&'static str>,
-) -> Vec<ExtensionAttribute> {
-    let mut attributes = vec![ExtensionAttribute::new("indent", json!(0)).not_rendered()];
-    if let Some(counter) = counter {
-        attributes.push(ExtensionAttribute::new(counter, json!(1)).not_rendered());
-    }
-    if let Some(checked) = checked {
-        attributes.push(ExtensionAttribute::new(checked, json!(false)));
-    }
-    attributes.push(ExtensionAttribute::new("_isTempPropped", json!(false)).not_rendered());
-    attributes
+/// The attributes of every item, with an item type's own after its indent.
+fn attributes(own: Option<ExtensionAttribute>) -> Vec<ExtensionAttribute> {
+    let indent = ExtensionAttribute::new("indent", json!(0)).not_rendered();
+    let propped = ExtensionAttribute::new("_isTempPropped", json!(false)).not_rendered();
+    [Some(indent), own, Some(propped)]
+        .into_iter()
+        .flatten()
+        .collect()
 }
 
 fn style(node: &Node, list_style_type: &str) -> Result<String, Error> {

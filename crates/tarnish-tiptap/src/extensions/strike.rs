@@ -1,28 +1,31 @@
 //! `@tiptap/extension-strike`.
 
 use crate::DomSpec;
-use crate::GetAttrs;
 use crate::markdown::{RenderContext, RenderHelpers};
-use crate::{MarkExtension, ParseHtml};
-use tarnish::Map as Attrs;
-use tarnish::json::Value;
+use crate::{GetAttrsResult, MarkExtension, ParseHtml};
 use tarnish_js::Error;
+use tarnish_js::json::Map;
+use tarnish_js::json::Value;
 
 pub fn strike() -> MarkExtension {
     MarkExtension::create("strike")
-        .parse_html(vec![
-            ParseHtml::tag("s").into(),
-            ParseHtml::tag("del").into(),
-            ParseHtml::tag("strike").into(),
-            ParseHtml::style("text-decoration")
-                .not_consuming()
-                .get_attrs(|value| match value.contains("line-through") {
-                    true => GetAttrs::Attrs(Attrs::new()),
-                    false => GetAttrs::False,
-                })
-                .into(),
+        .parse_html([
+            ParseHtml::Tag(ParseHtml::tag("s")),
+            ParseHtml::Tag(ParseHtml::tag("del")),
+            ParseHtml::Tag(ParseHtml::tag("strike")),
+            ParseHtml::Style(
+                ParseHtml::style("text-decoration")
+                    .not_consuming()
+                    .get_attrs(|value| {
+                        Ok(if value.contains("line-through") {
+                            GetAttrsResult::Attrs(Map::new())
+                        } else {
+                            GetAttrsResult::Reject
+                        })
+                    }),
+            ),
         ])
-        .render_html(|_, html| DomSpec::wrapping("s", html))
+        .render_html(|_, html| Ok(DomSpec::wrapping("s", html)))
         .markdown_token_name("del")
         .parse_markdown(|token, helpers| {
             let content = helpers.parse_inline(token.tokens.as_deref().unwrap_or_default())?;

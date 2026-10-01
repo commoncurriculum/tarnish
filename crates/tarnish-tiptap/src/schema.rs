@@ -4,10 +4,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use tarnish::Result;
 use tarnish::dom::{DomParser, DomSerializer, MarkToDom, NodeToDom, ParseRule};
 use tarnish::model::{AttributeDefault, AttributeSpec, MarkSpec, NodeSpec, Schema, SchemaSpec};
 use tarnish_html::HtmlNode;
+use tarnish_js::Result;
 
 use super::attributes::{ExtensionAttribute, get_rendered_attributes};
 use super::extension::{Extension, Kind};
@@ -57,11 +57,12 @@ pub fn get_schema(extensions: &[Extension]) -> Result<TiptapSchema> {
                 spec.nodes.push((
                     extension.name.to_owned(),
                     NodeSpec {
-                        content: non_empty(node.content),
+                        content: non_empty(&node.content),
                         group: non_empty(node.group),
                         inline: node.inline,
                         marks: node.marks.map(str::to_owned),
                         linebreak_replacement: node.linebreak_replacement,
+                        code: node.code,
                         attrs,
                         ..NodeSpec::default()
                     },
@@ -83,6 +84,7 @@ pub fn get_schema(extensions: &[Extension]) -> Result<TiptapSchema> {
                     extension.name.to_owned(),
                     MarkSpec {
                         attrs,
+                        code: mark.code,
                         ..MarkSpec::default()
                     },
                 ));
@@ -90,10 +92,10 @@ pub fn get_schema(extensions: &[Extension]) -> Result<TiptapSchema> {
                 if let Some(render) = mark.render_html.clone() {
                     let attributes = Arc::clone(&attributes);
                     let to_dom: MarkToDom<HtmlNode> = Arc::new(move |mark, _inline| {
-                        Ok(render(
+                        render(
                             mark,
                             get_rendered_attributes(mark.attrs_view(), &attributes)?,
-                        ))
+                        )
                     });
                     mark_to_doms.insert(extension.name.to_owned(), to_dom);
                 }

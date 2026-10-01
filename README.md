@@ -185,8 +185,7 @@ inputs, and `fixtures/tiptap.json`, the documents, Markdown and HTML that `Markd
 `DOMParser` and `DOMSerializer` make with Tiptap's own extensions, among them V8's errors for
 documents holding what the manager can't read. `tarnish_markdown::MARKED` and
 `tarnish_tiptap::TIPTAP` name the versions ported, and the tests check them against the
-versions installed. tarnish-tiptap's `Underline` and `Highlight` leave out Tiptap's Markdown for
-them, which an application writes.
+versions installed.
 
 ### Elixir
 

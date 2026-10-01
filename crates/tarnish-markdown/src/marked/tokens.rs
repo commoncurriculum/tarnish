@@ -18,8 +18,6 @@ pub struct Token {
     pub data: TokenData,
     /// The fields an extension's tokenizer puts on its token beyond marked's, which few do.
     pub extra: Option<Box<Map>>,
-    /// The entry of the lexer's inline queue that fills `tokens`.
-    pub queued: Option<u32>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -84,18 +82,34 @@ pub struct Table {
 /// `Tokens.TableCell`, without the `text` its tokens are lexed from.
 #[derive(Clone, Debug)]
 pub struct Cell {
-    pub tokens: Vec<Token>,
-    pub(crate) queued: Option<u32>,
+    pub tokens: Tokens,
 }
 
 /// A token's `tokens`, which nest as deeply as the Markdown does, so each level clones and
 /// drops on the stack segments `stack::grow` adds. Tokens nest only through these.
 #[derive(Debug, Default)]
-pub struct Tokens(Vec<Token>);
+pub struct Tokens {
+    pub(super) items: Vec<Token>,
+    /// The entry of the lexer's inline queue whose tokens these will be.
+    pub(super) queued: Option<u32>,
+}
+
+impl Tokens {
+    /// The tokens the lexer's inline queue entry `slot` will lex.
+    pub(super) fn queued(slot: u32) -> Tokens {
+        Tokens {
+            items: Vec::new(),
+            queued: Some(slot),
+        }
+    }
+}
 
 impl From<Vec<Token>> for Tokens {
-    fn from(tokens: Vec<Token>) -> Tokens {
-        Tokens(tokens)
+    fn from(items: Vec<Token>) -> Tokens {
+        Tokens {
+            items,
+            queued: None,
+        }
     }
 }
 
@@ -103,25 +117,28 @@ impl Deref for Tokens {
     type Target = [Token];
 
     fn deref(&self) -> &[Token] {
-        &self.0
+        &self.items
     }
 }
 
 impl DerefMut for Tokens {
     fn deref_mut(&mut self) -> &mut [Token] {
-        &mut self.0
+        &mut self.items
     }
 }
 
 impl Clone for Tokens {
     fn clone(&self) -> Tokens {
-        Tokens(stack::grow(|| self.0.clone()))
+        Tokens {
+            items: stack::grow(|| self.items.clone()),
+            queued: self.queued,
+        }
     }
 }
 
 impl Drop for Tokens {
     fn drop(&mut self) {
-        stack::drop_nested(&mut self.0);
+        stack::drop_nested(&mut self.items);
     }
 }
 

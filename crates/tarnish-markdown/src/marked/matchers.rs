@@ -17,7 +17,7 @@ use tarnish_js::utf16::{
 };
 
 /// How many units from `at` on `each` holds for.
-fn run(src: &[u16], at: usize, each: impl Fn(u16) -> bool) -> usize {
+pub(crate) fn run(src: &[u16], at: usize, each: impl Fn(u16) -> bool) -> usize {
     src[at..].iter().take_while(|&&unit| each(unit)).count()
 }
 

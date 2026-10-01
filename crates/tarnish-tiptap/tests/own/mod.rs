@@ -6,7 +6,9 @@ use tarnish_markdown::marked_more_lists::more_lists;
 use tarnish_tiptap::extensions::bold::bold;
 use tarnish_tiptap::extensions::document::document;
 use tarnish_tiptap::extensions::hard_break::hard_break;
+use tarnish_tiptap::extensions::heading::{HeadingOptions, heading};
 use tarnish_tiptap::extensions::highlight::{HighlightOptions, highlight};
+use tarnish_tiptap::extensions::image::{ImageOptions, image};
 use tarnish_tiptap::extensions::italic::italic;
 use tarnish_tiptap::extensions::paragraph::paragraph;
 use tarnish_tiptap::extensions::strike::strike;
@@ -23,6 +25,8 @@ pub fn extensions() -> Vec<Extension> {
         document().into(),
         paragraph().into(),
         text().into(),
+        heading(HeadingOptions::default()).into(),
+        image(ImageOptions::default()).into(),
         hard_break().into(),
         bold().into(),
         italic().into(),
