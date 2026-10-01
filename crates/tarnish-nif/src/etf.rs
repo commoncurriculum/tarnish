@@ -665,6 +665,40 @@ mod tests {
         assert_eq!(keys, ["2", "10", "b", "a", "01"]);
     }
 
+    /// What a batch reads and writes, nested far deeper than a pool thread's stack could recurse
+    /// through: a value, and a document whose nodes nest that deep and whose attribute does. The
+    /// attribute sits near the top, where an unguarded level would overflow.
+    #[test]
+    fn reads_and_writes_as_deeply_as_memory_allows() {
+        tarnish::js::stack::on_dirty_scheduler_stack(|| {
+            const DEPTH: usize = 100_000;
+            let deep = (0..DEPTH).fold(Value::Null, |inner, level| match level % 2 {
+                0 => tarnish::json::json!({"a": inner}),
+                _ => Value::Array(vec![inner]),
+            });
+            assert!(read(&write(&deep)).expect("a term") == deep);
+
+            let spec = tarnish::json::json!({"nodes": [
+                ["doc", {"content": "block+"}],
+                ["paragraph", {"group": "block"}],
+                ["quote", {"content": "block+", "group": "block", "attrs": {"data": {"default": null}}}],
+                ["text", {}],
+            ]});
+            let schema = tarnish::api::schema(&spec).expect("the schema");
+            let paragraph = tarnish::json::json!({"type": "paragraph"});
+            let holding = tarnish::json::json!({"type": "quote", "attrs": {"data": deep},
+                "content": [paragraph.clone()]});
+            let quotes = (0..DEPTH).fold(
+                paragraph,
+                |inner, _| tarnish::json::json!({"type": "quote", "content": [inner]}),
+            );
+            let json = tarnish::json::json!({"type": "doc", "content": [holding, quotes]});
+            let doc = tarnish::Node::from_json(&schema, &json).expect("the document");
+            let written = write_fields(doc.view());
+            assert!(read(&written).expect("a term") == doc.to_json());
+        });
+    }
+
     #[test]
     fn reads_an_ordered_object_in_its_order() {
         let entry = |key: &str, value: u8| {
