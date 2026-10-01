@@ -1,7 +1,8 @@
 //! Documents, HTML and Markdown nested far deeper than a small stack could recurse through,
 //! converted with Tiptap's own extensions on a thread with such a stack: each recursion over
-//! nesting has to grow the stack. Parsing takes time that grows with the square of the depth,
-//! so parses nest less deeply.
+//! nesting has to grow the stack. Parsing takes time that grows with the square of the depth
+//! (the cube, when a lazy continuation line re-lexes every nested blockquote), so parses nest
+//! less deeply.
 
 mod own;
 
@@ -14,6 +15,7 @@ use tarnish_tiptap::html;
 const DOCUMENTS: usize = 20_000;
 const PARSES: usize = 2_000;
 const INLINES: usize = 500;
+const LAZY: usize = 500;
 
 /// `node_type` inside itself, `levels` deep, around a text node.
 fn nested(node_type: &str, levels: usize) -> Value {
@@ -72,6 +74,7 @@ fn parses_markdown_nested_as_deeply_as_memory_allows() {
             |open: &str, close: &str| open.repeat(INLINES) + "x" + &close.repeat(INLINES);
         let nested = [
             ("blockquotes", quoted("x".into())),
+            ("lazy continuations", "> ".repeat(LAZY) + "x\ny"),
             ("list items", "1. ".repeat(PARSES) + "x"),
             ("strong", quoted(delimited("**a ", " a**"))),
             ("em", quoted(delimited("*a ", " a*"))),

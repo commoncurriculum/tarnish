@@ -1,6 +1,7 @@
 //! Markdown nested far deeper than a small stack could recurse through, lexed on a thread with
 //! such a stack: each of marked's recursions over nesting has to grow the stack. The lexer takes
-//! time that grows with the square of the depth, so they nest only as deep as that needs.
+//! time that grows with the square of the depth (the cube, when a lazy continuation line re-lexes
+//! every nested blockquote), so they nest only as deep as that needs.
 
 use tarnish_js::json::Value;
 use tarnish_js::stack::on_dirty_scheduler_stack;
@@ -10,6 +11,7 @@ use tarnish_markdown::marked_more_lists::more_lists;
 
 const BLOCKS: usize = 3_000;
 const INLINES: usize = 1_000;
+const LAZY: usize = 500;
 
 /// How many tokens deep the JSON of the tokens nests, walked without recursing.
 fn depth(tokens: &[Value]) -> usize {
@@ -37,6 +39,7 @@ fn lexes_markdown_nested_as_deeply_as_memory_allows() {
             |open: &str, close: &str| open.repeat(INLINES) + "x" + &close.repeat(INLINES);
         let nested = [
             ("blockquotes", BLOCKS, ">".repeat(BLOCKS) + " x"),
+            ("lazy continuations", LAZY, "> ".repeat(LAZY) + "x\ny"),
             ("list items", BLOCKS, "1. ".repeat(BLOCKS) + "x"),
             ("strong", INLINES, delimited("**a ", " a**")),
             ("em", INLINES, delimited("*a ", " a*")),
