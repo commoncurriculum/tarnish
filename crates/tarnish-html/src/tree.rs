@@ -166,6 +166,11 @@ impl Tree {
         self.nodes.len() - 1
     }
 
+    /// How many nodes it has ever held, which no path down it is longer than.
+    pub(crate) fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
     pub(crate) fn node(&self, id: NodeId) -> &Node {
         &self.nodes[id]
     }

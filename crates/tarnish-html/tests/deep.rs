@@ -23,6 +23,9 @@ const SPEC_DEPTH: usize = 20_000;
 /// the depth.
 const CSS_DEPTH: usize = 100_000;
 
+/// How deep selector lists nest in each other.
+const SELECTOR_DEPTH: usize = 10_000;
+
 #[test]
 fn deep_html_round_trips_on_a_small_stack() {
     on_dirty_scheduler_stack(|| {
@@ -160,5 +163,35 @@ fn styles_nest_as_deeply_as_memory_allows() {
             );
             assert!(to_html(&serializer, doc.content()).expect("HTML") == styled);
         }
+    });
+}
+
+/// Selectors that nest, or chain combinators, far deeper than a small stack could recurse
+/// through, matched in HTML nested as deeply as they chain, and `:has()` looking down through it.
+#[test]
+fn selectors_nest_as_deeply_as_memory_allows() {
+    on_dirty_scheduler_stack(|| {
+        let fragment = HtmlDom::new().parse_fragment(&("<div>".repeat(DEPTH) + "<p>x</p>"));
+        let found =
+            |node: &HtmlNode, selector: &str| node.query_selector(selector).expect("a selector");
+        let paragraph = found(&fragment, "p").expect("the paragraph");
+        let top = found(&fragment, "div").expect("the top div");
+
+        let nested = |open: &str, close: &str| {
+            open.repeat(SELECTOR_DEPTH) + "p" + &close.repeat(SELECTOR_DEPTH)
+        };
+        let selectors = [
+            nested(":is(", ")"),
+            nested(":not(:not(", "))"),
+            "div ".repeat(DEPTH) + "p",
+            "div > ".repeat(DEPTH) + "p",
+        ];
+        for selector in selectors {
+            assert!(found(&fragment, &selector).as_ref() == Some(&paragraph));
+            let closest = paragraph.closest(&selector).expect("a selector");
+            assert!(closest.as_ref() == Some(&paragraph));
+        }
+        assert!(found(&fragment, "div:has(p)").as_ref() == Some(&top));
+        assert!(top.closest("div:has(p)").expect("a selector").as_ref() == Some(&top));
     });
 }
