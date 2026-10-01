@@ -46,6 +46,7 @@ fn deep_html_round_trips_on_a_small_stack() {
 
         let fragment = HtmlDom::new().parse_fragment(&html);
         assert_eq!(fragment.inner_html(), html);
+        assert_eq!(fragment.text_content(), "deep");
 
         let doc =
             parse_html(&parser, &html, ParseOptions::<HtmlNode>::default()).expect("a document");
@@ -60,6 +61,9 @@ fn deep_html_round_trips_on_a_small_stack() {
             to_html(&basic::serializer(), doc.content()).expect("HTML"),
             html
         );
+        let serialized =
+            basic::serializer().serialize_fragment(&HtmlDom::new(), doc.content(), None);
+        assert_eq!(serialized.expect("a fragment").inner_html(), html);
     });
 }
 
@@ -109,10 +113,26 @@ fn specs_render_as_deeply_as_memory_allows() {
         assert_eq!(attribute(&array), html);
         assert_eq!(attribute(&array_like), html);
 
-        let elements = (0..SPEC_DEPTH).fold(DomSpec::Text("x".into()), |inner, _| {
-            DomSpec::element("span", SpecAttrs::new(), vec![inner])
-        });
-        assert_eq!(rendered(&elements).expect("HTML"), html);
+        let elements = || {
+            (0..SPEC_DEPTH).fold(DomSpec::Text("x".into()), |inner, _| {
+                DomSpec::element("span", SpecAttrs::new(), vec![inner])
+            })
+        };
+        assert_eq!(rendered(&elements()).expect("HTML"), html);
+
+        // The writer writes a node's elements as it goes, those of an array in a DOM.
+        let basic = api::schema(&read("dom")["schema"]).expect("the schema");
+        let doc = parse_html(&basic::parser(&basic), "<p>y</p>", ParseOptions::default());
+        let doc = doc.expect("a document");
+        let array: NodeToDom<HtmlNode> = Arc::new(|_| Ok(DomSpec::from(nested_spec(false))));
+        let elements: NodeToDom<HtmlNode> = Arc::new(move |_| Ok(elements()));
+        for paragraph in [array, elements] {
+            let serializer = DomSerializer::new(
+                HashMap::from([("paragraph".to_owned(), paragraph)]),
+                HashMap::new(),
+            );
+            assert_eq!(to_html(&serializer, doc.content()).expect("HTML"), html);
+        }
     });
 }
 
