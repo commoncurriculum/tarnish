@@ -5,10 +5,13 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
-description = "The fixtures npm run test:js records from the JavaScript tarnish ports, read for tarnish's tests. Internal; not published."
+description = "The fixtures npm run test:js records from the JavaScript tarnish ports, read for tarnish's tests, and a check for unguarded recursion. Internal; not published."
 
 [lib]
 doctest = false
 
 [dependencies]
+# Line numbers of the syntax read, for the `// bounded:` comment above a function.
+proc-macro2 = { version = "1.0.107", features = ["span-locations"] }
+syn = { version = "2.0.119", features = ["full", "visit"] }
 tarnish = { path = "../tarnish" }

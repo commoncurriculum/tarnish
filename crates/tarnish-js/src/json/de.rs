@@ -30,6 +30,7 @@ const SERDE_ROOM: usize = if cfg!(debug_assertions) {
 /// one is an integer and the rest are floats; a repeated key keeps its first place and its last
 /// value; and keys that are array indices come first, in ascending order. A lone surrogate,
 /// which a Rust string can't hold, is U+FFFD.
+// bounded: once, on the text with its lone surrogates replaced
 pub fn from_str(text: &str) -> Result<Value, SyntaxError> {
     // The parser skips a byte order mark, which `JSON.parse` doesn't take.
     if text.starts_with('\u{FEFF}') {
@@ -402,6 +403,7 @@ mod tests {
         fn space(next: &mut dyn FnMut() -> usize) -> &'static str {
             if next().is_multiple_of(4) { " " } else { "" }
         }
+        // bounded: past depth 3 a value is a scalar
         fn value(next: &mut dyn FnMut() -> usize, depth: usize, out: &mut String) {
             match next() % if depth > 3 { 5 } else { 7 } {
                 0 | 1 => out.push_str(pick(next, NUMBERS)),

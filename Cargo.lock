@@ -1849,6 +1849,8 @@ dependencies = [
 name = "tarnish-fixtures"
 version = "0.0.0"
 dependencies = [
+ "proc-macro2",
+ "syn 2.0.119",
  "tarnish",
 ]
 

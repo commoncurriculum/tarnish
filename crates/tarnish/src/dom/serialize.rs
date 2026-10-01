@@ -318,6 +318,7 @@ impl<N: Clone> DomSerializer<N> {
     }
 
     /// `serializeFragment`'s walk, rendering to `target`.
+    // guarded: `fill` grows the stack before it writes a node's content
     pub fn write_fragment<T: Target<N>>(
         &self,
         fragment: &Fragment<'static>,
@@ -605,6 +606,8 @@ fn text<D: Dom>(dom: &D, text: &str) -> Result<Rendered<D::Node>> {
     })
 }
 
+// bounded: once, for a value's array, which renders as the array spec it reads as; children
+// render through `fill`, which grows the stack
 fn render<D: Dom>(
     dom: &D,
     structure: &DomSpec<D::Node>,

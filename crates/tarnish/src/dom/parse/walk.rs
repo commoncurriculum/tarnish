@@ -315,6 +315,8 @@ impl<'p, D: Dom> ParseContext<'p, D> {
     }
 
     /// Parse an element, by its name, as its rule says.
+    // bounded: an element a rule doesn't consume is added again with only the rules after that
+    // one, so no deeper than the parser has rules
     fn add_element_by_rule(
         &mut self,
         node: &D::Node,

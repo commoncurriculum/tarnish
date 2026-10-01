@@ -101,6 +101,7 @@ impl<'a> Reader<'a> {
 
     /// Reads a value into `slot`, which holds `null`: one read where it is kept isn't copied
     /// there from the stack.
+    // guarded: each level goes through `below`, which grows the stack every `LEVELS` levels
     fn value_into(&mut self, depth: usize, slot: &mut Value) -> Result<(), NotJson> {
         *slot = match self.byte()? {
             BINARY => {
@@ -436,6 +437,8 @@ pub fn write_fields<'c>(fields: impl Fields<'c>) -> Vec<u8> {
     out
 }
 
+// bounded: a mark's fields hold no content or marks, so writing one goes a single level down;
+// content grows the stack
 fn write_node<'c>(out: &mut Vec<u8>, fields: impl Fields<'c>) {
     out.push(MAP);
     out.extend_from_slice(&(fields.field_count() as u32).to_be_bytes());
