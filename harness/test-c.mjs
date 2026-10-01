@@ -7,7 +7,8 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 
 const root = fileURLToPath(new URL("../", import.meta.url))
-const out = `${root}target/c-test/`
+const target = process.env.CARGO_TARGET_DIR ?? `${root}target`
+const out = `${target}/c-test/`
 mkdirSync(out, { recursive: true })
 
 const read = (name) => JSON.parse(readFileSync(`${root}fixtures/${name}.json`, "utf8"))
@@ -66,7 +67,7 @@ if (lines.some((line) => line.includes("\n"))) throw new Error("A fixture's line
 writeFileSync(`${out}fixtures.txt`, lines.join("\n") + "\n")
 
 execFileSync("cargo", ["build", "-p", "tarnish-c"], { cwd: root, stdio: "inherit" })
-const library = `${root}target/debug`
+const library = `${target}/debug`
 execFileSync(
   process.env.CC ?? "cc",
   [
