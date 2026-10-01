@@ -266,7 +266,9 @@ impl Map {
     }
 }
 
-fn array_index(key: &str) -> Option<u32> {
+/// The array index `key` is, as JavaScript reads a property key: the decimal of an integer below
+/// 2^32 - 1, written as `String` writes it.
+pub fn array_index(key: &str) -> Option<u32> {
     let index: u32 = key.parse().ok()?;
     (index != u32::MAX && index.to_string() == key).then_some(index)
 }
