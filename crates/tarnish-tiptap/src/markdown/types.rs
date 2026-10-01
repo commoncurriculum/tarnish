@@ -4,10 +4,11 @@
 
 use std::sync::Arc;
 
+use super::ParseHelpers;
 use tarnish::json::{Map, Value};
 use tarnish_js::Error;
 use tarnish_js::units::Units;
-use tarnish_markdown::marked::Token;
+use tarnish_markdown::marked::{Lexer, Token};
 
 /// An extension's `renderMarkdown(node, helpers, context)`.
 pub type RenderMarkdown =
@@ -29,25 +30,7 @@ pub struct RenderContext<'a> {
 
 /// An extension's `parseMarkdown(token, helpers)`.
 pub type ParseMarkdown =
-    Arc<dyn Fn(&Token, &dyn ParseHelpers) -> Result<Parsed, Error> + Send + Sync>;
-
-/// `MarkdownParseHelpers`.
-pub trait ParseHelpers {
-    /// `helpers.parseInline(tokens)`.
-    fn parse_inline(&self, tokens: &[Token]) -> Result<Vec<Value>, Error>;
-
-    /// `helpers.tokenizeInline(src)`.
-    fn tokenize_inline(&self, src: &[u16]) -> Result<Vec<Token>, Error>;
-
-    /// `helpers.parseChildren(tokens)`.
-    fn parse_children(&self, tokens: &[Token]) -> Result<Vec<Value>, Error>;
-
-    /// `helpers.createNode(type, attrs, content)`.
-    fn create_node(&self, kind: &str, attrs: Option<Map>, content: Option<Vec<Value>>) -> Value;
-
-    /// `helpers.applyMark(markType, content, attrs)`.
-    fn apply_mark(&self, mark: &'static str, content: Vec<Value>, attrs: Option<Map>) -> Parsed;
-}
+    Arc<dyn Fn(&Token, &ParseHelpers<'_>) -> Result<Parsed, Error> + Send + Sync>;
 
 /// What `parseMarkdown` returns.
 pub enum Parsed {
@@ -57,22 +40,18 @@ pub enum Parsed {
     Mark {
         mark: &'static str,
         content: Vec<Value>,
-        attrs: Option<Value>,
+        attrs: Option<Map>,
     },
 }
 
 /// An extension's `markdownTokenizer`. It is inline, the `level` Tiptap defaults to, and its
 /// `start` is where the string starts in `src`.
-#[derive(Clone, Copy)]
-pub struct MarkdownTokenizer {
+#[derive(Clone)]
+pub(crate) struct MarkdownTokenizer {
     pub start: &'static str,
     pub tokenize: Tokenize,
 }
 
-/// `tokenize(src, tokens, helpers)`.
-pub type Tokenize = fn(&Units, &[Token], &mut dyn TokenizerHelpers) -> Result<Option<Token>, Error>;
-
-/// What `tokenize` gets as `helpers`.
-pub trait TokenizerHelpers {
-    fn inline_tokens(&mut self, src: &Units) -> Result<Vec<Token>, Error>;
-}
+/// `tokenize(src, tokens, lexer)`.
+pub(crate) type Tokenize =
+    Arc<dyn Fn(&Units, &[Token], &mut Lexer) -> Result<Option<Token>, Error> + Send + Sync>;

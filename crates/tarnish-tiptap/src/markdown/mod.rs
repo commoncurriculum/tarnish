@@ -7,25 +7,16 @@ mod serialize;
 mod types;
 mod utils;
 
+pub use parse::ParseHelpers;
 pub use types::*;
+
+use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
 
 use crate::{Extension, sort_extensions};
-use tarnish_js::Error;
 use tarnish_js::units::Units;
 use tarnish_markdown::marked::{Lexer, Marked, Token, TokenizerExtension, Tokens};
-
-/// What `tokenize` gets as `helpers`: the lexer that runs it.
-struct LexerHelpers<'l, 'm> {
-    lexer: &'l mut Lexer<'m>,
-}
-
-impl TokenizerHelpers for LexerHelpers<'_, '_> {
-    fn inline_tokens(&mut self, src: &Units) -> Result<Vec<Token>, Error> {
-        self.lexer.inline_tokens(src)
-    }
-}
 
 /// What `registerExtension` keeps of an extension.
 #[derive(Clone)]
@@ -87,16 +78,16 @@ impl MarkdownManager {
                 .or_default()
                 .push(spec);
         }
-        if let Some(tokenizer) = markdown.tokenizer {
+        if let Some(tokenizer) = &markdown.tokenizer {
             self.register_tokenizer(tokenizer);
         }
     }
 
     /// `registerTokenizer`: `tokenize` as a marked extension.
-    fn register_tokenizer(&mut self, MarkdownTokenizer { start, tokenize }: MarkdownTokenizer) {
+    fn register_tokenizer(&mut self, MarkdownTokenizer { start, tokenize }: &MarkdownTokenizer) {
+        let tokenize = Arc::clone(tokenize);
         let tokenizer = Box::new(move |lexer: &mut Lexer, src: &Units, tokens: &[Token]| {
-            let result = tokenize(src, tokens, &mut LexerHelpers { lexer })?;
-            Ok(result.map(|mut token| {
+            Ok(tokenize(src, tokens, lexer)?.map(|mut token| {
                 token.tokens.get_or_insert_with(Tokens::default);
                 token
             }))

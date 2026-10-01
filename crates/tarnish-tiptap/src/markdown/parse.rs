@@ -7,7 +7,7 @@ use tarnish_js::stack;
 
 use super::MarkdownManager;
 use super::utils::{extract_absorbed_blank_lines, marks_of};
-use crate::markdown::{self, Parsed};
+use crate::markdown::Parsed;
 use crate::{decode_html_entities, marks_equal};
 use tarnish::json::{Map, Value, json};
 use tarnish_js::regexp::RegExp;
@@ -20,7 +20,7 @@ impl MarkdownManager {
     pub fn parse(&self, markdown: &str) -> Result<Value, Error> {
         let mut lexer = Lexer::new(&self.marked);
         let tokens = lexer.lex(&utf16::from(markdown))?;
-        let helpers = Helpers {
+        let helpers = ParseHelpers {
             manager: self,
             lexer: RefCell::new(lexer),
         };
@@ -29,8 +29,9 @@ impl MarkdownManager {
     }
 }
 
-/// What `parseMarkdown` gets as `helpers`, holding the lexer the parse started with.
-struct Helpers<'a> {
+/// `MarkdownParseHelpers`, what `parseMarkdown` gets as `helpers`, holding the lexer the parse
+/// started with.
+pub struct ParseHelpers<'a> {
     manager: &'a MarkdownManager,
     lexer: RefCell<Lexer<'a>>,
 }
@@ -41,20 +42,24 @@ static OPENING_TAG: LazyLock<RegExp> =
 static SELF_CLOSING: LazyLock<RegExp> = LazyLock::new(|| RegExp::new(r"\/>$", ""));
 static REGEX_SPECIAL: LazyLock<RegExp> = LazyLock::new(|| RegExp::new(r"[.*+?^${}()|[\]\\]", "g"));
 
-impl markdown::ParseHelpers for Helpers<'_> {
-    fn parse_inline(&self, tokens: &[Token]) -> Result<Vec<Value>, Error> {
-        self.parse_inline_tokens(tokens)
-    }
-
-    fn tokenize_inline(&self, src: &[u16]) -> Result<Vec<Token>, Error> {
+impl ParseHelpers<'_> {
+    /// `helpers.tokenizeInline(src)`.
+    pub fn tokenize_inline(&self, src: &[u16]) -> Result<Vec<Token>, Error> {
         self.lexer.borrow_mut().inline_tokens(&Units::from(src))
     }
 
-    fn parse_children(&self, tokens: &[Token]) -> Result<Vec<Value>, Error> {
+    /// `helpers.parseChildren(tokens)`.
+    pub fn parse_children(&self, tokens: &[Token]) -> Result<Vec<Value>, Error> {
         self.parse_tokens(tokens, false)
     }
 
-    fn create_node(&self, kind: &str, attrs: Option<Map>, content: Option<Vec<Value>>) -> Value {
+    /// `helpers.createNode(type, attrs, content)`.
+    pub fn create_node(
+        &self,
+        kind: &str,
+        attrs: Option<Map>,
+        content: Option<Vec<Value>>,
+    ) -> Value {
         let mut node = Map::with_capacity(3);
         node.push("type".into(), json!(kind));
         if let Some(attrs) = attrs.filter(|attrs| !attrs.is_empty()) {
@@ -66,16 +71,20 @@ impl markdown::ParseHelpers for Helpers<'_> {
         Value::Object(node)
     }
 
-    fn apply_mark(&self, mark: &'static str, content: Vec<Value>, attrs: Option<Map>) -> Parsed {
+    /// `helpers.applyMark(markType, content, attrs)`.
+    pub fn apply_mark(
+        &self,
+        mark: &'static str,
+        content: Vec<Value>,
+        attrs: Option<Map>,
+    ) -> Parsed {
         Parsed::Mark {
             mark,
             content,
-            attrs: attrs.filter(|attrs| !attrs.is_empty()).map(Value::Object),
+            attrs: attrs.filter(|attrs| !attrs.is_empty()),
         }
     }
-}
 
-impl Helpers<'_> {
     /// `parseTokens(tokens, parseImplicitEmptyParagraphs)`.
     fn parse_tokens(
         &self,
@@ -173,20 +182,20 @@ impl Helpers<'_> {
                     mark,
                     content,
                     attrs,
-                } => apply_mark_to_content(mark, content, &attrs),
+                } => apply_mark_to_content(mark, content, attrs.as_ref()),
                 Parsed::Node(node) => vec![node],
                 Parsed::Nodes(nodes) => nodes,
             },
             None => match &token.tokens {
-                Some(children) => self.parse_inline_tokens(children)?,
+                Some(children) => self.parse_inline(children)?,
                 None => Vec::new(),
             },
         })
     }
 
-    /// `parseInlineTokens`: inline tokens to text and inline nodes, with marks on the text,
-    /// and adjacent text with the same marks joined.
-    fn parse_inline_tokens(&self, tokens: &[Token]) -> Result<Vec<Value>, Error> {
+    /// `helpers.parseInline(tokens)`, which is `parseInlineTokens`: inline tokens to text and
+    /// inline nodes, with marks on the text, and adjacent text with the same marks joined.
+    pub fn parse_inline(&self, tokens: &[Token]) -> Result<Vec<Value>, Error> {
         let mut result: Vec<Value> = Vec::new();
         let mut index = 0;
         while index < tokens.len() {
@@ -258,7 +267,7 @@ impl Helpers<'_> {
         implicit_paragraphs: bool,
     ) -> Result<Vec<Value>, Error> {
         let inline = |token: &Token| match &token.tokens {
-            Some(tokens) => self.parse_inline_tokens(tokens),
+            Some(tokens) => self.parse_inline(tokens),
             None => Ok(Vec::new()),
         };
         Ok(match token.kind {
@@ -336,7 +345,7 @@ fn parse_html_token(html: &[u16], block: bool) -> Option<Value> {
 }
 
 /// `applyMarkToContent(markType, content, attrs)`.
-fn apply_mark_to_content(mark: &str, content: Vec<Value>, attrs: &Option<Value>) -> Vec<Value> {
+fn apply_mark_to_content(mark: &str, content: Vec<Value>, attrs: Option<&Map>) -> Vec<Value> {
     content
         .into_iter()
         .map(|mut node| {
@@ -347,7 +356,7 @@ fn apply_mark_to_content(mark: &str, content: Vec<Value>, attrs: &Option<Value>)
                 let mut new_mark = Map::new();
                 new_mark.insert("type".into(), json!(mark));
                 if let Some(attrs) = attrs {
-                    new_mark.insert("attrs".into(), attrs.clone());
+                    new_mark.insert("attrs".into(), Value::Object(attrs.clone()));
                 }
                 // The node is this call's, so its marks grow in place: copying them, as the JS
                 // does its array, would copy every mark of n nested ones n times.

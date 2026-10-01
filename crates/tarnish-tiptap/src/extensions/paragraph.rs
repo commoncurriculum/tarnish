@@ -23,7 +23,7 @@ pub fn paragraph() -> NodeExtension {
 
 const NBSP_CHAR: &str = "\u{A0}";
 
-fn parse_markdown(token: &Token, helpers: &dyn ParseHelpers) -> Result<Parsed, Error> {
+fn parse_markdown(token: &Token, helpers: &ParseHelpers) -> Result<Parsed, Error> {
     let tokens = token.tokens.as_deref().unwrap_or_default();
     if let [only] = tokens
         && only.kind == "image"

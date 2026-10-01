@@ -15,7 +15,7 @@ pub fn text() -> NodeExtension {
         .render_markdown(render_markdown)
 }
 
-fn parse_markdown(token: &Token, _: &dyn ParseHelpers) -> Result<Parsed, Error> {
+fn parse_markdown(token: &Token, _: &ParseHelpers) -> Result<Parsed, Error> {
     Ok(Parsed::Node(
         json!({ "type": "text", "text": utf16::to_string(token.text()) }),
     ))

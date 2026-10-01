@@ -4,14 +4,13 @@ use std::sync::LazyLock;
 
 use crate::DomSpec;
 use crate::GetAttrs;
-use crate::markdown::{MarkdownTokenizer, TokenizerHelpers};
 use crate::{MarkExtension, ParseHtml};
 use tarnish::Map as Attrs;
 use tarnish_js::Error;
 use tarnish_js::regexp::RegExp;
 use tarnish_js::units::Units;
 use tarnish_js::utf16;
-use tarnish_markdown::marked::Token;
+use tarnish_markdown::marked::{Lexer, Token};
 
 pub fn underline() -> MarkExtension {
     MarkExtension::create("underline")
@@ -26,24 +25,17 @@ pub fn underline() -> MarkExtension {
                 .into(),
         ])
         .render_html(|_, html| DomSpec::wrapping("u", html))
-        .markdown_tokenizer(MarkdownTokenizer {
-            start: "++",
-            tokenize,
-        })
+        .markdown_tokenizer("++", tokenize)
 }
 
 static RULE: LazyLock<RegExp> = LazyLock::new(|| RegExp::new(r"^(\+\+)([\s\S]+?)(\+\+)", ""));
 
-fn tokenize(
-    src: &Units,
-    _: &[Token],
-    helpers: &mut dyn TokenizerHelpers,
-) -> Result<Option<Token>, Error> {
+fn tokenize(src: &Units, _: &[Token], lexer: &mut Lexer) -> Result<Option<Token>, Error> {
     let Some(found) = RULE.exec(src) else {
         return Ok(None);
     };
     let inner_content = src.slice_of(utf16::trim(found.get(2).unwrap_or_default()));
-    let tokens = helpers.inline_tokens(&inner_content)?;
+    let tokens = lexer.inline_tokens(&inner_content)?;
     Ok(Some(Token {
         text: Some(inner_content),
         tokens: Some(tokens.into()),

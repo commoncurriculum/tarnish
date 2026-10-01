@@ -14,7 +14,8 @@ use super::parse_html::ParseHtml;
 use crate::{DomSpec, SpecAttrs};
 use tarnish::json::Value;
 use tarnish::{Error, Mark, Node};
-use tarnish_markdown::marked::Token;
+use tarnish_js::units::Units;
+use tarnish_markdown::marked::{Lexer, Token};
 
 /// A node's `renderHTML`, given the node and its rendered attributes.
 pub type RenderNode = Arc<
@@ -36,7 +37,7 @@ pub struct Extension<K = Kind> {
     pub global_attributes: Vec<GlobalAttributes>,
     /// `parseHTML`.
     pub parse_html: Vec<ParseHtml>,
-    pub markdown: Markdown,
+    pub(crate) markdown: Markdown,
 }
 
 /// `Node.create(config)`.
@@ -69,7 +70,7 @@ pub struct MarkConfig {
 
 /// The fields `@tiptap/markdown` reads from an extension.
 #[derive(Default)]
-pub struct Markdown {
+pub(crate) struct Markdown {
     /// `markdownTokenName`: the marked token type `parseMarkdown` handles, when not the name.
     pub token_name: Option<&'static str>,
     /// `markdownTokenizer`.
@@ -172,14 +173,26 @@ impl<K> Extension<K> {
         self
     }
 
-    pub fn markdown_tokenizer(mut self, tokenizer: MarkdownTokenizer) -> Self {
-        self.markdown.tokenizer = Some(tokenizer);
+    /// `markdownTokenizer: { start: (src) => src.indexOf(start), tokenize }`, inline: `tokenize`
+    /// matches only where `src` starts with `start`.
+    pub fn markdown_tokenizer(
+        mut self,
+        start: &'static str,
+        tokenize: impl Fn(&Units, &[Token], &mut Lexer) -> Result<Option<Token>, Error>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        self.markdown.tokenizer = Some(MarkdownTokenizer {
+            start,
+            tokenize: Arc::new(tokenize),
+        });
         self
     }
 
     pub fn parse_markdown(
         mut self,
-        parse: impl Fn(&Token, &dyn ParseHelpers) -> Result<Parsed, Error> + Send + Sync + 'static,
+        parse: impl Fn(&Token, &ParseHelpers) -> Result<Parsed, Error> + Send + Sync + 'static,
     ) -> Self {
         self.markdown.parse = Some(Arc::new(parse));
         self
