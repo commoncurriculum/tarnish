@@ -1920,7 +1920,6 @@ dependencies = [
 name = "tarnish-zod"
 version = "0.1.0"
 dependencies = [
- "tarnish",
  "tarnish-js",
 ]
 
