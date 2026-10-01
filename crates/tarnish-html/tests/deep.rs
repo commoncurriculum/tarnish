@@ -6,12 +6,15 @@ mod basic;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use tarnish::dom::{DomSerializer, DomSpec, NodeToDom, ParseOptions, render_spec, render_spec_of};
+use tarnish::dom::{
+    DomParser, DomSerializer, DomSpec, NodeToDom, ParseOptions, ParseRule, Rule, TagRule,
+    render_spec, render_spec_of,
+};
 use tarnish::js::stack::on_dirty_scheduler_stack;
 use tarnish::json::{self, Value};
 use tarnish::{Error, Node, Schema, api};
 use tarnish_fixtures::read;
-use tarnish_html::{HtmlDom, HtmlNode, parse_html, to_html};
+use tarnish_html::{HtmlDom, HtmlNode, parse_html, parse_html_slice, to_html};
 
 const DEPTH: usize = 3_000;
 
@@ -25,6 +28,10 @@ const CSS_DEPTH: usize = 100_000;
 
 /// How deep selector lists nest in each other.
 const SELECTOR_DEPTH: usize = 10_000;
+
+/// How many states a content expression chains, which its automaton is built and searched in
+/// time that grows with the square of.
+const CHAIN: usize = 10_000;
 
 #[test]
 fn deep_html_round_trips_on_a_small_stack() {
@@ -193,5 +200,30 @@ fn selectors_nest_as_deeply_as_memory_allows() {
         }
         assert!(found(&fragment, "div:has(p)").as_ref() == Some(&top));
         assert!(top.closest("div:has(p)").expect("a selector").as_ref() == Some(&top));
+    });
+}
+
+/// A mark on a node that an open parse puts at its top, where ProseMirror looks for any node
+/// type that allows the mark and whose content can hold the node: here after a chain of states
+/// far longer than a small stack could recurse down.
+#[test]
+fn marks_find_where_they_apply_down_content_as_long_as_memory_allows() {
+    on_dirty_scheduler_stack(|| {
+        let spec = json::json!({"nodes": [
+            ["doc", {"content": "block+"}],
+            ["paragraph", {"content": "text*", "group": "block"}],
+            ["rule", {"group": "block"}],
+            ["chain", {"content": format!("rule{{{CHAIN}}} paragraph"), "marks": "_", "group": "block"}],
+            ["text", {}],
+        ], "marks": [["strong", {}]]});
+        let schema = api::schema(&spec).expect("the schema");
+        let tag = |selector: &str| vec![ParseRule::Tag(Rule::new(TagRule::new(selector)))];
+        let nodes = vec![vec![], tag("p"), tag("hr"), tag("section"), vec![]];
+        let parser = DomParser::from_schema(schema, vec![tag("b")], nodes).expect("a parser");
+        let slice = parse_html_slice(&parser, "<b><p>x</p></b>", ParseOptions::default());
+        let paragraph = json::json!({"type": "paragraph", "marks": [{"type": "strong"}],
+            "content": [{"type": "text", "text": "x"}]});
+        let expected = json::json!({"content": [paragraph], "openStart": 1, "openEnd": 1});
+        assert_eq!(slice.expect("a slice").to_json(), expected);
     });
 }
