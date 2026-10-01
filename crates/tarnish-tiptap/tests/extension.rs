@@ -59,6 +59,17 @@ fn updates_only_an_attribute_it_has() {
 }
 
 #[test]
+fn an_attribute_without_a_default_is_required() -> tarnish::Result<()> {
+    for (default, required) in [(None, true), (Some(Value::Null), false)] {
+        let figure = figure().add_attributes(vec![ExtensionAttribute::new("src", default)]);
+        let schema = get_schema(&with(figure))?.schema;
+        let figure = schema.node_type("figure").expect("the figure type");
+        assert_eq!(figure.has_required_attrs(), required);
+    }
+    Ok(())
+}
+
+#[test]
 fn renders_an_attribute_under_a_name_it_makes() -> tarnish::Result<()> {
     let name = ["data", "made"].join("-");
     let figure = figure().add_attributes(vec![

@@ -44,18 +44,19 @@ pub struct ExtensionAttribute {
 }
 
 impl ExtensionAttribute {
-    pub fn new(name: &'static str, default: Value) -> Self {
+    /// `{ default }`, or a required attribute for `None`.
+    pub fn new(name: &'static str, default: impl Into<Option<Value>>) -> Self {
         ExtensionAttribute {
             name,
-            default: Some(default),
+            default: default.into(),
             rendered: true,
             render_html: None,
             parse_html: None,
         }
     }
 
-    pub fn default(mut self, default: Value) -> Self {
-        self.default = Some(default);
+    pub fn default(mut self, default: impl Into<Option<Value>>) -> Self {
+        self.default = default.into();
         self
     }
 
