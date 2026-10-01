@@ -295,7 +295,8 @@ impl Schema {
         match self {
             Schema::Optional(inner) => match input {
                 // `undefined` passes as it is, unless the schema wrapped puts a value in its
-                // place, which it does here as alone, where an issue it raises is dropped.
+                // place: then that value, or `undefined` where it raises an issue, which zod
+                // drops.
                 Input::Undefined if inner.defaults() => {
                     let mut inner_issues = Sink::Count(0);
                     let parsed = inner.run(input, path, &mut inner_issues);
