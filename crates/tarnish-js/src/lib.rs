@@ -37,7 +37,7 @@ pub fn truthy(value: Option<&Value>) -> bool {
     match value {
         None | Some(Value::Null) | Some(Value::Bool(false)) => false,
         Some(Value::String(string)) => !string.is_empty(),
-        Some(Value::Number(number)) => number.as_f64().is_some_and(|n| n != 0.0 && !n.is_nan()),
+        Some(Value::Number(number)) => number.as_f64() != 0.0 && !number.as_f64().is_nan(),
         Some(_) => true,
     }
 }
@@ -100,7 +100,7 @@ pub fn to_string(value: &Value) -> Result<String> {
     Ok(match value {
         Value::Null => "null".into(),
         Value::Bool(boolean) => boolean.to_string(),
-        Value::Number(number) => number_to_string(number.as_f64().unwrap_or(f64::NAN)),
+        Value::Number(number) => number_to_string(number.as_f64()),
         Value::String(string) => string.clone(),
         Value::Array(items) => {
             let mut parts = Vec::with_capacity(items.len());

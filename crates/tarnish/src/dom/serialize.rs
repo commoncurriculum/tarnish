@@ -732,7 +732,7 @@ fn fill<D: Dom>(
 pub fn is_hole<N>(child: &DomSpec<N>) -> bool {
     match child {
         DomSpec::Hole => true,
-        DomSpec::Value(Value::Number(number)) => number.as_f64() == Some(0.0),
+        DomSpec::Value(Value::Number(number)) => number.as_f64() == 0.0,
         DomSpec::Attr(value) => value.as_f64() == Some(0.0),
         _ => false,
     }

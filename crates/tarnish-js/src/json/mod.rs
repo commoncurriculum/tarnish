@@ -1,7 +1,8 @@
 //! JSON values with serde_json's behavior under `preserve_order`, on a lighter object: a
 //! vector of entries in insertion order, searched in place of serde_json's hashed `IndexMap`.
 //! The objects documents hold have a handful of keys, so a search is cheaper than hashing, and
-//! building and dropping them allocates less.
+//! building and dropping them allocates less. A number is the double JavaScript holds, which
+//! may be one JSON can't write.
 
 mod convert;
 mod de;
@@ -23,7 +24,7 @@ pub use write::{
 };
 /// An object's key, kept in place up to 24 bytes, which every key the schemas name fits in.
 pub type Key = compact_str::CompactString;
-pub use serde_json::Number;
+pub use crate::number::Number;
 
 pub static NULL: Value = Value::Null;
 
@@ -75,17 +76,12 @@ impl Value {
 
     #[inline]
     pub fn is_i64(&self) -> bool {
-        matches!(self, Value::Number(number) if number.is_i64())
+        self.as_i64().is_some()
     }
 
     #[inline]
     pub fn is_u64(&self) -> bool {
-        matches!(self, Value::Number(number) if number.is_u64())
-    }
-
-    #[inline]
-    pub fn is_f64(&self) -> bool {
-        matches!(self, Value::Number(number) if number.is_f64())
+        self.as_u64().is_some()
     }
 
     #[inline]
@@ -107,7 +103,7 @@ impl Value {
     #[inline]
     pub fn as_f64(&self) -> Option<f64> {
         match self {
-            Value::Number(number) => number.as_f64(),
+            Value::Number(number) => Some(number.as_f64()),
             _ => None,
         }
     }

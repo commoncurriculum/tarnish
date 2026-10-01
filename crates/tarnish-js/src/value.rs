@@ -134,10 +134,7 @@ pub fn iterate<'a>(value: Option<&'a Value>, how: Iterating) -> Result<Cow<'a, [
         None => "undefined".into(),
         Some(Value::Null) => "object null".into(),
         Some(Value::Bool(boolean)) => format!("boolean {boolean}"),
-        Some(Value::Number(number)) => format!(
-            "number {}",
-            number_to_string(number.as_f64().unwrap_or(f64::NAN))
-        ),
+        Some(Value::Number(number)) => format!("number {}", number_to_string(number.as_f64())),
         Some(Value::Object(_)) => "object".into(),
     };
     Err(Error::Type(match how {
@@ -166,9 +163,7 @@ impl<'a> SameValueKey<'a> {
             None => SameValueKey::Undefined,
             Some(Value::Null) => SameValueKey::Null,
             Some(Value::Bool(boolean)) => SameValueKey::Bool(*boolean),
-            Some(Value::Number(number)) => {
-                SameValueKey::Number(number.as_f64().unwrap_or(f64::NAN))
-            }
+            Some(Value::Number(number)) => SameValueKey::Number(number.as_f64()),
             Some(Value::String(string)) => SameValueKey::String(string),
             Some(value) => SameValueKey::Reference(value),
         }
@@ -228,9 +223,12 @@ impl Hash for SameValueKey<'_> {
     }
 }
 
-/// `a === b`, which for JSON values, never NaN, is SameValueZero.
+/// `a === b`, which is SameValueZero but for NaN, which isn't itself.
 pub fn strict_equals(a: Option<&Value>, b: Option<&Value>) -> bool {
-    SameValueKey::of(a) == SameValueKey::of(b)
+    match (a, b) {
+        (Some(Value::Number(a)), Some(Value::Number(b))) => a == b,
+        _ => SameValueKey::of(a) == SameValueKey::of(b),
+    }
 }
 
 /// One of the own enumerable properties `Object.keys` lists: a JSON value, or a string's code
@@ -242,12 +240,12 @@ enum Property<'a> {
 }
 
 impl Property<'_> {
-    /// `Object.is(a, b)`, for values JSON holds (never NaN).
+    /// `Object.is(a, b)`.
     fn same_value(self, other: Property) -> bool {
         match (self, other) {
             (Property::Value(Value::Number(a)), Property::Value(Value::Number(b))) => {
                 let (a, b) = (a.as_f64(), b.as_f64());
-                a.map(f64::to_bits) == b.map(f64::to_bits)
+                a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan())
             }
             (Property::Value(a), Property::Value(b)) => strict_equals(Some(a), Some(b)),
             (Property::CodeUnit(a), Property::CodeUnit(b)) => a == b,
@@ -367,6 +365,20 @@ mod tests {
             crate::to_string(&json!([1, null, [2, 3], {}])).unwrap(),
             "1,,2,3,[object Object]"
         );
+    }
+
+    /// `===` is SameValueZero but for NaN, and `Object.is` tells -0 from 0.
+    #[test]
+    fn compares_numbers_as_javascript_does() {
+        let (nan, zero, negative_zero) = (crate::number(f64::NAN), json!(0), crate::number(-0.0));
+        assert!(!strict_equals(Some(&nan), Some(&nan)));
+        assert!(strict_equals(Some(&zero), Some(&negative_zero)));
+        let object = |value: &Value| json!({ "a": value });
+        assert!(same_own_properties(&object(&nan), &object(&nan)));
+        assert!(!same_own_properties(
+            &object(&zero),
+            &object(&negative_zero)
+        ));
     }
 
     #[test]

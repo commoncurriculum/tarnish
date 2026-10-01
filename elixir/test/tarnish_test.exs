@@ -251,6 +251,8 @@ defmodule TarnishTest do
              paragraph([text("a", [em])])},
             {%{"type" => "heading", "content" => [text("a")]}, heading(1, "a")},
             {heading(1.0, "a"), heading(1, "a")},
+            # Past a double, which JavaScript reads as Infinity and writes as null.
+            {heading(Integer.pow(2, 1024), "a"), heading(nil, "a")},
             {heading(2, "a") |> put_in(["attrs", "extra"], 1), heading(2, "a")},
             {Jason.OrderedObject.new([{"type", "paragraph"}]), %{"type" => "paragraph"}}
           ] do

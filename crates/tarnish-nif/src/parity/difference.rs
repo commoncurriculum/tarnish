@@ -4,7 +4,7 @@ use std::fmt::{self, Display};
 use std::mem::discriminant;
 
 use tarnish::js::json::{stringify, write_string};
-use tarnish::js::{same_number, stack};
+use tarnish::js::stack;
 use tarnish::{Key, Map, Value};
 
 use super::{Answered, Made, MadeUp, Span};
@@ -245,8 +245,10 @@ impl<'a> Comparison<'a> {
             (Value::Object(theirs), Value::Object(ours)) => return self.objects(theirs, ours),
             (Value::Array(theirs), Value::Array(ours)) => return self.arrays(theirs, ours),
             (Value::Null, Value::Null) => return None,
+            // The NIF writes a number that isn't finite as `null`, as the worker's JSON has it.
+            (Value::Null, Value::Number(number)) if !number.as_f64().is_finite() => return None,
             (Value::Bool(a), Value::Bool(b)) if a == b => return None,
-            (Value::Number(a), Value::Number(b)) if same_number(a, b) => return None,
+            (Value::Number(a), Value::Number(b)) if a == b => return None,
             (Value::String(a), Value::String(b)) if a == b => return None,
             _ if discriminant(theirs) == discriminant(ours) => Kind::Value,
             _ => Kind::Type,
@@ -417,7 +419,7 @@ pub(crate) fn truncated(text: &str, length: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tarnish::js::json::{Number, from_str, json};
+    use tarnish::js::json::{from_str, json};
 
     fn exact(_: &Request, _: &[Segment], _: Made, _: Made) -> bool {
         false
@@ -519,13 +521,23 @@ mod tests {
 
     #[test]
     fn compares_numbers_by_value() {
-        let float = |double| Value::Number(Number::from_f64(double).unwrap());
-        assert!(json!(2) != float(2.0));
-        assert_eq!(found(json!([2]), json!([float(2.0)])), None);
-        assert_eq!(found(json!([0]), json!([float(-0.0)])), None);
+        assert_eq!(found(json!([2]), json!([2.0])), None);
+        assert_eq!(found(json!([0]), json!([-0.0])), None);
         assert_eq!(
-            found(json!([2]), json!([float(2.5)])),
+            found(json!([2]), json!([2.5])),
             shown("$[0]", "op $[*] value")
+        );
+    }
+
+    /// The worker's JSON has `null` for a number that isn't finite, as the NIF writes it.
+    #[test]
+    fn compares_a_number_that_isnt_finite_as_null() {
+        for number in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(found(json!([null]), json!([number])), None);
+        }
+        assert_eq!(
+            found(json!([null]), json!([0])),
+            shown("$[0]", "op $[*] type")
         );
     }
 

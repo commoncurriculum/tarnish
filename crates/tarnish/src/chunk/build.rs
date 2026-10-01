@@ -307,7 +307,7 @@ impl<'a> Builder<'a> {
             Kind::Null => self.push_value(Tag::Null, 0, 0),
             Kind::Bool(false) => self.push_value(Tag::False, 0, 0),
             Kind::Bool(true) => self.push_value(Tag::True, 0, 0),
-            Kind::Number(number) => self.number(&number),
+            Kind::Number(number) => self.number(number),
             Kind::String(string) => {
                 let (start, len) = self.string(string);
                 self.push_value(Tag::String, start, len)
@@ -336,15 +336,9 @@ impl<'a> Builder<'a> {
         })
     }
 
-    fn number(&mut self, number: &crate::json::Number) -> u32 {
-        let (tag, bits) = if let Some(integer) = number.as_i64() {
-            (Tag::Int, integer as u64)
-        } else if let Some(integer) = number.as_u64() {
-            (Tag::UInt, integer)
-        } else {
-            (Tag::Float, number.as_f64().unwrap_or_default().to_bits())
-        };
-        self.push_value(tag, bits as u32, (bits >> 32) as u32)
+    fn number(&mut self, number: crate::json::Number) -> u32 {
+        let bits = number.as_f64().to_bits();
+        self.push_value(Tag::Number, bits as u32, (bits >> 32) as u32)
     }
 
     fn array(&mut self, base: usize) -> u32 {

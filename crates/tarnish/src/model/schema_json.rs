@@ -19,7 +19,7 @@ fn loosely_equals(value: &Value, text: &str) -> Result<bool> {
     Ok(match value {
         Value::Null => false,
         Value::Bool(value) => !value && text.is_empty(),
-        Value::Number(number) => text.is_empty() && number.as_f64() == Some(0.0),
+        Value::Number(number) => text.is_empty() && number.as_f64() == 0.0,
         Value::String(value) => value == text,
         Value::Array(_) | Value::Object(_) => js::to_string(value)? == text,
     })

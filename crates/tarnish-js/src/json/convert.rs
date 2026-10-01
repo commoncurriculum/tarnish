@@ -23,7 +23,7 @@ impl ToValue for Map {
 
 impl ToValue for Number {
     fn to_value(&self) -> Value {
-        Value::Number(self.clone())
+        Value::Number(*self)
     }
 }
 
@@ -59,7 +59,7 @@ impl ToValue for bool {
 
 impl ToValue for f64 {
     fn to_value(&self) -> Value {
-        Number::from_f64(*self).map_or(Value::Null, Value::Number)
+        Value::Number(Number::from(*self))
     }
 }
 

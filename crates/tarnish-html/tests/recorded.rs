@@ -164,8 +164,9 @@ fn report(failures: Vec<String>) {
 
 /// What a template and a document's body parse to, as the recorder records it: each one's
 /// tree, the document the parser reads from it, and the template's slice, each outcome as
-/// tarnish gives it. A tree is read before the parser reads it, since the parser moves a list
-/// nested straight in a list into the item before it.
+/// tarnish gives it, in JSON, which writes a number that isn't finite as `null`. A tree is read
+/// before the parser reads it, since the parser moves a list nested straight in a list into the
+/// item before it.
 fn parsed(parser: &DomParser<HtmlNode>, html: &str, record: &Value) -> Value {
     let template_tree = HtmlDom::new().parse_fragment(html).inner_html();
     let template_doc = parse_html(parser, html, options(record)).map(|doc| doc.to_json());
@@ -174,7 +175,7 @@ fn parsed(parser: &DomParser<HtmlNode>, html: &str, record: &Value) -> Value {
     let body = dom.body().expect("a body");
     let document_tree = body.inner_html();
     let document_doc = parser.parse(&dom, &body, options(record));
-    json::json!({
+    let parsed = json::json!({
         "template": {
             "tree": template_tree,
             "doc": outcome(template_doc),
@@ -184,7 +185,8 @@ fn parsed(parser: &DomParser<HtmlNode>, html: &str, record: &Value) -> Value {
             "tree": document_tree,
             "doc": outcome(document_doc.map(|doc| doc.to_json())),
         },
-    })
+    });
+    json::from_str(&json::stringify(&parsed)).expect("JSON")
 }
 
 /// A parse record as tarnish-html must give it: the record, where the trees match, or what

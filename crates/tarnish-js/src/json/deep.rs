@@ -9,7 +9,7 @@ impl Clone for Value {
         match self {
             Value::Null => Value::Null,
             Value::Bool(boolean) => Value::Bool(*boolean),
-            Value::Number(number) => Value::Number(number.clone()),
+            Value::Number(number) => Value::Number(*number),
             Value::String(string) => Value::String(string.clone()),
             Value::Array(items) => Value::Array(
                 items
@@ -29,8 +29,8 @@ impl Clone for Value {
 }
 
 impl PartialEq for Value {
-    /// Equal JSON: arrays equal item by item, and objects with equal keys and values, in any
-    /// order.
+    /// Equal JSON: arrays equal item by item, objects with equal keys and values, in any order,
+    /// and numbers equal as `===` has them.
     fn eq(&self, other: &Value) -> bool {
         match (self, other) {
             (Value::Null, Value::Null) => true,

@@ -346,7 +346,7 @@ fn to_js<'env>(env: &'env Env, value: &Value) -> Result<Unknown<'env>> {
     match value {
         Value::Null => Null.into_unknown(env),
         Value::Bool(value) => value.into_unknown(env),
-        Value::Number(value) => value.as_f64().unwrap_or(f64::NAN).into_unknown(env),
+        Value::Number(value) => value.as_f64().into_unknown(env),
         Value::String(value) => value.as_str().into_unknown(env),
         Value::Array(items) => {
             let mut array = env.create_array(items.len() as u32)?;

@@ -347,6 +347,43 @@ mod tests {
         }
     }
 
+    /// What JavaScript holds of a number past a double's range is ±Infinity, which `String`
+    /// writes as such and `JSON.stringify` as `null`.
+    #[test]
+    fn reads_a_number_past_a_double_as_infinity() {
+        for (text, infinity, string) in [
+            ("1e400", f64::INFINITY, "Infinity"),
+            ("-1e400", f64::NEG_INFINITY, "-Infinity"),
+        ] {
+            let number = from_str(text).unwrap();
+            assert_eq!(number.as_f64(), Some(infinity), "{text}");
+            assert_eq!(crate::to_string(&number).unwrap(), string);
+            assert_eq!(stringify(&number), "null");
+            let array = from_str(&format!("[{text},[{text}]]")).unwrap();
+            assert_eq!(array[1][0].as_f64(), Some(infinity), "[{text},[{text}]]");
+            assert_eq!(
+                crate::to_string(&array).unwrap(),
+                format!("{string},{string}")
+            );
+            assert_eq!(stringify(&array), "[null,[null]]");
+            let object = from_str(&format!(r#"{{"a":{text},"b":{{"c":{text}}}}}"#)).unwrap();
+            assert_eq!(object["b"]["c"].as_f64(), Some(infinity), "{object}");
+            assert_eq!(stringify(&object), r#"{"a":null,"b":{"c":null}}"#);
+        }
+    }
+
+    /// -0 is held as itself, which `String` and `JSON.stringify` write as `0`.
+    #[test]
+    fn reads_negative_zero_as_itself() {
+        let zero = from_str("-0").unwrap();
+        assert!(
+            zero.as_f64()
+                .is_some_and(|zero| zero == 0.0 && zero.is_sign_negative())
+        );
+        assert_eq!(crate::to_string(&zero).unwrap(), "0");
+        assert_eq!(stringify(&zero), "0");
+    }
+
     /// Whatever serde_json reads, the event parser reads the same.
     #[test]
     fn serde_reads_as_the_event_parser_does() {
