@@ -85,22 +85,10 @@ defmodule Tarnish.Bridge.Pool do
     do: Jason.encode_to_iodata!(%{id: id, operation: operation, input: input, options: options})
 
   defp decode(line, id) do
-    case json(line) do
+    case Tarnish.JSON.decode!(line) do
       %{"id" => ^id, "result" => result} -> {:ok, result}
       %{"id" => ^id, "error" => message} -> {:error, message}
       response -> raise "bridge worker answered request #{id} with id #{inspect(response["id"])}"
-    end
-  end
-
-  # `JSON.stringify` escapes a lone surrogate, which Jason refuses and an Elixir string can't hold.
-  # It reads as U+FFFD, as tarnish writes it. `JSON.stringify` writes a surrogate pair unescaped,
-  # so every surrogate escape in a line is a lone one.
-  @lone_surrogate ~r/(?<!\\)((?:\\\\)*)\\ud[89a-f][0-9a-f]{2}/i
-
-  defp json(line) do
-    case Jason.decode(line) do
-      {:ok, value} -> value
-      {:error, _} -> @lone_surrogate |> Regex.replace(line, "\\1\\\\ufffd") |> Jason.decode!()
     end
   end
 
