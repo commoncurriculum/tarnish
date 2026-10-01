@@ -76,10 +76,11 @@ fn documents_nest_as_deeply_as_memory_allows() {
         let again = Node::from_json(&schema, &written).expect("the document again");
         assert!(doc == again);
         assert!(again.to_json() == written);
-        assert!(
-            doc.to_debug_string()
-                .expect("its string")
-                .contains("deep text")
+        let quotes = "blockquote(".repeat(DEPTH);
+        let closes = ")".repeat(DEPTH);
+        assert_eq!(
+            doc.to_debug_string().expect("its string"),
+            format!("doc({quotes}paragraph(\"deep text\"){closes})")
         );
         assert_eq!(
             doc.text_content().expect("its text").to_string(),
@@ -112,14 +113,13 @@ fn documents_nest_as_deeply_as_memory_allows() {
             doc.content().find_diff_start(replaced.content(), 0),
             Some(TEXT + 1)
         );
-        assert!(
-            doc.content()
-                .find_diff_end(
-                    replaced.content(),
-                    doc.content().size(),
-                    replaced.content().size()
-                )
-                .is_some()
+        assert_eq!(
+            doc.content().find_diff_end(
+                replaced.content(),
+                doc.content().size(),
+                replaced.content().size()
+            ),
+            Some((TEXT + 3, TEXT + 1))
         );
 
         let em = schema

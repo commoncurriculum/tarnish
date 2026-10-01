@@ -2,6 +2,7 @@
 //! under names they make, parse rules whose hooks fail, Markdown hooks that hold what they
 //! need, and code, whose text stays as it is.
 
+use tarnish::Error;
 use tarnish::json::{Map, Value, json};
 use tarnish_markdown::marked::Marked;
 use tarnish_markdown::marked_more_lists::more_lists;
@@ -103,7 +104,8 @@ fn fails_to_parse_where_a_hook_fails() -> tarnish::Result<()> {
         })]);
     for figure in [attrs, content] {
         let schema = get_schema(&with(figure))?;
-        assert!(html::parse(&schema, "<figure>x</figure>").is_err());
+        let refused = html::parse(&schema, "<figure>x</figure>").err();
+        assert!(refused == Some(Error::Syntax("'[' is not a valid selector".into())));
     }
     Ok(())
 }

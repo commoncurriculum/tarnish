@@ -787,7 +787,7 @@ mod tests {
     use std::borrow::Cow;
 
     use super::{Chunk, STRINGS, layout};
-    use crate::{Node, api, json};
+    use crate::{Error, Node, api, json};
 
     /// A chunk's strings are checked as it loads, so one whose strings aren't UTF-8 is refused
     /// then rather than on the read that would come across them.
@@ -803,6 +803,7 @@ mod tests {
         assert!(counts[STRINGS] > 0);
         assert!(Chunk::load(Cow::Borrowed(&bytes), &schema, Vec::new()).is_ok());
         bytes[starts[STRINGS] as usize] = 0xff;
-        assert!(Chunk::load(Cow::Owned(bytes), &schema, Vec::new()).is_err());
+        let refused = Chunk::load(Cow::Owned(bytes), &schema, Vec::new()).err();
+        assert!(refused == Some(Error::Range("Invalid document chunk".into())));
     }
 }
