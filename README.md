@@ -244,8 +244,10 @@ text = Tarnish.Node.text_content(doc)
   isn't text for a parse and an object for a serialization.
 
   Its backend runs them in Node workers (`backend: :node`, the default) or in your NIF
-  (`backend: :nif`). Add `Tarnish.Bridge` to your supervision tree: it loads the NIF, so an
-  application whose NIF doesn't load fails to start, and starts the workers only for `:node`.
+  (`backend: :nif`), as configured or as a call's `backend:` option picks, so that one test run
+  can hold the two to the same answers. Add `Tarnish.Bridge` to your supervision tree: it loads
+  the NIF, so an application whose NIF doesn't load fails to start, and starts the workers only
+  for `:node`.
   Each worker runs tarnish's `priv/worker.mjs` on your module, which exports `parseMarkdown`,
   `serializeMarkdown`, `parseHTML` and `serializeHTML`, each taking a request's input and
   options:
