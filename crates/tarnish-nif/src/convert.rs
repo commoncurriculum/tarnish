@@ -154,16 +154,6 @@ pub(crate) enum Answer {
     Document(Node<'static>),
 }
 
-impl Answer {
-    pub(crate) fn into_json(self) -> Value {
-        match self {
-            Answer::Text(text) => Value::String(text),
-            Answer::Json(json) => json,
-            Answer::Document(document) => document.to_json(),
-        }
-    }
-}
-
 /// The term Jason decodes from the result's JSON.
 impl Encoder for Answer {
     fn encode<'a>(&self, env: Env<'a>) -> Term<'a> {

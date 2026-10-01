@@ -47,7 +47,11 @@ pub fn main(parity: &Parity) -> ExitCode {
 
 /// The NIF's answer to a request read as JSON, its result as JSON.
 pub fn answer(conversions: &dyn Conversions, request: Request) -> Result<Value, String> {
-    answer_json(conversions, request).map(Answer::into_json)
+    answer_json(conversions, request).map(|answer| match answer {
+        Answer::Text(text) => Value::String(text),
+        Answer::Json(json) => json,
+        Answer::Document(document) => document.to_json(),
+    })
 }
 
 /// A request and the worker's answer to it. A record file is a JSON array of them, each
