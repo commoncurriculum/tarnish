@@ -11,6 +11,14 @@ pub fn read(name: &str) -> Value {
     json::from_str(&text).unwrap_or_else(|_| panic!("{path} is JSON"))
 }
 
+/// The installed version of a package `fixtures/versions.json` names, as a dependent resolves it:
+/// `"@tiptap/pm > prosemirror-model"` is the prosemirror-model `@tiptap/pm` loads.
+#[track_caller]
+pub fn version(package: &str) -> String {
+    let version = read("versions")[package].as_str().map(str::to_owned);
+    version.unwrap_or_else(|| panic!("no version of {package}"))
+}
+
 /// The records of a fixture's `section`, of which there must be some: a loop over none passes.
 #[track_caller]
 pub fn records<'f>(fixture: &'f Value, section: &str) -> &'f [Value] {

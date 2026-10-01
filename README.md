@@ -133,9 +133,11 @@ This example is `tarnish-html`'s doctest.
   interface. The crate's tests write those schemas' rules and `toDOM`s in Rust, and must build
   the same trees, documents, HTML and strings. They render each spec as the value of a node's
   attribute too, as an application's `toDOM` may hand one over. They also check that the fork's
-  `element.style` runs the `tarnish-css` they do, by the `engine()` it recorded.
-- **Where the trees differ.** The tests print both trees for eight inputs, where html5ever
-  follows the HTML standard and parse5 8 doesn't, but for `<isindex>`:
+  `element.style` runs the `tarnish-css` they do, by the `engine()` `fixtures/versions.json`
+  records.
+- **Where the trees differ.** For eight inputs, where html5ever follows the HTML standard and
+  parse5 8 doesn't, but for `<isindex>`, the tests hold tarnish-html to html5ever's tree and to
+  the documents and slices parsed from it, and fail once the fork's tree comes to match:
   - elements in a `<select>`, which html5ever keeps, as the standard now does, and parse5
     drops;
   - a CDATA section in an element that isn't HTML's, such as MathML's `<mi>` or SVG's `<desc>`,
@@ -181,11 +183,18 @@ This example is `tarnish-tiptap`'s doctest.
 
 `npm run test:js` records what the JavaScript does, for the tests to hold these crates to:
 `fixtures/marked.json`, the tokens marked, with marked-more-lists, makes of 206 Markdown
-inputs, and `fixtures/tiptap.json`, the documents, Markdown and HTML that `MarkdownManager`,
+inputs; `fixtures/tiptap.json`, the documents, Markdown and HTML that `MarkdownManager`,
 `DOMParser` and `DOMSerializer` make with Tiptap's own extensions, among them V8's errors for
-documents holding what the manager can't read. `tarnish_markdown::MARKED` and
-`tarnish_tiptap::TIPTAP` name the versions ported, and the tests check them against the
-versions installed.
+documents holding what the manager can't read; and `fixtures/zod.json`, what zod's `safeParse`
+makes of every kind of JSON with each schema `tarnish-zod` ports, the data or the `ZodError`'s
+message, issues and paths in zod's order.
+
+`fixtures/versions.json` records the version installed of each package a crate ports or is held
+to, each as its dependent resolves it (`"@tiptap/pm > prosemirror-model"`), and the linkedom
+fork as the SHA-256 of its files. The crates' tests check the versions they name against it
+(`tarnish::PROSEMIRROR_MODEL`, `tarnish_markdown::MARKED`, `tarnish_tiptap::TIPTAP`,
+`tarnish_zod::ZOD`, `tarnish_css::ENGINE` and the rest), and an application checks that its
+JavaScript runs the same packages by comparing what it has installed with the same file.
 
 ### Elixir
 

@@ -1,6 +1,5 @@
-// What the recorders share: how a run is recorded, how a fixture is written, and which version of
-// a package is installed.
-import { readFileSync, writeFileSync } from "node:fs"
+// What the recorders share: how a run is recorded, and how a fixture is written.
+import { writeFileSync } from "node:fs"
 
 // The fields `run` gives, or its error: its class and message, and a DOMException's name.
 export function outcome(run) {
@@ -19,8 +18,4 @@ export function writeFixture(name, fields) {
   const field = value => (Array.isArray(value) && value.length > 0 ? list(value) : JSON.stringify(value))
   const lines = Object.entries(fields).map(([key, value]) => `  ${JSON.stringify(key)}: ${field(value)}`)
   writeFileSync(new URL(`../fixtures/${name}.json`, import.meta.url), `{\n${lines.join(",\n")}\n}\n`)
-}
-
-export function installed(name) {
-  return JSON.parse(readFileSync(new URL(`../node_modules/${name}/package.json`, import.meta.url), "utf8")).version
 }

@@ -7,8 +7,6 @@
 // - Each HTML input records the document DOMParser parses the body of a linkedom document
 //   holding it to.
 // - Each document records the innerHTML of an element DOMSerializer fills in linkedom.
-// The version of @tiptap/markdown is recorded too, for the tests to check that tarnish-tiptap
-// ports the one installed.
 import { getSchema } from "@tiptap/core"
 import { Bold } from "@tiptap/extension-bold"
 import { Document } from "@tiptap/extension-document"
@@ -29,7 +27,7 @@ import { DOMParser, DOMSerializer, Node } from "@tiptap/pm/model"
 import { parseHTML } from "linkedom"
 import { Marked } from "marked"
 import moreLists from "marked-more-lists"
-import { installed, outcome, writeFixture } from "./fixture.mjs"
+import { outcome, writeFixture } from "./fixture.mjs"
 
 const extensions = [
   Document,
@@ -155,7 +153,6 @@ const serializesHTML = [
 }))
 
 writeFixture("tiptap", {
-  tiptap: installed("@tiptap/markdown"),
   parsesMarkdown,
   serializesMarkdown,
   parsesHTML,

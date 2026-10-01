@@ -49,3 +49,9 @@ pub use tarnish_js as js;
 pub use js::{Error, Result, Text, json};
 pub use json::{Key, Map, Value};
 pub use model::*;
+
+/// The version of prosemirror-model this crate ports.
+pub const PROSEMIRROR_MODEL: &str = "1.25.11";
+
+/// The version of prosemirror-transform this crate ports.
+pub const PROSEMIRROR_TRANSFORM: &str = "1.12.0";

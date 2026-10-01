@@ -9,3 +9,6 @@ pub mod marked_more_lists;
 
 /// The version of marked this crate ports.
 pub const MARKED: &str = "17.0.6";
+
+/// The version of `marked-more-lists` this crate ports.
+pub const MARKED_MORE_LISTS: &str = "1.0.1";

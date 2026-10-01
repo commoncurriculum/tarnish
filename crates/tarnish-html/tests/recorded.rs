@@ -7,7 +7,7 @@ mod basic;
 use tarnish::dom::{Dom, DomParser, DomSpec, ParseOptions, PreserveWhitespace, render_spec};
 use tarnish::json::{self, Map, Value};
 use tarnish::{Node, Result, Schema, api};
-use tarnish_fixtures::{outcome, read, records};
+use tarnish_fixtures::{outcome, read, records, version};
 use tarnish_html::{HtmlDom, HtmlNode, parse_html, parse_html_slice, to_html};
 
 /// An input html5ever builds another tree from than the fork's parse5 8 does, and what
@@ -292,8 +292,7 @@ fn inline_styles_match_the_fork() -> Result<()> {
 
 #[test]
 fn the_forks_css_engine_is_this_one() {
-    let (_, fixtures) = fixtures();
-    assert_eq!(fixtures["engine"].as_str(), Some(tarnish_css::ENGINE));
+    assert_eq!(version("CSS engine"), tarnish_css::ENGINE);
 }
 
 /// Each spec rendered as JSON reaches `renderSpec`: an array as a spec's own value, and any spec

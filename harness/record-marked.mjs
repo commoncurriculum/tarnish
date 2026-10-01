@@ -1,10 +1,9 @@
 // Records the tokens marked's lexer makes of each input, with marked-more-lists' list tokenizer,
 // to fixtures/marked.json, for tarnish-markdown's tests to expect. Each token records the fields
-// `Token::to_json` writes, or the lexer's error. The version of marked is recorded too, for the
-// tests to check that tarnish-markdown ports the one installed.
+// `Token::to_json` writes, or the lexer's error.
 import { Marked } from "marked"
 import moreLists from "marked-more-lists"
-import { installed, outcome, writeFixture } from "./fixture.mjs"
+import { outcome, writeFixture } from "./fixture.mjs"
 
 const marked = new Marked()
 marked.use(moreLists())
@@ -280,4 +279,4 @@ function project(token) {
 }
 
 const lexed = inputs.map(input => ({ input, ...outcome(() => ({ tokens: marked.lexer(input).map(project) })) }))
-writeFixture("marked", { marked: installed("marked"), lexed })
+writeFixture("marked", { lexed })

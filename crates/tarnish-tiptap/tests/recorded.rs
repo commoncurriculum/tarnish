@@ -6,7 +6,7 @@ mod own;
 
 use tarnish::Node;
 use tarnish::json::{Value, json};
-use tarnish_fixtures::{outcome, read, records};
+use tarnish_fixtures::{outcome, read, records, version};
 use tarnish_js::Error;
 use tarnish_tiptap::html;
 
@@ -42,12 +42,20 @@ fn text(input: &Value) -> &str {
     input.as_str().expect("text")
 }
 
+/// Each Tiptap package installed, the extensions among them, is the version ported.
 #[test]
 fn ports_the_installed_tiptap() {
-    assert_eq!(
-        read("tiptap")["tiptap"].as_str(),
-        Some(tarnish_tiptap::TIPTAP)
-    );
+    let versions = read("versions");
+    let tiptap = versions.as_object().expect("versions").keys();
+    let tiptap: Vec<_> = tiptap
+        .filter(|key| key.starts_with("@tiptap/") && !key.contains(" > "))
+        .collect();
+    assert!(tiptap.len() > 1, "{tiptap:?}");
+    for package in tiptap {
+        assert_eq!(version(package), tarnish_tiptap::TIPTAP, "{package}");
+    }
+    let flat_list = version("tiptap-extension-flat-list");
+    assert_eq!(flat_list, tarnish_tiptap::FLAT_LIST);
 }
 
 #[test]
