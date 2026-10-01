@@ -1,21 +1,33 @@
 //! The transforms `prosemirror-transform`'s tests make, recorded from the real package by
 //! `npm run test:js`.
 
-use tarnish::json::Value;
+use tarnish::json::{Value, json};
 use tarnish::{Node, Schema, api};
-use tarnish_fixtures::{read, schemas};
+use tarnish_fixtures::{expect, read, records, schemas};
 
 /// Steps after the first are applied to a document only `apply_steps` holds, which a replace
-/// changes in place: the document it was given must stay as it was.
+/// changes in place: the document it was given must stay as it was. Each position recorded maps
+/// through the steps as ProseMirror maps it.
 #[test]
 fn steps_give_prosemirrors_document_and_leave_the_one_given() {
     let fixtures = read("transform");
     let schemas = schemas(&fixtures);
-    for case in fixtures["tests"].as_array().expect("tests") {
+    for case in records(&fixtures, "tests") {
         let schema = &schemas[case["schema"].as_u64().expect("a schema's index") as usize];
         let doc = Node::from_json(schema, &case["start"]).expect("a document");
         let changed = api::apply_steps(&doc, &case["steps"]).expect("the steps");
-        assert!(changed.to_json() == case["result"], "{case}");
+        let mapping: Vec<Value> = case["mapping"]
+            .as_array()
+            .expect("positions")
+            .iter()
+            .map(|pair| {
+                let from = pair[0].as_u64().expect("a position") as usize;
+                let to = api::map_position(schema, &case["steps"], from, 1).expect("a position");
+                json!([from, to])
+            })
+            .collect();
+        let given = json!({ "result": changed.to_json(), "mapping": mapping });
+        expect(case, &["schema", "start", "steps"], given);
         assert!(doc.to_json() == case["start"], "{case}");
         let again: Value = api::apply_steps(&doc, &case["steps"])
             .expect("the steps again")
@@ -53,7 +65,7 @@ fn reloaded(
 fn changes_read_back_from_their_chunks() {
     let fixtures = read("transform");
     let schemas = schemas(&fixtures);
-    for case in fixtures["tests"].as_array().expect("tests") {
+    for case in records(&fixtures, "tests") {
         let schema = &schemas[case["schema"].as_u64().expect("a schema's index") as usize];
         let read = Node::from_json(schema, &case["start"]).expect("a document");
         let source = reloaded(schema, &read, &[]);

@@ -8,7 +8,7 @@ use tarnish::transform::{
     CustomStep, Mappable, Mapping, Step, StepMap, StepResult, Transform, register_step,
 };
 use tarnish::{Error, Fragment, Node, Result, Schema, Slice, Text, api};
-use tarnish_fixtures::{expect, outcome, read};
+use tarnish_fixtures::{expect, outcome, read, records};
 
 #[derive(Debug)]
 struct InsertText {
@@ -100,26 +100,24 @@ fn step(schema: &Schema, json: &Value) -> Step<'static> {
 #[test]
 fn step_ids_register_once_and_not_over_prosemirrors() {
     let (_, fixtures) = fixtures();
-    // The first registration is the one `fixtures` made.
-    for case in &fixtures["jsonID"].as_array().expect("cases")[1..] {
+    let cases = records(&fixtures, "jsonID");
+    // The first registration is the one `fixtures` made, which succeeded.
+    expect(&cases[0], &["id"], json!({ "result": null }));
+    for case in &cases[1..] {
         let id = case["id"].as_str().expect("an id");
         let registered = register_step(id, InsertText::from_json);
-        expect(
-            case,
-            outcome(registered.map(|()| json!({ "result": null }))),
-        );
+        let registered = registered.map(|()| json!({ "result": null }));
+        expect(case, &["id"], outcome(registered));
     }
 }
 
 #[test]
 fn steps_from_json_are_prosemirrors() {
     let (schema, fixtures) = fixtures();
-    for case in fixtures["fromJSON"].as_array().expect("cases") {
+    for case in records(&fixtures, "fromJSON") {
         let step = Step::from_json(&schema, &case["json"]);
-        expect(
-            case,
-            outcome(step.map(|step| json!({ "result": step.to_json() }))),
-        );
+        let step = step.map(|step| json!({ "result": step.to_json() }));
+        expect(case, &["json"], outcome(step));
     }
 }
 
@@ -127,14 +125,13 @@ fn steps_from_json_are_prosemirrors() {
 fn transforms_apply_invert_and_map_as_prosemirrors() {
     let (schema, fixtures) = fixtures();
     let doc = Node::from_json(&schema, &fixtures["start"]).expect("a document");
-    for case in fixtures["transforms"].as_array().expect("cases") {
+    for case in records(&fixtures, "transforms") {
         let mut tr = Transform::new(doc.clone());
-        let steps = case["steps"].as_array().expect("steps");
-        let applied = case["applied"].as_array().expect("outcomes");
-        for (json, recorded) in steps.iter().zip(applied) {
+        let mut applied = Vec::new();
+        for json in case["steps"].as_array().expect("steps") {
             let step = step(&schema, json);
             let before = tr.doc().clone();
-            let applied = tr.maybe_step(step.clone()).map(|result| match result {
+            let step_applied = tr.maybe_step(step.clone()).map(|result| match result {
                 StepResult::Failed(message) => json!({ "failed": message }),
                 StepResult::Ok(_) => {
                     let ranges: Vec<Value> =
@@ -143,41 +140,42 @@ fn transforms_apply_invert_and_map_as_prosemirrors() {
                     json!({ "map": ranges, "inverted": inverted })
                 }
             });
-            let failed = applied.is_err();
-            expect(recorded, outcome(applied));
+            let failed = step_applied.is_err();
+            applied.push(outcome(step_applied));
             if failed {
                 break;
             }
         }
-        assert_eq!(tr.doc().to_json(), case["result"], "{case}");
         let positions: Vec<Value> = (0..=doc.content().size())
             .map(|pos| tr.mapping().map(pos, 1).into())
             .collect();
-        assert_eq!(Value::from(positions), case["positions"], "{case}");
+        let given =
+            json!({ "applied": applied, "result": tr.doc().to_json(), "positions": positions });
+        expect(case, &["steps"], given);
     }
 }
 
 #[test]
 fn steps_map_as_prosemirrors() {
     let (schema, fixtures) = fixtures();
-    for case in fixtures["mapped"].as_array().expect("cases") {
+    for case in records(&fixtures, "mapped") {
         let mut mapping = Mapping::new();
         for json in case["over"].as_array().expect("steps") {
             mapping.append_map(step(&schema, json).get_map(), None);
         }
         let mapped = step(&schema, &case["step"]).map(&mapping);
         let mapped = mapped.map_or(Value::Null, |step| step.to_json());
-        assert_eq!(mapped, case["result"], "{case}");
+        expect(case, &["step", "over"], json!({ "result": mapped }));
     }
 }
 
 #[test]
 fn steps_merge_as_prosemirrors() {
     let (schema, fixtures) = fixtures();
-    for case in fixtures["merged"].as_array().expect("cases") {
+    for case in records(&fixtures, "merged") {
         let merged = step(&schema, &case["a"]).merge(&step(&schema, &case["b"]));
         let merged = merged.map_or(Value::Null, |step| step.to_json());
-        assert_eq!(merged, case["result"], "{case}");
+        expect(case, &["a", "b"], json!({ "result": merged }));
     }
 }
 

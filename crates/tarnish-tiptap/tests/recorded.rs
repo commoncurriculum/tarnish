@@ -6,7 +6,7 @@ mod own;
 
 use tarnish::Node;
 use tarnish::json::{Value, json};
-use tarnish_fixtures::{outcome, read};
+use tarnish_fixtures::{outcome, read, records};
 use tarnish_js::Error;
 use tarnish_tiptap::html;
 
@@ -18,9 +18,9 @@ fn check<T: Into<Value>>(
     to: &str,
     convert: impl Fn(&Value) -> Result<T, Error>,
 ) {
-    let mut fixtures = read("tiptap");
+    let fixtures = read("tiptap");
     let mut failures = Vec::new();
-    for mut record in fixtures[section].take().into_array().expect("the records") {
+    for mut record in records(&fixtures, section).to_vec() {
         let input = record.as_object_mut().expect("a record").remove(from);
         let input = input.expect("an input");
         let actual = outcome(convert(&input).map(|output| json!({ to: output.into() })));

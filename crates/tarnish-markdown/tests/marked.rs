@@ -2,7 +2,7 @@
 //! `harness/record-marked.mjs` records: tarnish-markdown's lexer must make the same tokens, or
 //! fail with the same error.
 
-use tarnish_fixtures::{outcome, read};
+use tarnish_fixtures::{outcome, read, records};
 use tarnish_js::json::{Value, json};
 use tarnish_js::utf16;
 use tarnish_markdown::marked::{Lexer, Marked, Token};
@@ -28,9 +28,9 @@ fn ports_the_installed_marked() {
 #[test]
 fn tokens_match_marked() {
     let marked = Marked::new(more_lists());
-    let mut fixtures = read("marked");
+    let fixtures = read("marked");
     let mut failures = Vec::new();
-    for mut record in fixtures["lexed"].take().into_array().expect("the inputs") {
+    for mut record in records(&fixtures, "lexed").to_vec() {
         let input = record.as_object_mut().expect("a record").remove("input");
         let input = input.as_ref().and_then(Value::as_str).expect("an input");
         let actual = lexed(&marked, input);
