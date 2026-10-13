@@ -384,7 +384,8 @@ mod tests {
         assert_eq!(stringify(&zero), "0");
     }
 
-    /// Whatever serde_json reads, the event parser reads the same.
+    /// Whatever serde_json reads, the event parser reads the same, as `JSON.stringify` writes
+    /// it.
     #[test]
     fn serde_reads_as_the_event_parser_does() {
         const NUMBERS: &[&str] = &[
@@ -479,7 +480,7 @@ mod tests {
             value(&mut next, 0, &mut text);
             if let Ok(fast) = super::read_with_serde(&text) {
                 let slow = super::read_events(&text).expect("the event parser reads it too");
-                assert!(fast == slow, "{text}");
+                assert!(stringify(&fast) == stringify(&slow), "{text}");
                 read += 1;
             }
         }
