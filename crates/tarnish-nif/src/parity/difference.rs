@@ -521,8 +521,11 @@ mod tests {
 
     #[test]
     fn compares_numbers_by_value() {
-        assert_eq!(found(json!([2]), json!([2.0])), None);
         assert_eq!(found(json!([0]), json!([-0.0])), None);
+        assert_eq!(
+            found(json!([0.1 + 0.2]), json!([0.3])),
+            shown("$[0]", "op $[*] value")
+        );
         assert_eq!(
             found(json!([2]), json!([2.5])),
             shown("$[0]", "op $[*] value")
@@ -643,7 +646,7 @@ mod tests {
             assert!(found.kind == Kind::Value);
             assert!(found.path == vec![Segment::Index(0); DEPTH]);
             let shown = describe(&found, &theirs.result, &ours.result);
-            assert!(shown.ends_with("[0][0]: js 1 ours 2"));
+            assert!(shown == format!("${}: js 1 ours 2", "[0]".repeat(DEPTH)));
         });
     }
 

@@ -493,6 +493,7 @@ fn used<T>(output: T) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use difference::Kind;
 
     fn request(operation: &str) -> Request {
         Request {
@@ -534,29 +535,42 @@ mod tests {
         )
     }
 
+    fn at_root(kind: Kind) -> Difference {
+        Difference {
+            path: Vec::new(),
+            kind,
+        }
+    }
+
     #[test]
     fn sets_apart_the_differences_the_application_expects() {
         assert_eq!(judged("parse", Ok(json!(1)), Ok(json!(1))), Verdict::Same);
-        assert!(matches!(
+        assert_eq!(
             judged("parse", Err("too long".into()), Ok(json!(1))),
-            Verdict::Expected("the worker refuses what's too long", _)
-        ));
-        let differs = |verdict| matches!(verdict, Verdict::Differs(_));
-        assert!(differs(judged(
-            "parse",
-            Err("too long!".into()),
-            Ok(json!(1))
-        )));
-        assert!(differs(judged(
-            "parse",
-            Err("too long".into()),
-            Err("x".into())
-        )));
-        assert!(differs(judged(
-            "serialize",
-            Err("too long".into()),
-            Ok(json!(1))
-        )));
+            Verdict::Expected(
+                "the worker refuses what's too long",
+                at_root(Kind::TheirsErrs)
+            )
+        );
+        assert_eq!(
+            judged("parse", Err("too long!".into()), Ok(json!(1))),
+            Verdict::Differs(at_root(Kind::TheirsErrs))
+        );
+        assert_eq!(
+            judged("parse", Err("too long".into()), Err("x".into())),
+            Verdict::Differs(at_root(Kind::Error))
+        );
+        assert_eq!(
+            judged("serialize", Err("too long".into()), Ok(json!(1))),
+            Verdict::Differs(at_root(Kind::TheirsErrs))
+        );
+        assert_eq!(
+            judged("parse", Ok(json!({"a": [1]})), Ok(json!({"a": [2]}))),
+            Verdict::Differs(Difference {
+                path: vec![Segment::Key("a".into()), Segment::Index(0)],
+                kind: Kind::Value,
+            })
+        );
     }
 
     fn wrong_way(theirs: Result<Value, String>, ours: Result<Value, String>) -> Option<Wrong> {
@@ -569,10 +583,27 @@ mod tests {
         )
     }
 
+    /// How a parse answered wrong with `difference`, with each side's error.
+    fn wrong_with(difference: Difference, errors: [Option<&str>; 2]) -> Option<Wrong> {
+        Some(Wrong {
+            group: difference.group(&request("parse")),
+            errors: errors.map(|error| error.map(String::from)),
+        })
+    }
+
     #[test]
     fn keeps_a_smaller_request_wrong_only_the_same_way() {
         let original = wrong_way(Ok(json!({"a": [{"b": 1}]})), Ok(json!({"a": [{"b": 2}]})));
-        assert!(original.is_some());
+        let path = vec![
+            Segment::Key("a".into()),
+            Segment::Index(0),
+            Segment::Key("b".into()),
+        ];
+        let at_b = Difference {
+            path,
+            kind: Kind::Value,
+        };
+        assert_eq!(original, wrong_with(at_b, [None, None]));
         let same_group = wrong_way(
             Ok(json!({"a": [{}, {"b": 1}]})),
             Ok(json!({"a": [{}, {"b": 3}]})),
@@ -587,11 +618,17 @@ mod tests {
         assert_ne!(another_kind, original);
 
         let erring = wrong_way(Err("x".into()), Ok(json!(1)));
-        assert!(erring.is_some());
+        assert_eq!(
+            erring,
+            wrong_with(at_root(Kind::TheirsErrs), [Some("x"), None])
+        );
         assert_eq!(wrong_way(Err("x".into()), Ok(json!(2))), erring);
         assert_ne!(wrong_way(Err("y".into()), Ok(json!(1))), erring);
         let both_erring = wrong_way(Err("x".into()), Err("y".into()));
-        assert_eq!(wrong_way(Err("x".into()), Err("y".into())), both_erring);
+        assert_eq!(
+            both_erring,
+            wrong_with(at_root(Kind::Error), [Some("x"), Some("y")])
+        );
         assert_ne!(wrong_way(Err("x".into()), Err("z".into())), both_erring);
         assert_ne!(wrong_way(Err("w".into()), Err("y".into())), both_erring);
 
