@@ -603,13 +603,13 @@ mod tests {
                 "\u{2028}", "\u{2029}", "\u{FEFF}", "😀",
             ],
             2_000_000,
-            |src| {
-                super::heading(src).map(|heading| (heading.end, heading.depth, heading.text.len()))
-            },
+            |src| super::heading(src).map(|heading| (heading.end, heading.depth, heading.text)),
             |src| {
                 BLOCK.heading.exec(src).map(|found| {
-                    let group = |index| found.get(index).map_or(0, <[u16]>::len);
-                    (found.end(), group(1), group(2))
+                    let group = |index| found.get(index).unwrap_or_default();
+                    // A group is a slice of `src`, which says where it starts.
+                    let start = (group(2).as_ptr().addr() - src.as_ptr().addr()) / 2;
+                    (found.end(), group(1).len(), start..start + group(2).len())
                 })
             },
         );
