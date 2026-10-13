@@ -16,6 +16,9 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test --all-features
+      # Map::push checks that a key isn't there yet only with debug assertions, so the test of
+      # replay finding a key an answer holds twice runs in a release build.
+      - run: cargo test --release -p tarnish-nif --all-features
 
   # ProseMirror's own test suites, unedited: first against the real packages, to show the
   # suites and the harness are sound, then against tarnish.
@@ -96,6 +99,27 @@ jobs:
       # Builds the tests' NIF, which holds tarnish's functions in place of Tarnish.Native, and
       # runs Tarnish.Bridge's tests on the Node workers and on that NIF.
       - run: mix test
+      # tarnish-nif's parity tools on the tests' conversions: the Node worker's answers to a
+      # request file replay the same through the NIF's, and a record the NIF answers otherwise
+      # fails replay.
+      - name: Record requests through the Node worker and replay them through the NIF
+        working-directory: .
+        run: |
+          cargo build --release -p tarnish_test_native --example parity
+          parity=target/release/examples/parity
+          examples=elixir/test/support/test_native/examples
+          $parity record $examples/requests.json > target/records.json
+          diff <(set +e; $parity replay target/records.json; echo "exit $?") - <<'EOF'
+          9 same, 0 differ, 0 differ as expected
+          exit 0
+          EOF
+          diff <(set +e; $parity replay $examples/differing.json; echo "exit $?") - <<'EOF'
+               1  parseMarkdown $[*] value
+                  $[0]: js 2 ours 1
+                  in: "[1]"
+          1 same, 1 differ, 0 differ as expected
+          exit 1
+          EOF
       - name: Load Tarnish.Native, which the tests replace
         run: mix run -e '{:ok, _} = Tarnish.Schema.new(%{"nodes" => [{"doc", %{"content" => "text*"}}, {"text", %{}}]})'
         env:
@@ -126,9 +150,11 @@ jobs:
       # Rust links a program statically on musl, which a library can't be.
       RUSTFLAGS: -C target-feature=-crt-static
     steps:
-      # stylo's build script, which the tests' NIF builds, runs Python.
-      - run: apk add --no-cache bash build-base curl git python3
+      # stylo's build script, which the tests' NIF builds, runs Python. The tests hold the NIF's
+      # conversions to the Node workers'.
+      - run: apk add --no-cache bash build-base curl git nodejs npm python3
       - uses: actions/checkout@v4
+      - run: npm ci
       - name: Install Rust
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
@@ -136,7 +162,7 @@ jobs:
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: Load the NIF and run the Elixir tests
         working-directory: elixir
-        run: mix local.hex --force && mix local.rebar --force && mix deps.get && mix test --exclude bridge
+        run: mix local.hex --force && mix local.rebar --force && mix deps.get && mix test
       - name: Load the C library with dlopen
         run: |
           cargo build --release -p tarnish-c

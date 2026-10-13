@@ -1,0 +1,19 @@
+[
+  { "operation": "parseHTML", "input": "<p>Hi <em>there</em></p>" },
+  { "operation": "parseHTML", "input": "<p data-json=\"[1e21,true,{&quot;2&quot;:null}]\">x</p>" },
+  { "operation": "parseHTML", "input": "<p>x</p>", "options": { "a": 1 } },
+  {
+    "operation": "serializeHTML",
+    "input": {
+      "type": "doc",
+      "content": [
+        { "type": "paragraph", "attrs": { "data": { "b": [0.5] } }, "content": [{ "type": "text", "text": "x" }] }
+      ]
+    }
+  },
+  { "operation": "serializeHTML", "input": { "type": "nonesuch" } },
+  { "operation": "parseMarkdown", "input": "{\"10\":1,\"2\":-0}" },
+  { "operation": "parseMarkdown", "input": "x" },
+  { "operation": "serializeMarkdown", "input": { "b": 1, "a": ["✓"] } },
+  { "operation": "nonesuch", "input": "x" }
+]

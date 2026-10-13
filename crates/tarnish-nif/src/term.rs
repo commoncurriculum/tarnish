@@ -123,7 +123,7 @@ impl Reader {
         // them. A key written twice keeps its first place and its last value, as parsing the
         // JSON Jason writes for it does.
         let mut unique = true;
-        for (key, value) in MapIterator::new(map).ok_or(NotJson)? {
+        for (key, value) in MapEntries::new(map).ok_or(NotJson)? {
             let key = match key.get_type() {
                 TermType::Binary => self::key(self.bytes(key)?)?,
                 TermType::Atom if atom::__struct__() != key => match key.atom_to_string() {
@@ -167,6 +167,33 @@ fn text(bytes: &[u8]) -> Result<&str, NotJson> {
 
 /// A map of at most this many keys is a flatmap, which keeps its keys in term order.
 const FLATMAP_KEYS: usize = 32;
+
+/// A map's entries in the order Jason writes them, `maps:to_list`'s. A flatmap's iterator gives
+/// them in that order; a hashmap's walks them in the reverse of it.
+pub(crate) struct MapEntries<'a> {
+    iterator: MapIterator<'a>,
+    reverse: bool,
+}
+
+impl<'a> MapEntries<'a> {
+    pub(crate) fn new(map: Term<'a>) -> Option<Self> {
+        Some(MapEntries {
+            reverse: map.map_size().ok()? > FLATMAP_KEYS,
+            iterator: MapIterator::new(map)?,
+        })
+    }
+}
+
+impl<'a> Iterator for MapEntries<'a> {
+    type Item = (Term<'a>, Term<'a>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.reverse {
+            true => self.iterator.next_back(),
+            false => self.iterator.next(),
+        }
+    }
+}
 
 /// Makes the terms Jason decodes from the JSON `JSON.stringify` writes. Rustler makes a list from
 /// an array of its items, and a map from arrays of its keys and values, which this keeps the

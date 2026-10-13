@@ -9,7 +9,8 @@ publish = false
 description = "The NIF of the application tarnish's Elixir tests make, which Tarnish.TestNative loads."
 
 [lib]
-crate-type = ["cdylib"]
+# The rlib is the parity example's.
+crate-type = ["cdylib", "rlib"]
 test = false
 doctest = false
 
@@ -18,3 +19,6 @@ rustler = "0.38"
 tarnish = { path = "../../../../crates/tarnish" }
 tarnish-html = { path = "../../../../crates/tarnish-html" }
 tarnish-nif = { path = "../../../../crates/tarnish-nif" }
+
+[dev-dependencies]
+tarnish-nif = { path = "../../../../crates/tarnish-nif", features = ["parity"] }

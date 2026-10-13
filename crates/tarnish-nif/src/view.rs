@@ -9,14 +9,13 @@ use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 
 use rustler::types::atom;
-use rustler::types::map::MapIterator;
 use rustler::{BigInt, Binary, Term, TermType};
 use tarnish::js::stack;
 use tarnish::js::{self, WrittenNumber};
 use tarnish::json::{self, Key, Map, Number, Value};
 use tarnish::model::read::{self, AttrKeys, Given, Property, ReadMark, ReadNode};
 
-use crate::term::Unread;
+use crate::term::{MapEntries, Unread};
 
 rustler::atoms! {
     __struct__,
@@ -31,25 +30,32 @@ pub fn read<'a, T>(
     weight: usize,
     read: impl FnOnce(Json<'a, '_>) -> T,
 ) -> Result<T, Unread> {
-    let reading = Reading {
-        refused: Cell::new(false),
-        heavy: Cell::new(false),
-        bounded: weight != usize::MAX,
-        left: Cell::new(weight),
-        open: RefCell::new(Vec::new()),
-        irregular: Cell::new(0),
-    };
+    let reading = Reading::new(weight);
     let read = read(Json {
         term,
         reading: &reading,
     });
-    if reading.heavy.get() {
-        Err(Unread::Heavy)
-    } else if reading.refused.get() {
-        Err(Unread::NotJson)
-    } else {
-        Ok(read)
+    reading.outcome(read)
+}
+
+/// [`read`], the term refused when any part of it isn't JSON, read or not, as Jason refuses to
+/// encode it. A read that fails, or that reads a map other than what `toJSON` writes, may leave
+/// parts unread, so the term is then read whole.
+pub fn read_whole<'a, T, E>(
+    term: Term<'a>,
+    weight: usize,
+    read: impl FnOnce(Json<'a, '_>) -> Result<T, E>,
+) -> Result<Result<T, E>, Unread> {
+    let reading = Reading::new(weight);
+    let json = Json {
+        term,
+        reading: &reading,
+    };
+    let read = read(json);
+    if read.is_err() || reading.irregular.get() > 0 {
+        drop(json.value());
     }
+    reading.outcome(read)
 }
 
 /// A term read as the JSON Jason encodes it: maps with string, atom or integer keys,
@@ -101,6 +107,27 @@ struct GivenAttrs {
 }
 
 impl Reading {
+    fn new(weight: usize) -> Reading {
+        Reading {
+            refused: Cell::new(false),
+            heavy: Cell::new(false),
+            bounded: weight != usize::MAX,
+            left: Cell::new(weight),
+            open: RefCell::new(Vec::new()),
+            irregular: Cell::new(0),
+        }
+    }
+
+    fn outcome<T>(&self, read: T) -> Result<T, Unread> {
+        if self.heavy.get() {
+            Err(Unread::Heavy)
+        } else if self.refused.get() {
+            Err(Unread::NotJson)
+        } else {
+            Ok(read)
+        }
+    }
+
     fn irregular(&self) {
         self.irregular.set(self.irregular.get() + 1);
     }
@@ -315,7 +342,7 @@ impl<'a, 'r> Json<'a, 'r> {
     fn entries(self) -> Entries<'a, 'r> {
         Entries {
             json: self,
-            map: MapIterator::new(self.term),
+            map: MapEntries::new(self.term),
             first: true,
             pairs: None,
             unique: true,
@@ -423,7 +450,7 @@ impl<'a, 'r> Json<'a, 'r> {
 struct Entries<'a, 'r> {
     json: Json<'a, 'r>,
     /// The map's own entries, while they're the ones read.
-    map: Option<MapIterator<'a>>,
+    map: Option<MapEntries<'a>>,
     /// Whether none of the map's entries is read yet.
     first: bool,
     /// The `{key, value}` pairs of a `Jason.OrderedObject` left to read.

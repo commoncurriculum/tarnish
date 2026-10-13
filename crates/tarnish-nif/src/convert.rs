@@ -268,7 +268,7 @@ fn read(
     let input = match operation.as_str() == Some("serializeHTML")
         && parts.input.get_type() == TermType::Map
     {
-        true => Input::Document(view::read(parts.input, weight, |json| {
+        true => Input::Document(view::read_whole(parts.input, weight, |json| {
             Node::from_json(conversions.schema(), json)
         })?),
         false => Input::Json(reader.read(parts.input)?),
