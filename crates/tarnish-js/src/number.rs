@@ -235,19 +235,3 @@ fn of_power_of_two_radix(digits: impl Iterator<Item = u32>, radix: u32) -> f64 {
     };
     (leading | u64::from(sticky)) as f64 * scale
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{parse_int, parse_int_radix};
-
-    #[test]
-    fn parses_an_integer_as_parse_int_does() {
-        assert_eq!(parse_int("  -12px"), -12.0);
-        assert_eq!(parse_int("0x1A"), 26.0);
-        assert_eq!(parse_int_radix("0x1A", 16), 26.0);
-        assert_eq!(parse_int_radix("0x1A", 10), 0.0);
-        assert_eq!(parse_int_radix("1A", 16), 26.0);
-        assert_eq!(parse_int_radix("+7", 10), 7.0);
-        assert!(parse_int_radix("x", 10).is_nan());
-    }
-}

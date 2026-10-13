@@ -302,70 +302,7 @@ pub fn same_own_properties(a: &Value, b: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::json::{self, json};
-
-    fn message<T: std::fmt::Debug>(result: Result<T>) -> String {
-        result.unwrap_err().to_string()
-    }
-
-    // Each as Node throws it.
-    #[test]
-    fn throws_as_v8_does() {
-        let node = json!({"content": {}, "marks": 1.5, "n": null, "t": true});
-        assert_eq!(
-            message(get(None, "color")),
-            "TypeError: Cannot read properties of undefined (reading 'color')"
-        );
-        assert_eq!(
-            message(get(node.get("n"), "a")),
-            "TypeError: Cannot read properties of null (reading 'a')"
-        );
-        assert_eq!(
-            message(array_method(node.get("content"), "node.content.map")),
-            "TypeError: node.content.map is not a function"
-        );
-        assert_eq!(
-            message(array_method(node.get("attrs"), "node.attrs.map")),
-            "TypeError: Cannot read properties of undefined (reading 'map')"
-        );
-        assert_eq!(
-            message(iterate(
-                node.get("content"),
-                Iterating::Expression("node.content")
-            )),
-            "TypeError: node.content is not iterable"
-        );
-        let described = |key: &str| message(iterate(node.get(key), Iterating::Value));
-        assert_eq!(
-            described("content"),
-            "TypeError: object is not iterable (cannot read property Symbol(Symbol.iterator))"
-        );
-        assert_eq!(
-            described("marks"),
-            "TypeError: number 1.5 is not iterable (cannot read property Symbol(Symbol.iterator))"
-        );
-        assert_eq!(
-            described("n"),
-            "TypeError: object null is not iterable (cannot read property Symbol(Symbol.iterator))"
-        );
-        assert_eq!(
-            described("t"),
-            "TypeError: boolean true is not iterable (cannot read property Symbol(Symbol.iterator))"
-        );
-        assert_eq!(
-            described("attrs"),
-            "TypeError: undefined is not iterable (cannot read property Symbol(Symbol.iterator))"
-        );
-        let own = json::from_str(r#"[1, {"toString": 1}]"#).unwrap();
-        assert_eq!(
-            message(crate::to_string(&own)),
-            "TypeError: Cannot convert object to primitive value"
-        );
-        assert_eq!(
-            crate::to_string(&json!([1, null, [2, 3], {}])).unwrap(),
-            "1,,2,3,[object Object]"
-        );
-    }
+    use crate::json::json;
 
     /// `===` is SameValueZero but for NaN, and `Object.is` tells -0 from 0.
     #[test]

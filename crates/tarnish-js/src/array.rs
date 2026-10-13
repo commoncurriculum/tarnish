@@ -563,36 +563,6 @@ mod tests {
     use super::*;
     use crate::Error;
 
-    /// The comparisons sorting `items` with `(a, b) => a - b` makes, each as the indexes the
-    /// two items had before sorting.
-    fn comparisons(items: &[i64]) -> Vec<String> {
-        let mut indexed: Vec<(usize, i64)> = items.iter().copied().enumerate().collect();
-        let mut calls = Vec::new();
-        sort(&mut indexed, |(i, a), (j, b)| {
-            calls.push(format!("{i}:{j}"));
-            Ok((a - b) as f64)
-        })
-        .unwrap();
-        let mut sorted = items.to_vec();
-        sorted.sort();
-        assert_eq!(
-            indexed.iter().map(|(_, item)| *item).collect::<Vec<_>>(),
-            sorted
-        );
-        calls
-    }
-
-    #[cfg(feature = "collation")]
-    #[test]
-    fn sorts_strings_as_node_collates_them() {
-        let mut words = [
-            "b", "a", "B", "A", "_", "-", "1", "é", "e", "ä", "z", "Z", "aa", "a b", "a-b",
-        ];
-        sort(&mut words, |a, b| Ok(crate::locale_compare(a, b))).unwrap();
-        // `[...].sort((x, y) => x.localeCompare(y))` in Node.
-        assert_eq!(words.join(" "), "_ - 1 a A ä a b a-b aa b B e é z Z");
-    }
-
     #[test]
     fn leaves_the_items_as_they_were_when_the_comparator_throws() {
         let mut items = [5, 4, 3, 2, 1, 0, 9, 8, 7];
@@ -612,74 +582,5 @@ mod tests {
         let mut items: Vec<i32> = (1..=12).collect();
         sort(&mut items, |_, _| Ok(-1.0)).unwrap();
         assert_eq!(items, (1..=12).rev().collect::<Vec<_>>());
-    }
-
-    // Each recorded from Node 22.
-    #[test]
-    fn compares_as_v8_does() {
-        assert_eq!(
-            comparisons(&[0, 3, 2, 1]).join(" "),
-            "1:0 2:1 2:1 2:0 3:2 3:0"
-        );
-        assert_eq!(
-            comparisons(&[7, 6, 5, 4, 3, 2, 1, 0]).join(" "),
-            "1:0 2:1 3:2 4:3 5:4 6:5 7:6"
-        );
-        assert_eq!(
-            comparisons(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 50, 20, 30, 15, 12]).join(" "),
-            "1:0 2:1 3:2 4:3 5:4 6:5 7:6 8:7 9:8 10:9 11:10 11:5 11:8 11:10 11:9 12:6 12:9 \
-             12:10 12:11 13:6 13:11 13:8 13:9 14:7 14:11 14:9 14:13"
-        );
-        let shuffled: Vec<i64> = (0..150).map(|i| i * 37 % 150).collect();
-        let calls = comparisons(&shuffled);
-        assert_eq!(calls.len(), 876);
-        assert_eq!(
-            calls[380..400].join(" "),
-            "81:77 81:76 82:76 82:79 82:78 83:80 83:78 83:79 84:80 84:83 84:79 85:84 85:81 \
-             85:76 86:80 86:83 86:78 86:82 87:84 87:78"
-        );
-        assert_eq!(
-            calls[calls.len() - 12..].join(" "),
-            "122:45 122:49 126:49 126:53 130:53 130:57 134:57 134:61 138:61 138:65 142:65 \
-             142:69"
-        );
-        // Enough runs to merge, and to gallop in both directions.
-        let big: Vec<i64> = (0..1000).map(|i| i * 7919 % 1000).collect();
-        let calls = comparisons(&big);
-        assert_eq!(calls.len(), 8525);
-        assert_eq!(
-            calls[5000..5020].join(" "),
-            "741:693 741:717 741:704 742:710 742:719 742:730 742:729 742:717 742:705 743:722 \
-             743:694 743:705 743:718 743:706 744:722 744:694 744:708 744:732 744:719 744:707"
-        );
-        assert_eq!(
-            calls[calls.len() - 12..].join(" "),
-            "506:185 506:148 827:148 790:148 790:469 790:111 753:111 753:432 753:74 716:74 \
-             716:395 716:37"
-        );
-        // Blocks of consecutive values, every third descending, whose merges gallop.
-        let blocks: Vec<i64> = (0..28)
-            .flat_map(|b| {
-                let block = 11 * b % 28;
-                let values = block * 37..((block + 1) * 37).min(1000);
-                let values: Vec<i64> = match b % 3 {
-                    0 => values.rev().collect(),
-                    _ => values.collect(),
-                };
-                values
-            })
-            .collect();
-        let calls = comparisons(&blocks);
-        assert_eq!(calls.len(), 4225);
-        assert_eq!(
-            calls[600..620].join(" "),
-            "223:189 224:205 224:196 224:191 224:189 224:223 225:204 225:195 225:190 225:223 \
-             225:224 226:204 226:194 226:189 226:224 226:225 227:203 227:193 227:223 227:225"
-        );
-        assert_eq!(
-            calls[calls.len() - 16..].join(" "),
-            "889:104 889:108 889:110 889:334 890:334 891:334 893:334 897:334 905:334 921:334 \
-             731:334 541:334 529:334 523:334 520:334 519:334"
-        );
     }
 }

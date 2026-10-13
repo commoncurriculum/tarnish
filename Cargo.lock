@@ -1885,6 +1885,7 @@ dependencies = [
  "serde_json",
  "stacker",
  "str_indices",
+ "tarnish-fixtures",
 ]
 
 [[package]]

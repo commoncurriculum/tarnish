@@ -279,30 +279,6 @@ mod tests {
         assert_eq!(exact_byte_offset("😀", 2), Some(4));
     }
 
-    // Each as Node throws it.
-    #[test]
-    fn repeats_as_v8_does() {
-        let thrown = |string: &str, count: f64| repeat(string, count).unwrap_err().to_string();
-        assert_eq!(thrown("ab", -1.0), "RangeError: Invalid count value: -1");
-        assert_eq!(
-            thrown("ab", f64::INFINITY),
-            "RangeError: Invalid count value: Infinity"
-        );
-        assert_eq!(thrown("", -1.0), "RangeError: Invalid count value: -1");
-        assert_eq!(
-            thrown("ab", 2f64.powi(63)),
-            "RangeError: Invalid string length"
-        );
-        assert_eq!(
-            thrown("a", 2f64.powi(63)),
-            "RangeError: Invalid string length"
-        );
-        assert_eq!(repeat("ab", f64::NAN).unwrap(), "");
-        assert_eq!(repeat("ab", -0.5).unwrap(), "");
-        assert_eq!(repeat("", 2f64.powi(40)).unwrap(), "");
-        assert_eq!(repeat("ab", 2.9).unwrap(), "abab");
-    }
-
     #[test]
     fn reserves_what_memory_and_a_deadline_allow() {
         let thrown = reserve(&mut String::new(), usize::MAX).unwrap_err();
@@ -324,16 +300,6 @@ mod tests {
         assert!(within(&|| replace_all(&half, "\n", "ab")).is_some());
         assert!(within(&|| replace_all(&half, "\n", "abc")).is_none());
         assert_eq!(replace_all(&half, "\n", "abc").unwrap().len(), 3 << 19);
-    }
-
-    // As V8 answers it.
-    #[test]
-    fn replaces_all_as_v8_does() {
-        assert_eq!(
-            replace_all("abcb", "b", "[$$|$&|$`|$'|$1|$<|$]").unwrap(),
-            "a[$|b|a|cb|$1|$<|$]c[$|b|abc||$1|$<|$]"
-        );
-        assert_eq!(replace_all("aaa", "aa", "b").unwrap(), "ba");
         assert_eq!(concat(&["a", "", "bc"]).unwrap(), "abc");
     }
 
