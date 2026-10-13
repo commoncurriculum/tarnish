@@ -1,6 +1,6 @@
 //! Finds recursion that nothing guards: a function that calls itself, or a cycle of functions in
-//! one file calling each other, with no call on the way inside a `grow(..)` or `maybe_grow(..)`
-//! closure. Input nests as deeply as a document can, so each such recursion has to make room on
+//! one package calling each other, in one file or across several, with no call on the way inside
+//! a `grow(..)` or `maybe_grow(..)` closure. Input nests as deeply as a document can, so each such recursion has to make room on
 //! the stack at some level, or say why its depth has a bound with a `// bounded: <reason>`
 //! comment above the function, or above the `impl` or trait that holds it. A recursion that
 //! makes room where this can't see it, as in a function it hands a closure to, says so with a
@@ -8,13 +8,15 @@
 //!
 //! It reads the syntax alone, so it knows the type of a method call's receiver only as far as
 //! the syntax says: `self`; a parameter's or a `let`'s type; a struct literal or `Type::new(..)`;
-//! a field of `self` whose type the file declares; an item of one of those; and what a `match`
-//! binds from an enum the file declares. What is got from `self` by a method call, or from a
-//! field whose type isn't the caller's own, is taken to be another type that `self` holds, whose
-//! method of the same name the caller hands the call to. A value of no type it knows is taken to
-//! be the caller's own type's. Recursion through a trait's generic or derived implementation
-//! (`Vec<T>: Clone` calling `T::clone`), through a function in another file, and through a macro
-//! whose arguments aren't expressions, isn't seen.
+//! a field of `self` whose type the package declares; an item of one of those; and what a
+//! `match` binds from an enum the package declares. What is got from `self` by a method call, or
+//! from a field whose type isn't the caller's own, is taken to be another type that `self` holds,
+//! whose method of the same name the caller hands the call to. A value of no type it knows is
+//! taken to be the caller's own type's. A function called by its name alone is the caller's
+//! file's of that name, or any file's where its file has none. Recursion through a trait's
+//! generic or derived implementation (`Vec<T>: Clone` calling `T::clone`), through a function
+//! called by a module's path, through another package, and through a macro whose arguments
+//! aren't expressions, isn't seen.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
@@ -25,12 +27,11 @@ use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 use syn::{Attribute, Block, Expr, Pat, Signature, Token, Type};
 
-/// Recursion with no guard: the functions of one cycle, each `Owner::name` or `name`, with the
-/// line of its `fn`.
+/// Recursion with no guard: the functions of one cycle, each `Owner::name` or `name`, with its
+/// file and the line of its `fn`.
 #[derive(Debug)]
 pub struct Unguarded {
-    pub file: PathBuf,
-    pub cycle: Vec<(String, usize)>,
+    pub cycle: Vec<(String, PathBuf, usize)>,
 }
 
 impl fmt::Display for Unguarded {
@@ -38,30 +39,35 @@ impl fmt::Display for Unguarded {
         let functions: Vec<String> = self
             .cycle
             .iter()
-            .map(|(name, line)| format!("{name} (line {line})"))
+            .map(|(name, file, line)| format!("{name} ({}:{line})", file.display()))
             .collect();
-        write!(
-            formatter,
-            "{}: {}",
-            self.file.display(),
-            functions.join(" -> ")
-        )
+        formatter.write_str(&functions.join(" -> "))
     }
 }
 
-/// The unguarded recursion in each `.rs` file under `dir`, skipping `target`, `vendor`,
-/// `node_modules` and hidden directories. Panics on a file that doesn't parse.
+/// The unguarded recursion in the `.rs` files under `dir`, skipping `target`, `vendor`,
+/// `node_modules` and hidden directories, with the files of each package, the nearest directory
+/// above a file with a `Cargo.toml`, read as one. Panics on a file that doesn't parse.
 pub fn unguarded_recursion(dir: &Path) -> Vec<Unguarded> {
     let mut files = Vec::new();
     rust_files(dir, &mut files);
     files.sort();
-    files
-        .iter()
-        .flat_map(|file| {
-            let source =
-                std::fs::read_to_string(file).unwrap_or_else(|error| panic!("{file:?}: {error}"));
-            in_source(file, &source)
-        })
+    let mut packages: BTreeMap<PathBuf, Vec<(PathBuf, String)>> = BTreeMap::new();
+    for file in files {
+        let source =
+            std::fs::read_to_string(&file).unwrap_or_else(|error| panic!("{file:?}: {error}"));
+        let package = file
+            .ancestors()
+            .skip(1)
+            .take_while(|ancestor| ancestor.starts_with(dir))
+            .find(|ancestor| ancestor.join("Cargo.toml").is_file())
+            .unwrap_or(dir);
+        let sources = packages.entry(package.to_owned()).or_default();
+        sources.push((file, source));
+    }
+    packages
+        .values()
+        .flat_map(|sources| in_sources(sources))
         .collect()
 }
 
@@ -84,18 +90,33 @@ fn rust_files(dir: &Path, files: &mut Vec<PathBuf>) {
     }
 }
 
-fn in_source(file: &Path, source: &str) -> Vec<Unguarded> {
-    let syntax = syn::parse_file(source).unwrap_or_else(|error| panic!("{file:?}: {error}"));
-    let mut items = Items {
-        lines: source.lines().collect(),
-        functions: Vec::new(),
-        types: HashMap::new(),
-        scopes: Vec::new(),
-    };
-    items.visit_file(&syntax);
+/// The unguarded recursion in the files of one package, each with its source: the cycles of one
+/// graph of the calls in all of them.
+fn in_sources(sources: &[(PathBuf, String)]) -> Vec<Unguarded> {
+    let syntaxes: Vec<syn::File> = sources
+        .iter()
+        .map(|(file, source)| {
+            syn::parse_file(source).unwrap_or_else(|error| panic!("{file:?}: {error}"))
+        })
+        .collect();
+    let (mut functions, mut types) = (Vec::new(), Types::new());
+    for ((file, source), syntax) in sources.iter().zip(&syntaxes) {
+        let mut items = Items {
+            file,
+            lines: source.lines().collect(),
+            functions: Vec::new(),
+            types: HashMap::new(),
+            scopes: Vec::new(),
+        };
+        items.visit_file(syntax);
+        functions.append(&mut items.functions);
+        for (name, fields) in items.types {
+            types.entry(name).or_default().extend(fields);
+        }
+    }
 
     // A bounded function calls nothing here, so it is in no cycle.
-    let functions = &items.functions;
+    let functions = &functions;
     let mut calls: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); functions.len()];
     for (index, caller) in functions.iter().enumerate() {
         if caller.bounded {
@@ -104,7 +125,7 @@ fn in_source(file: &Path, source: &str) -> Vec<Unguarded> {
         let mut finder = Calls {
             caller,
             functions,
-            types: &items.types,
+            types: &types,
             bindings: HashMap::new(),
             closure: None,
             calls: Vec::new(),
@@ -125,10 +146,13 @@ fn in_source(file: &Path, source: &str) -> Vec<Unguarded> {
     cycles(&calls)
         .into_iter()
         .map(|cycle| Unguarded {
-            file: file.to_owned(),
             cycle: cycle
                 .into_iter()
-                .map(|index| (functions[index].qualified(), functions[index].line))
+                .map(|index| {
+                    let function = &functions[index];
+                    let file = function.file.to_owned();
+                    (function.qualified(), file, function.line)
+                })
                 .collect(),
         })
         .collect()
@@ -136,6 +160,7 @@ fn in_source(file: &Path, source: &str) -> Vec<Unguarded> {
 
 /// A function: its owner, the type of its `impl` or its trait, if it has one.
 struct Function<'a> {
+    file: &'a Path,
     owner: Option<String>,
     kind: ScopeKind,
     name: String,
@@ -172,10 +197,13 @@ struct Scope {
 }
 
 /// The fields of each struct, and of each variant of each enum, with the names in each field's
-/// type: `"Struct"` or `"Enum::Variant"`, then the fields by name, or by index for a tuple's.
+/// type: `"Struct"` or `"Enum::Variant"`, then the fields by name, or by index for a tuple's. A
+/// name that files of the package declare apart has the fields of each.
 type Types = HashMap<String, Vec<(String, BTreeSet<String>)>>;
 
+/// What one file declares.
 struct Items<'a> {
+    file: &'a Path,
     lines: Vec<&'a str>,
     functions: Vec<Function<'a>>,
     types: Types,
@@ -215,6 +243,7 @@ impl<'a> Items<'a> {
             None => (None, ScopeKind::Free, false),
         };
         self.functions.push(Function {
+            file: self.file,
             owner,
             kind,
             name: sig.ident.to_string(),
@@ -336,7 +365,7 @@ fn type_name(ty: &Type) -> Option<String> {
     }
 }
 
-/// The types a type names that may be declared in this file: those it names with no module, or
+/// The types a type names that may be declared in the package: those it names with no module, or
 /// with `crate`, `self` or `super`, and those among its type arguments.
 fn names_in(ty: &Type) -> BTreeSet<String> {
     struct Names(BTreeSet<String>);
@@ -446,7 +475,7 @@ impl Calls<'_, '_> {
     }
 
     /// The classes of the parameters of the closure handed as argument `arg` to `owner`'s method
-    /// `name`, when the file declares that method with an `Fn` bound on the parameter.
+    /// `name`, when the package declares that method with an `Fn` bound on the parameter.
     fn closure_inputs(&self, owner: &str, name: &str, arg: usize) -> Option<Vec<Class>> {
         let function = self
             .functions
@@ -521,11 +550,11 @@ impl Calls<'_, '_> {
     /// names it, and another type if not.
     fn field(&self, of: &str, field: &str) -> Class {
         let owner = self.caller.owner.as_deref().unwrap_or("Self");
-        let holds_own = self
-            .types
-            .get(of)
-            .and_then(|fields| fields.iter().find(|(name, _)| name == field))
-            .is_some_and(|(_, names)| names.contains(owner) || names.contains("Self"));
+        let holds_own = self.types.get(of).is_some_and(|fields| {
+            fields.iter().any(|(name, names)| {
+                name == field && (names.contains(owner) || names.contains("Self"))
+            })
+        });
         match holds_own {
             true => self.own(),
             false => Class::Held,
@@ -921,9 +950,10 @@ fn from_self(expr: &Expr) -> bool {
     chain(expr).is_some_and(|(root, _)| root == "self")
 }
 
-/// The functions here that a call from `functions[caller]` may call. A type's own method of a
-/// name is called over a trait's, and a trait's method called directly by its own name is taken
-/// to hand the call to the type's own method of that name, in another file if not here.
+/// The functions of the package that a call from `functions[caller]` may call. A free function
+/// of the caller's file is called over another file's of the name, a type's own method of a name
+/// over a trait's, and a trait's method called directly by its own name is taken to hand the call
+/// to the type's own method of that name, in another package if not in this one.
 fn resolve(callee: &Callee, caller: usize, functions: &[Function]) -> Vec<usize> {
     let (owner, name, direct) = match callee {
         Callee::Free(name) => (None, name, false),
@@ -933,9 +963,14 @@ fn resolve(callee: &Callee, caller: usize, functions: &[Function]) -> Vec<usize>
             direct,
         } => (Some(owner), name, *direct),
     };
-    let candidates: Vec<usize> = (0..functions.len())
+    let mut candidates: Vec<usize> = (0..functions.len())
         .filter(|&index| functions[index].name == *name && functions[index].owner.as_ref() == owner)
         .collect();
+    let file = functions[caller].file;
+    let in_file = |&index: &usize| functions[index].file == file;
+    if owner.is_none() && candidates.iter().any(in_file) {
+        candidates.retain(in_file);
+    }
     let inherent = candidates
         .iter()
         .any(|&index| functions[index].kind == ScopeKind::Inherent);
@@ -986,7 +1021,7 @@ struct Tarjan<'a> {
 }
 
 impl Tarjan<'_> {
-    // bounded: as deep as a chain of calls in one file
+    // bounded: as deep as a chain of calls in one package
     fn connect(&mut self, function: usize) {
         self.index[function] = Some(self.next);
         self.low[function] = self.next;
@@ -1025,12 +1060,64 @@ mod tests {
 
     /// The functions of each cycle found in `source`.
     fn found(source: &str) -> Vec<Vec<String>> {
-        let found = in_source(Path::new("source.rs"), source);
-        let names = |cycle: Vec<(String, usize)>| cycle.into_iter().map(|(name, _)| name);
-        found
+        found_in(&[("source.rs", source)])
+    }
+
+    /// The functions of each cycle found in the files of a package, each with its source.
+    fn found_in(sources: &[(&str, &str)]) -> Vec<Vec<String>> {
+        let sources: Vec<(PathBuf, String)> = sources
+            .iter()
+            .map(|(file, source)| (PathBuf::from(file), source.to_string()))
+            .collect();
+        let names = |cycle: Vec<(String, PathBuf, usize)>| cycle.into_iter().map(|(name, ..)| name);
+        in_sources(&sources)
             .into_iter()
             .map(|found| names(found.cycle).collect())
             .collect()
+    }
+
+    #[test]
+    fn finds_a_cycle_across_the_files_of_a_package() {
+        let value = "
+            use crate::list::list;
+            pub fn value(value: &Value) { for item in value.items() { list(item) } }";
+        let list = "
+            use crate::value::value;
+            pub fn list(list: &Value) { value(list) }";
+        assert_eq!(
+            found_in(&[("value.rs", value), ("list.rs", list)]),
+            [["value", "list"]]
+        );
+        let grown = "
+            use crate::value::value;
+            pub fn list(list: &Value) { stack::grow(|| value(list)) }";
+        assert!(found_in(&[("value.rs", value), ("list.rs", grown)]).is_empty());
+        let bounded = "
+            use crate::value::value;
+            // bounded: a list holds no lists
+            pub fn list(list: &Value) { value(list) }";
+        assert!(found_in(&[("value.rs", value), ("list.rs", bounded)]).is_empty());
+        let node = "
+            impl Node {
+                fn size(&self) -> usize { 1 + content_size(self) }
+            }";
+        let content = "
+            fn content_size(node: &Node) -> usize {
+                node.children().map(|child: &Node| child.size()).sum()
+            }";
+        assert_eq!(
+            found_in(&[("node.rs", node), ("content.rs", content)]),
+            [["Node::size", "content_size"]]
+        );
+    }
+
+    #[test]
+    fn takes_a_free_function_of_the_callers_file_over_another_files() {
+        let walk = "fn walk(value: &Value) { for item in value.items() { visit(item) } }
+                    fn visit(value: &Value) {}";
+        let visit = "fn visit(value: &Value) { walk(value) }
+                     fn walk(value: &Value) {}";
+        assert!(found_in(&[("walk.rs", walk), ("visit.rs", visit)]).is_empty());
     }
 
     #[test]
