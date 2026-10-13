@@ -1,10 +1,11 @@
 //! What zod's `safeParse` gives each schema tarnish-zod ports for each input, recorded by
 //! `harness/record-zod.mjs`: tarnish-zod must give the same data or the same issues, and fail
-//! where zod throws as it makes the schema.
+//! where zod throws as it makes the schema. Data is compared as `JSON.stringify` writes it, so an
+//! object's keys come in zod's order.
 
 use std::panic::{self, AssertUnwindSafe};
 
-use tarnish_fixtures::{read, records, version};
+use tarnish_fixtures::{read, records, same, version};
 use tarnish_js::json::{self, Map, Value, json};
 use tarnish_zod::{Issues, Schema};
 
@@ -85,8 +86,8 @@ fn recorded(parsed: Result<Option<Value>, Issues>) -> Value {
 /// The record without its inputs.
 fn expected(record: &Value) -> Value {
     let mut fields = record.as_object().expect("a record").clone();
-    fields.remove("schema");
-    fields.remove("json");
+    fields.shift_remove("schema");
+    fields.shift_remove("json");
     Value::Object(fields)
 }
 
@@ -122,7 +123,7 @@ fn parses_as_zod_does() {
             }
             Err(thrown) => thrown.clone(),
         };
-        if actual != expected {
+        if !same(&expected, &actual) {
             let schema = &fixtures["schemas"][index];
             failures.push(format!(
                 "{schema} of {input:?}\n  zod: {expected}\n  tarnish-zod: {actual}"
@@ -137,29 +138,36 @@ fn parses_as_zod_does() {
     );
 }
 
+/// The recorder's schemas that zod makes into an object schema that isn't strict.
+const OBJECT_SCHEMAS: usize = 29;
+
 /// An object schema's other parses give what `parse` gives: `parse_fields` of the value, and
 /// those that read an object's properties by key, of an object.
 #[test]
 fn parses_an_objects_fields_as_zod_does() {
     let fixtures = read("zod");
+    let parses = records(&fixtures, "parses");
     let mut failures = Vec::new();
-    for record in records(&fixtures, "parses") {
+    let (mut checked, mut of_objects) = (0, 0);
+    for record in parses {
         let index = record["schema"].as_u64().expect("a schema's index") as usize;
         let Ok(schema @ Schema::Object(_)) = made(&fixtures["schemas"][index]) else {
             continue;
         };
+        checked += 1;
         let input = record
             .get("json")
             .map(|text| json::from_str(self::text(text)).expect("JSON"));
         let expected = expected(record);
         let fields = |fields: tarnish_zod::Fields| Some(Value::Object(fields.into_map()));
-        let mut parses = vec![(
+        let mut field_parses = vec![(
             "parse_fields",
             recorded(schema.parse_fields(input.as_ref()).map(fields)),
         )];
         if let Some(Value::Object(object)) = &input {
+            of_objects += 1;
             let property = |key: &str| object.get(key);
-            parses.push((
+            field_parses.push((
                 "parse_properties",
                 recorded(schema.parse_properties(property).map(fields)),
             ));
@@ -167,13 +175,16 @@ fn parses_an_objects_fields_as_zod_does() {
                 .safe_parse_properties(property)
                 .map(|parsed| json!({"data": parsed.into_map()}));
             let unsafe_parse = expected.get("data").map(|_| expected.clone());
-            if safe != unsafe_parse {
+            if !same(
+                &unsafe_parse.unwrap_or(Value::Null),
+                &safe.clone().unwrap_or(Value::Null),
+            ) {
                 failures.push(format!("safe_parse_properties of {record}: {safe:?}"));
             }
             // The fallback is the empty object, which the record of "{}" holds the parse of.
             let empty = Map::new();
             let or_empty = schema.parse_properties_or(property, |key| empty.get(key));
-            let fallback = records(&fixtures, "parses").iter().find(|other| {
+            let fallback = parses.iter().find(|other| {
                 other["schema"] == record["schema"]
                     && other.get("json").and_then(Value::as_str) == Some("{}")
             });
@@ -182,12 +193,12 @@ fn parses_an_objects_fields_as_zod_does() {
                 None => self::expected(fallback.expect("the parse of {}")),
             };
             let actual_or = recorded(or_empty.map(fields));
-            if actual_or != expected_or {
+            if !same(&expected_or, &actual_or) {
                 failures.push(format!("parse_properties_or of {record}\n  zod: {expected_or}\n  tarnish-zod: {actual_or}"));
             }
         }
-        for (how, actual) in parses {
-            if actual != expected {
+        for (how, actual) in field_parses {
+            if !same(&expected, &actual) {
                 failures.push(format!(
                     "{how} of {record}\n  zod: {expected}\n  tarnish-zod: {actual}"
                 ));
@@ -199,5 +210,16 @@ fn parses_an_objects_fields_as_zod_does() {
         "{} failures:\n\n{}",
         failures.len(),
         failures.join("\n\n")
+    );
+    let inputs = parses.len() / records(&fixtures, "schemas").len();
+    let objects = parses.iter().filter(|record| {
+        let text = record.get("json").and_then(Value::as_str);
+        record["schema"].as_u64() == Some(0) && text.is_some_and(|text| text.starts_with('{'))
+    });
+    let objects = objects.count();
+    assert_eq!(
+        (checked, of_objects),
+        (OBJECT_SCHEMAS * inputs, OBJECT_SCHEMAS * objects),
+        "the records of object schemas, and of those of an object"
     );
 }

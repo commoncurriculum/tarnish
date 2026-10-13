@@ -787,6 +787,7 @@ fn path_values(path: &Path) -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::Schema;
+    use tarnish_fixtures::assert_same;
     use tarnish_js::json::{Value, json};
 
     #[test]
@@ -799,11 +800,11 @@ mod tests {
         let a = json!("y");
         let fallback = |key: &str| (key == "a").then_some(&a);
         let parsed = schema.parse_properties_or(|key| good.get(key), fallback);
-        assert_eq!(parsed.unwrap().into_map(), *good.as_object().unwrap());
+        assert_same(&good, &Value::Object(parsed.unwrap().into_map()));
         let parsed = schema.parse_properties_or(|key| bad.get(key), fallback);
-        assert_eq!(
-            parsed.unwrap().into_map(),
-            *json!({ "a": "y", "b": 0 }).as_object().unwrap()
+        assert_same(
+            &json!({ "a": "y", "b": 0 }),
+            &Value::Object(parsed.unwrap().into_map()),
         );
         let failed = schema.parse_properties_or(|key| bad.get(key), |_| None);
         assert_eq!(
@@ -815,99 +816,12 @@ mod tests {
     }
 
     #[test]
-    fn copies_an_array_from_the_first_item_that_changes() {
-        let schema = Schema::array(Schema::String.catch(Some(json!("x"))));
-        let parsed = schema.parse(Some(&json!(["a", 1, "b"]))).unwrap();
-        assert_eq!(parsed, Some(json!(["a", "x", "b"])));
-        let unchanged = json!(["a", "b"]);
-        assert_eq!(schema.parse(Some(&unchanged)).unwrap(), Some(unchanged));
-    }
-
-    fn object() -> Schema {
-        Schema::Object(vec![
+    fn reads_a_field_of_the_shape() {
+        let object = Schema::Object(vec![
             ("a", Schema::String),
             ("b", Schema::Number.nullable()),
-            ("c", Schema::Boolean.default(json!(false))),
-        ])
-    }
-
-    #[test]
-    fn reads_a_field_of_the_shape() {
-        assert_eq!(object().field("b"), &Schema::Number.nullable());
-    }
-
-    #[test]
-    fn picks_fields_in_the_order_of_the_mask() {
-        let picked = object().pick(&["c", "a"]);
-        let expected = Schema::Object(vec![
-            ("c", Schema::Boolean.default(json!(false))),
-            ("a", Schema::String),
         ]);
-        assert_eq!(picked, expected);
-    }
-
-    #[test]
-    fn omits_fields_keeping_the_order_of_the_shape() {
-        let omitted = object().omit(&["b"]);
-        let expected = Schema::Object(vec![
-            ("a", Schema::String),
-            ("c", Schema::Boolean.default(json!(false))),
-        ]);
-        assert_eq!(omitted, expected);
-    }
-
-    #[test]
-    fn makes_every_field_optional() {
-        let expected = Schema::Object(vec![
-            ("a", Schema::String.optional()),
-            ("b", Schema::Number.nullable().optional()),
-            ("c", Schema::Boolean.default(json!(false)).optional()),
-        ]);
-        assert_eq!(object().partial(), expected);
-    }
-
-    #[test]
-    fn extends_replacing_a_field_in_place_and_adding_the_rest_after() {
-        let extended = object().extend([("b", Schema::String), ("d", Schema::Int)]);
-        let expected = Schema::Object(vec![
-            ("a", Schema::String),
-            ("b", Schema::String),
-            ("c", Schema::Boolean.default(json!(false))),
-            ("d", Schema::Int),
-        ]);
-        assert_eq!(extended, expected);
-    }
-
-    #[test]
-    fn a_strict_object_refuses_the_keys_its_shape_lacks_after_its_fields() {
-        let schema = Schema::Object(vec![("flag", Schema::Boolean.optional())]).strict();
-        let first = |value: Value| {
-            schema
-                .parse(Some(&value))
-                .unwrap_err()
-                .first_message()
-                .to_string()
-        };
-        assert_eq!(
-            schema.parse(Some(&json!({"flag": true}))).unwrap(),
-            Some(json!({"flag": true}))
-        );
-        assert_eq!(
-            first(json!({"flag": true, "a": 1})),
-            "Unrecognized key: \"a\""
-        );
-        assert_eq!(
-            first(json!({"a": 1, "b": 2})),
-            "Unrecognized keys: \"a\", \"b\""
-        );
-        assert_eq!(
-            first(json!({"flag": 1, "a": 1})),
-            "Invalid input: expected boolean, received number"
-        );
-        assert_eq!(
-            first(json!(null)),
-            "Invalid input: expected object, received null"
-        );
+        assert_eq!(object.field("b"), &Schema::Number.nullable());
     }
 
     #[test]
@@ -922,26 +836,5 @@ mod tests {
         let inner = wrapped.unwrap().and_then(Schema::unwrap);
         assert_eq!(inner, Some(&Schema::String.nullable()));
         assert_eq!(Schema::array(Schema::String).unwrap(), None);
-    }
-
-    #[test]
-    #[should_panic(expected = "Unrecognized key: \"z\"")]
-    fn picks_no_key_the_shape_lacks() {
-        object().pick(&["a", "z"]);
-    }
-
-    #[test]
-    #[should_panic(expected = "Unrecognized key: \"z\"")]
-    fn omits_no_key_the_shape_lacks() {
-        object().omit(&["z"]);
-    }
-
-    #[test]
-    fn copies_a_record_from_the_first_entry_that_changes() {
-        let schema = Schema::record(Schema::String.optional().catch(None));
-        let parsed = schema.parse(Some(&json!({ "a": "1", "b": 2, "c": "3" })));
-        assert_eq!(parsed.unwrap(), Some(json!({ "a": "1", "c": "3" })));
-        let unchanged = json!({ "a": "1", "c": "3" });
-        assert_eq!(schema.parse(Some(&unchanged)).unwrap(), Some(unchanged));
     }
 }
