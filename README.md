@@ -185,9 +185,11 @@ This example is `tarnish-tiptap`'s doctest.
 `fixtures/marked.json`, the tokens marked, with marked-more-lists, makes of 206 Markdown
 inputs; `fixtures/tiptap.json`, the documents, Markdown and HTML that `MarkdownManager`,
 `DOMParser` and `DOMSerializer` make with Tiptap's own extensions, among them V8's errors for
-documents holding what the manager can't read; and `fixtures/zod.json`, what zod's `safeParse`
+documents holding what the manager can't read; `fixtures/zod.json`, what zod's `safeParse`
 makes of every kind of JSON with each schema `tarnish-zod` ports, the data or the `ZodError`'s
-message, issues and paths in zod's order.
+message, issues and paths in zod's order; and `fixtures/js.json`, what V8's built-ins that
+`tarnish-js` ports give: `JSON.parse`, `Number`, `parseInt`, the `TypeError`s of reading JSON
+values, `repeat`, `replaceAll`, each comparison a sort asks for, and `localeCompare`.
 
 `fixtures/versions.json` records the version installed of each package a crate ports or is held
 to, each as its dependent resolves it (`"@tiptap/pm > prosemirror-model"`), and the linkedom
