@@ -12,7 +12,7 @@ pub use parse::{
 };
 pub use serialize::{
     AttrValue, DomSerializer, DomSpec, MarkToDom, NodeToDom, Rendered, SpecAttrs, Target, is_hole,
-    mark_to_dom, node_to_dom, qualified, render_spec, render_spec_of,
+    mark_to_dom, node_to_dom, qualified, render_serialized, render_spec, render_spec_of,
 };
 
 use crate::Result;

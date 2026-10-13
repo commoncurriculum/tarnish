@@ -15,7 +15,7 @@ use crate::js::stack;
 use crate::js::value::Nullish;
 use crate::json::{Map, Value};
 use crate::model::{Fragment, Mark, Node, TextRef};
-use crate::{Error, Result};
+use crate::{Error, Result, Text};
 
 /// What a node's or mark's `toDOM` gives: ProseMirror's `DOMOutputSpec`.
 pub enum DomSpec<'a, N> {
@@ -31,8 +31,8 @@ pub enum DomSpec<'a, N> {
         items: Vec<DomSpec<'a, N>>,
         origin: Option<(usize, u32)>,
     },
-    /// A string, the content hole `0` or an attributes object. An array is read as a
-    /// [`DomSpec::Array`] with no origin.
+    /// A string, as [`DomSpec::Text`] renders, the content hole `0` or an attributes object. An
+    /// array is read as a [`DomSpec::Array`] with no origin.
     Value(Value),
     /// `[tag, attrs, ...children]`, setting its attributes in order.
     Element {
@@ -42,12 +42,14 @@ pub enum DomSpec<'a, N> {
     },
     /// `[tag, attrs, 0]`: an element the content goes in.
     Wrapping { tag: &'a str, attrs: SpecAttrs<'a> },
-    /// A string, which renders as text.
+    /// A string. As a spec's child, or to `DOMSerializer.renderSpec`, it renders as text; as
+    /// a node's or mark's whole spec, `renderSpec` reads it by index, as it reads an array: an
+    /// element named by its first UTF-16 unit, with each unit after it as a text node.
     Text(Cow<'a, str>),
     /// `0`, where the content goes.
     Hole,
-    /// A value of the node's or mark's attributes, which JSON can make anything: text when it's
-    /// a string, and otherwise what `renderSpec` makes of it.
+    /// A value of the node's or mark's attributes, which JSON can make anything: what
+    /// `renderSpec` makes of it, a string as [`DomSpec::Text`] renders.
     Attr(ValueRef<'a>),
 }
 
@@ -480,17 +482,72 @@ pub fn render_spec<D: Dom>(
     structure: &DomSpec<D::Node>,
     xml_ns: Option<&str>,
 ) -> Result<Rendered<D::Node>> {
-    render(dom, structure, xml_ns, None)
+    render_or_text(dom, structure, xml_ns, None)
 }
 
-/// `renderSpec` of a node's or mark's spec, which refuses an array from `attrs` that starts with
-/// a string.
+/// `DOMSerializer.renderSpec` of a node's or mark's spec, `attrs` its attributes, which refuses
+/// an array from `attrs` that starts with a string. A string renders as a text node.
 pub fn render_spec_of<D: Dom>(
     dom: &D,
     structure: &DomSpec<D::Node>,
     attrs: ValueRef,
 ) -> Result<Rendered<D::Node>> {
+    render_or_text(dom, structure, None, Some(attrs))
+}
+
+/// A node's or mark's spec rendered as the serializer renders it, `attrs` its attributes: as
+/// [`render_spec_of`] renders it, but for a string, which names an element by its first UTF-16
+/// unit.
+pub fn render_serialized<D: Dom>(
+    dom: &D,
+    structure: &DomSpec<D::Node>,
+    attrs: ValueRef,
+) -> Result<Rendered<D::Node>> {
     render(dom, structure, None, Some(attrs))
+}
+
+/// The string a spec is, if it is one.
+fn as_string<'s, N>(structure: &'s DomSpec<N>) -> Option<&'s str> {
+    match structure {
+        DomSpec::Text(string) => Some(string),
+        DomSpec::Value(Value::String(string)) => Some(string),
+        DomSpec::Attr(value) => value.as_str(),
+        _ => None,
+    }
+}
+
+/// A string as a text node, as `DOMSerializer.renderSpec` and a spec's children take one, and
+/// any other spec as `renderSpec` renders it.
+fn render_or_text<D: Dom>(
+    dom: &D,
+    structure: &DomSpec<D::Node>,
+    xml_ns: Option<&str>,
+    block_arrays_in: Option<ValueRef>,
+) -> Result<Rendered<D::Node>> {
+    match as_string(structure) {
+        Some(string) => text(dom, string),
+        None => render(dom, structure, xml_ns, block_arrays_in),
+    }
+}
+
+/// `renderSpec` of a string, which it reads by index, as it reads an array: `string[0]`, its
+/// first UTF-16 unit, names the element, and each unit after it is a child, and a string, so a
+/// text node of its own. Without a first unit there is no name.
+fn render_string<D: Dom>(dom: &D, string: &str, xml_ns: Option<&str>) -> Result<Rendered<D::Node>> {
+    let mut units = string.encode_utf16();
+    let first = units.next().ok_or_else(invalid)?;
+    // A name that is half of a surrogate pair reaches the DOM as U+FFFD, as a `&str` holds it.
+    let tag = String::from_utf16_lossy(&[first]);
+    let (namespace, tag) = qualified(&tag, xml_ns);
+    let element = dom.create_element(namespace, tag)?;
+    for unit in units {
+        let child = dom.create_text(&Text::from_units(&[unit]))?;
+        dom.append_child(&element, &child)?;
+    }
+    Ok(Rendered {
+        dom: element,
+        content_dom: None,
+    })
 }
 
 fn invalid() -> Error {
@@ -507,10 +564,10 @@ fn suspicious() -> Error {
     )
 }
 
-/// `renderSpec` of a value from a node's or mark's attributes, which JSON can make anything: a
-/// string renders as text, and an array, or an object read as one by its indices and `length`,
-/// as an element. No JSON object is a DOM node, so one `renderSpec` takes for a node is refused
-/// as `appendChild` refuses it.
+/// `renderSpec` of a value from a node's or mark's attributes, which JSON can make anything: an
+/// array, an object read as one by its indices and `length`, or a string read by its units, as
+/// an element. No JSON object is a DOM node, so one `renderSpec` takes for a node is refused as
+/// `appendChild` refuses it.
 fn render_attr<D: Dom>(
     dom: &D,
     structure: ValueRef,
@@ -518,7 +575,7 @@ fn render_attr<D: Dom>(
     block_arrays_in: Option<ValueRef>,
 ) -> Result<Rendered<D::Node>> {
     let array = match structure.kind() {
-        Kind::String(string) => return text(dom, string),
+        Kind::String(string) => return render_string(dom, string, xml_ns),
         Kind::Null => return Err(js::value::cannot_read(Nullish::Null, "nodeType")),
         Kind::Array(_) => true,
         Kind::Object(_) => false,
@@ -583,7 +640,10 @@ fn render_attr<D: Dom>(
                 content_dom: Some(element),
             });
         }
-        let inner = stack::grow(|| render_attr(dom, child, namespace, block_arrays_in))?;
+        let inner = match child.as_str() {
+            Some(string) => text(dom, string)?,
+            None => stack::grow(|| render_attr(dom, child, namespace, block_arrays_in))?,
+        };
         dom.append_child(&element, &inner.dom)?;
         if let Some(inner_content) = inner.content_dom {
             if content_dom.is_some() {
@@ -624,8 +684,8 @@ fn render<D: Dom>(
         DomSpec::Rendered(rendered) if dom.kind(&rendered.dom)? == NodeKind::Element => {
             return Ok(rendered.clone());
         }
-        DomSpec::Text(string) => return text(dom, string),
-        DomSpec::Value(Value::String(string)) => return text(dom, string),
+        DomSpec::Text(string) => return render_string(dom, string, xml_ns),
+        DomSpec::Value(Value::String(string)) => return render_string(dom, string, xml_ns),
         DomSpec::Attr(value) => return render_attr(dom, *value, xml_ns, block_arrays_in),
         DomSpec::Element {
             tag,
@@ -713,7 +773,7 @@ fn fill<D: Dom>(
                 content_dom: Some(element),
             });
         }
-        let inner = stack::grow(|| render(dom, child, namespace, block_arrays_in))?;
+        let inner = stack::grow(|| render_or_text(dom, child, namespace, block_arrays_in))?;
         dom.append_child(&element, &inner.dom)?;
         if let Some(inner_content) = inner.content_dom {
             if content_dom.is_some() {

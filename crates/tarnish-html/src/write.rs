@@ -3,7 +3,7 @@
 //! directly; any other is rendered in a DOM of the writer's own and written from there.
 
 use tarnish::chunk::ValueRef;
-use tarnish::dom::{DomSpec, SpecAttrs, Target, is_hole, render_spec_of};
+use tarnish::dom::{DomSpec, SpecAttrs, Target, is_hole, render_serialized};
 use tarnish::{Error, Result, TextRef};
 
 use crate::dom::{HtmlDom, HtmlNode};
@@ -47,7 +47,7 @@ pub struct HtmlWriter {
     tails: String,
     content: Content,
     /// The error of appending where the writer is, when the DOM wouldn't take a child there: in
-    /// a mark whose spec is text.
+    /// a `{dom, contentDOM}` whose `contentDOM` is text.
     refused: Option<Error>,
     /// What content that isn't written goes to.
     dropped: String,
@@ -127,8 +127,9 @@ impl HtmlWriter {
         attrs: ValueRef<'_>,
         mark: bool,
     ) -> Result<Option<Parent>> {
-        // A mark whose spec is text puts its content in a text node, which the DOM refuses.
-        if mark && matches!(spec, DomSpec::Text(_) | DomSpec::Attr(_)) {
+        // A whole spec that is a string names its element by its first UTF-16 unit, which only
+        // the DOM checks; inside a spec, `write_spec` writes a string as text.
+        if matches!(spec, DomSpec::Text(_) | DomSpec::Attr(_)) {
             return self.render_in_dom(spec, attrs, mark);
         }
         let mut out = std::mem::take(self.sink());
@@ -153,12 +154,12 @@ impl HtmlWriter {
         mark: bool,
     ) -> Result<Option<Parent>> {
         let dom = self.dom.get_or_insert_with(HtmlDom::new);
-        let rendered = render_spec_of(dom, &spec, attrs)?;
+        let rendered = render_serialized(dom, &spec, attrs)?;
         let at = match (rendered.content_dom, mark) {
             (Some(content_dom), _) => content_dom,
             (None, true) => rendered.dom.clone(),
             (None, false) => {
-                let html = rendered.dom.outer_html_in(self.content);
+                let html = rendered.dom.outer_html();
                 self.sink().push_str(&html);
                 return Ok(None);
             }

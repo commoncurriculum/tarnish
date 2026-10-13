@@ -208,16 +208,6 @@ impl HtmlNode {
         serialize::outer(&self.dom.tree(), self.id)
     }
 
-    /// The node's HTML inside a parent whose content shows as `content`: a text node's text
-    /// as it's written there.
-    pub(crate) fn outer_html_in(&self, content: Content) -> String {
-        let tree = self.dom.tree();
-        match (&tree.node(self.id).data, content) {
-            (Data::Text(text), Content::Raw) => text.clone(),
-            _ => serialize::outer(&tree, self.id),
-        }
-    }
-
     /// The node's HTML, split where a node appended to `at` inside it would be written, and how
     /// content shows there: or, when `at` can't have children, the error appending one gives.
     pub(crate) fn outer_html_split(
