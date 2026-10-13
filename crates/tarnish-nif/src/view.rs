@@ -9,14 +9,13 @@ use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 
 use rustler::types::atom;
-use rustler::types::map::MapIterator;
 use rustler::{BigInt, Binary, Term, TermType};
 use tarnish::js::stack;
 use tarnish::js::{self, WrittenNumber};
 use tarnish::json::{self, Key, Map, Number, Value};
 use tarnish::model::read::{self, AttrKeys, Given, Property, ReadMark, ReadNode};
 
-use crate::term::Unread;
+use crate::term::{MapEntries, Unread};
 
 rustler::atoms! {
     __struct__,
@@ -315,7 +314,7 @@ impl<'a, 'r> Json<'a, 'r> {
     fn entries(self) -> Entries<'a, 'r> {
         Entries {
             json: self,
-            map: MapIterator::new(self.term),
+            map: MapEntries::new(self.term),
             first: true,
             pairs: None,
             unique: true,
@@ -423,7 +422,7 @@ impl<'a, 'r> Json<'a, 'r> {
 struct Entries<'a, 'r> {
     json: Json<'a, 'r>,
     /// The map's own entries, while they're the ones read.
-    map: Option<MapIterator<'a>>,
+    map: Option<MapEntries<'a>>,
     /// Whether none of the map's entries is read yet.
     first: bool,
     /// The `{key, value}` pairs of a `Jason.OrderedObject` left to read.
