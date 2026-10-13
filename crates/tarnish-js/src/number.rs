@@ -150,21 +150,21 @@ pub fn string_to_number(string: &str) -> f64 {
     if trimmed.is_empty() {
         return 0.0;
     }
-    let radix = |prefix: &str, radix: u32| {
-        trimmed
-            .strip_prefix(prefix)
-            .or_else(|| trimmed.strip_prefix(&prefix.to_uppercase()))
-            .map(|digits| {
-                u128::from_str_radix(digits, radix)
-                    .map(|number| number as f64)
-                    .unwrap_or(f64::NAN)
-            })
-    };
-    if let Some(number) = radix("0x", 16)
-        .or_else(|| radix("0o", 8))
-        .or_else(|| radix("0b", 2))
-    {
-        return number;
+    let prefixes = [("0x", 16), ("0o", 8), ("0b", 2)];
+    let prefixed = prefixes.into_iter().find_map(|(prefix, radix)| {
+        let digits = trimmed.strip_prefix(prefix);
+        let digits = digits.or_else(|| trimmed.strip_prefix(&prefix.to_uppercase()));
+        Some((digits?, radix))
+    });
+    if let Some((digits, radix)) = prefixed {
+        // A non-decimal literal has no sign, and no more than its digits.
+        if digits.is_empty() || !digits.chars().all(|digit| digit.is_digit(radix)) {
+            return f64::NAN;
+        }
+        return of_power_of_two_radix(
+            digits.chars().filter_map(|digit| digit.to_digit(radix)),
+            radix,
+        );
     }
     match trimmed {
         "Infinity" | "+Infinity" => f64::INFINITY,
@@ -177,6 +177,37 @@ pub fn string_to_number(string: &str) -> f64 {
         }
         _ => f64::NAN,
     }
+}
+
+/// The number nearest the integer of `digits`, most significant first, in `radix`, a power of
+/// two: ties go to the even one, and an integer past the greatest double is Infinity, as
+/// JavaScript rounds a non-decimal literal, however many digits it has.
+fn of_power_of_two_radix(digits: impl Iterator<Item = u32>, radix: u32) -> f64 {
+    let width = radix.trailing_zeros();
+    // Rounding to a double's 53 bits takes the first 64 from the first one, how many follow
+    // them, and whether any that follow is one, which lands in the last of the 64, below where
+    // the rounding cuts.
+    let (mut leading, mut taken, mut past, mut sticky) = (0u64, 0, 0u64, false);
+    for digit in digits {
+        for bit in (0..width)
+            .rev()
+            .map(|shift| u64::from((digit >> shift) & 1))
+        {
+            if taken == 64 {
+                past += 1;
+                sticky |= bit == 1;
+            } else if taken > 0 || bit == 1 {
+                leading = leading << 1 | bit;
+                taken += 1;
+            }
+        }
+    }
+    let scale = match past {
+        // Bits that follow 64 leading ones make an integer of at least 2^63 times 2^past.
+        961.. => f64::INFINITY,
+        _ => f64::from_bits((past + 1023) << 52),
+    };
+    (leading | u64::from(sticky)) as f64 * scale
 }
 
 #[cfg(test)]
