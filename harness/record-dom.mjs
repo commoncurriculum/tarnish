@@ -14,6 +14,8 @@
 //   of its interface.
 // - Each name createElement, setAttribute, createElementNS and setAttributeNS take records the
 //   outerHTML of the element made, or the DOMException the name throws.
+// - Each parse rule of a schema of its own records where DOMParser.schemaRules puts it, and the
+//   type it names in it.
 import { readFileSync } from "node:fs"
 import { parseHTML } from "linkedom"
 import { DOMParser, DOMSerializer, Node, Schema } from "prosemirror-model"
@@ -754,6 +756,44 @@ const names = [
   ),
 ]
 
+// The order DOMParser.schemaRules puts the rules of a mark type and a node type in, and the type
+// it names in each, of rules that say what they make in each way a tag rule and a style rule can,
+// at each priority. A node type's rules are tag rules, as NodeSpec types its parseDOM.
+const ruleSchema = {
+  marks: { em: {} },
+  nodes: { doc: { content: "inline*" }, text: { group: "inline" }, foo: { group: "inline", inline: true } },
+}
+const subsets = fields => fields.reduce((sets, field) => [...sets, ...sets.map(set => [...set, field])], [[]])
+const values = { ignore: true, clearMark: () => true, mark: "other", node: "other" }
+const tagRules = ["tag", ["ignore", "mark", "node"]]
+const styleRules = ["style", ["ignore", "clearMark", "mark"]]
+const parseRules = [
+  ["em", [tagRules, styleRules]],
+  ["foo", [tagRules]],
+].flatMap(([of, kinds]) =>
+  kinds.flatMap(([kind, fields]) =>
+    subsets(fields).flatMap(set =>
+      [undefined, 40, 50, 60].map(priority => ({
+        of,
+        [kind]: [of, kind, ...set, priority ?? "none"].join("-"),
+        ...(priority === undefined ? {} : { priority }),
+        ...Object.fromEntries(set.map(field => [field, values[field]])),
+      })),
+    ),
+  ),
+)
+const withRules = new Schema({
+  nodes: Object.fromEntries(
+    Object.entries(ruleSchema.nodes).map(([name, spec]) => [name, { ...spec, parseDOM: parseRules.filter(rule => rule.of === name) }]),
+  ),
+  marks: { em: { parseDOM: parseRules.filter(rule => rule.of === "em") } },
+})
+const ruleFields = ["tag", "style", "priority", "ignore", "clearMark", "mark", "node"]
+const written = rule =>
+  Object.fromEntries(
+    ruleFields.filter(field => rule[field] !== undefined).map(field => [field, field === "clearMark" ? true : rule[field]]),
+  )
+
 const spec = { topNode: schema.topNodeType.name, nodes: schema.spec.nodes.toObject(), marks: schema.spec.marks.toObject() }
 writeFixture("dom", {
   schema: spec,
@@ -764,4 +804,7 @@ writeFixture("dom", {
   renders,
   strings,
   names,
+  ruleSchema,
+  parseRules: parseRules.map(({ of, ...rule }) => ({ of, ...written(rule) })),
+  schemaRules: DOMParser.schemaRules(withRules).map(written),
 })
