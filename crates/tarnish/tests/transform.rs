@@ -3,7 +3,7 @@
 
 use tarnish::json::{Value, json};
 use tarnish::{Node, Schema, api};
-use tarnish_fixtures::{expect, read, records, schemas};
+use tarnish_fixtures::{assert_same, expect, read, records, schemas};
 
 /// Steps after the first are applied to a document only `apply_steps` holds, which a replace
 /// changes in place: the document it was given must stay as it was. Each position recorded maps
@@ -28,11 +28,9 @@ fn steps_give_prosemirrors_document_and_leave_the_one_given() {
             .collect();
         let given = json!({ "result": changed.to_json(), "mapping": mapping });
         expect(case, &["schema", "start", "steps"], given);
-        assert!(doc.to_json() == case["start"], "{case}");
-        let again: Value = api::apply_steps(&doc, &case["steps"])
-            .expect("the steps again")
-            .to_json();
-        assert!(again == case["result"], "{case}");
+        assert_same(&case["start"], &doc.to_json());
+        let again = api::apply_steps(&doc, &case["steps"]).expect("the steps again");
+        assert_same(&case["result"], &again.to_json());
     }
 }
 
@@ -72,13 +70,13 @@ fn changes_read_back_from_their_chunks() {
         let mut kept = vec![source.chunk().clone()];
         let changed = api::apply_steps(&source, &case["steps"]).expect("the steps");
         let changed = reloaded(schema, &changed, &kept);
-        assert!(changed.to_json() == case["result"], "{case}");
-        assert!(changed.compact().to_json() == case["result"], "{case}");
+        assert_same(&case["result"], &changed.to_json());
+        assert_same(&case["result"], &changed.compact().to_json());
         kept.push(changed.chunk().clone());
         let inverted = api::invert_steps(&source, &case["steps"]).expect("the inverted steps");
         let undone = api::apply_steps(&changed, &inverted).expect("the steps undone");
         let undone = reloaded(schema, &undone, &kept);
-        assert!(undone.to_json() == case["start"], "{case}");
-        assert!(undone.check().is_ok(), "{case}");
+        assert_same(&case["start"], &undone.to_json());
+        undone.check().expect("a valid document");
     }
 }

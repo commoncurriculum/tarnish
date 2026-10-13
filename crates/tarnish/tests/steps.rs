@@ -8,7 +8,7 @@ use tarnish::transform::{
     CustomStep, Mappable, Mapping, Step, StepMap, StepResult, Transform, register_step,
 };
 use tarnish::{Error, Fragment, Node, Result, Schema, Slice, Text, api};
-use tarnish_fixtures::{expect, outcome, read, records};
+use tarnish_fixtures::{assert_same, expect, outcome, read, records};
 
 #[derive(Debug)]
 struct InsertText {
@@ -152,6 +152,28 @@ fn transforms_apply_invert_and_map_as_prosemirrors() {
         let given =
             json!({ "applied": applied, "result": tr.doc().to_json(), "positions": positions });
         expect(case, &["steps"], given);
+
+        // `apply_steps` gives what `tr.step` gives for each step: the document, or the error of
+        // the first step that fails, a TransformError where its `apply` failed.
+        let failure = case["applied"]
+            .as_array()
+            .expect("steps")
+            .iter()
+            .find_map(|step| {
+                let failed = step.get("failed").map(|message| {
+                json!({ "error": { "class": "TransformError", "message": message.clone() } })
+            });
+                failed.or_else(|| {
+                    step.get("error")
+                        .map(|error| json!({ "error": error.clone() }))
+                })
+            });
+        let expected = failure.unwrap_or_else(|| json!({ "result": case["result"].clone() }));
+        let alone = api::apply_steps(&doc, &case["steps"]);
+        assert_same(
+            &expected,
+            &outcome(alone.map(|doc| json!({ "result": doc.to_json() }))),
+        );
     }
 }
 
@@ -177,13 +199,4 @@ fn steps_merge_as_prosemirrors() {
         let merged = merged.map_or(Value::Null, |step| step.to_json());
         expect(case, &["a", "b"], json!({ "result": merged }));
     }
-}
-
-#[test]
-fn apply_steps_reads_registered_steps() {
-    let (schema, fixtures) = fixtures();
-    let doc = Node::from_json(&schema, &fixtures["start"]).expect("a document");
-    let case = &fixtures["transforms"][1];
-    let changed = api::apply_steps(&doc, &case["steps"]).expect("the steps");
-    assert_eq!(changed.to_json(), case["result"]);
 }
