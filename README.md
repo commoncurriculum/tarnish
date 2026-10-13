@@ -606,6 +606,9 @@ hold:
 
 ## Running the tests
 
+`mise.toml` pins the Node, Erlang and Elixir CI runs: `mise install`, then run these through
+`mise exec --` or an activated shell.
+
 ```sh
 git submodule update --init
 npm ci
