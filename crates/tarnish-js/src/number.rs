@@ -107,7 +107,9 @@ pub fn parse_int(string: &str) -> f64 {
 }
 
 /// `Number.parseInt(string, radix)`, of a radix from 2 to 36, or 0 for none, with which a `0x`
-/// prefix reads as hexadecimal and the rest as decimal.
+/// prefix reads as hexadecimal and the rest as decimal. Its digits are read as V8 reads them: in
+/// base 10 or a power of two to the nearest double, and in another base in parts, rounded at
+/// each.
 pub fn parse_int_radix(string: &str, radix: u32) -> f64 {
     assert!(radix == 0 || (2..=36).contains(&radix), "radix {radix}");
     let string = crate::trim_start(string);
@@ -120,16 +122,40 @@ pub fn parse_int_radix(string: &str, radix: u32) -> f64 {
         (0, _) => (10, string),
         _ => (radix, string),
     };
-    let digits: Vec<u32> = string
-        .chars()
-        .map_while(|digit| digit.to_digit(radix))
-        .collect();
+    let end = string.find(|digit: char| !digit.is_digit(radix));
+    let digits = &string[..end.unwrap_or(string.len())];
     if digits.is_empty() {
         return f64::NAN;
     }
-    sign * digits.into_iter().fold(0.0, |number, digit| {
-        number * f64::from(radix) + f64::from(digit)
-    })
+    let digits = digits.trim_start_matches('0');
+    let values = digits.chars().filter_map(|digit| digit.to_digit(radix));
+    sign * match radix {
+        10 => digits.parse().unwrap_or(0.0),
+        _ if radix.is_power_of_two() => of_power_of_two_radix(values, radix),
+        _ => of_other_radix(values, radix),
+    }
+}
+
+/// The integer of `digits` in a radix neither 10 nor a power of two, which V8 reads in parts of
+/// as many digits as keep a part and its multiplier below 2^32 / 36, each part added to the
+/// number read so far times its multiplier in a double: past 2^53, as rounded at each part.
+fn of_other_radix(digits: impl Iterator<Item = u32>, radix: u32) -> f64 {
+    const MOST: u32 = u32::MAX / 36;
+    let mut digits = digits.peekable();
+    let mut number = 0.0;
+    while digits.peek().is_some() {
+        let (mut part, mut multiplier) = (0, 1);
+        while let Some(&digit) = digits.peek() {
+            if multiplier * radix > MOST {
+                break;
+            }
+            part = part * radix + digit;
+            multiplier *= radix;
+            digits.next();
+        }
+        number = number * f64::from(multiplier) + f64::from(part);
+    }
+    number
 }
 
 /// `Number(value)` for a JSON value, `None` being `undefined`.
@@ -203,7 +229,7 @@ fn of_power_of_two_radix(digits: impl Iterator<Item = u32>, radix: u32) -> f64 {
         }
     }
     let scale = match past {
-        // Bits that follow 64 leading ones make an integer of at least 2^63 times 2^past.
+        // Past the 64 taken, the first of them one, the integer is at least 2^(63 + past).
         961.. => f64::INFINITY,
         _ => f64::from_bits((past + 1023) << 52),
     };
