@@ -1,0 +1,4 @@
+[
+  { "operation": "parseMarkdown", "input": "[1]", "output": [1] },
+  { "operation": "parseMarkdown", "input": "[1]", "output": [2] }
+]

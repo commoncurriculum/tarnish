@@ -99,6 +99,27 @@ jobs:
       # Builds the tests' NIF, which holds tarnish's functions in place of Tarnish.Native, and
       # runs Tarnish.Bridge's tests on the Node workers and on that NIF.
       - run: mix test
+      # tarnish-nif's parity tools on the tests' conversions: the Node worker's answers to a
+      # request file replay the same through the NIF's, and a record the NIF answers otherwise
+      # fails replay.
+      - name: Record requests through the Node worker and replay them through the NIF
+        working-directory: .
+        run: |
+          cargo build --release -p tarnish_test_native --example parity
+          parity=target/release/examples/parity
+          examples=elixir/test/support/test_native/examples
+          $parity record $examples/requests.json > target/records.json
+          diff <(set +e; $parity replay target/records.json; echo "exit $?") - <<'EOF'
+          9 same, 0 differ, 0 differ as expected
+          exit 0
+          EOF
+          diff <(set +e; $parity replay $examples/differing.json; echo "exit $?") - <<'EOF'
+               1  parseMarkdown $[*] value
+                  $[0]: js 2 ours 1
+                  in: "[1]"
+          1 same, 1 differ, 0 differ as expected
+          exit 1
+          EOF
       - name: Load Tarnish.Native, which the tests replace
         run: mix run -e '{:ok, _} = Tarnish.Schema.new(%{"nodes" => [{"doc", %{"content" => "text*"}}, {"text", %{}}]})'
         env:

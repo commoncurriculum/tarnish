@@ -107,8 +107,13 @@ impl Conversions for Html {
     }
 }
 
+/// The conversions the NIF serves.
+pub fn conversions() -> &'static dyn Conversions {
+    &*HTML
+}
+
 fn load(env: rustler::Env, threads: rustler::Term) -> bool {
-    tarnish_nif::load(env, threads, Some(&*HTML))
+    tarnish_nif::load(env, threads, Some(conversions()))
 }
 
 rustler::init!("Elixir.Tarnish.TestNative", load = load);
