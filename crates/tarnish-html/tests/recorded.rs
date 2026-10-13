@@ -7,7 +7,7 @@ mod basic;
 use tarnish::dom::{Dom, DomParser, DomSpec, ParseOptions, PreserveWhitespace, render_spec};
 use tarnish::json::{self, Map, Value};
 use tarnish::{Node, Result, Schema, api};
-use tarnish_fixtures::{outcome, read, records, version};
+use tarnish_fixtures::{outcome, read, records, same, version};
 use tarnish_html::{HtmlDom, HtmlNode, parse_html, parse_html_slice, to_html};
 
 /// An input html5ever builds another tree from than the fork's parse5 8 does, and what
@@ -148,7 +148,7 @@ fn expected(recorded: &Value) -> Value {
 fn recorded(record: &Value, inputs: &[&str]) -> Value {
     let mut fields = record.as_object().expect("a record").clone();
     for input in inputs {
-        fields.remove(input);
+        fields.shift_remove(input);
     }
     Value::Object(fields)
 }
@@ -229,7 +229,7 @@ fn parses_match_the_fork() {
         let html = record["html"].as_str().expect("HTML");
         let actual = parsed(&parser, html, record);
         let expected = expected_parse(record, &mut failures);
-        if actual != expected {
+        if !same(&expected, &actual) {
             failures.push(format!(
                 "{html:?}\n  expected: {expected}\n  tarnish-html: {actual}"
             ));
@@ -248,7 +248,7 @@ fn serializations_match_the_fork() {
         let html = doc.and_then(|doc| to_html(&serializer, doc.content()));
         let html = outcome(html.map(|html| json::json!({"html": html})));
         let recorded = expected(&recorded(record, &["doc"]));
-        if html != recorded {
+        if !same(&recorded, &html) {
             failures.push(format!(
                 "{}\n  recorded: {recorded}\n  tarnish-html: {html}",
                 record["doc"]
@@ -284,7 +284,7 @@ fn inline_styles_match_the_fork() -> Result<()> {
             "values": values,
             "cssText": written.attribute("style"),
         });
-        if actual != *record {
+        if !same(record, &actual) {
             failures.push(format!("  recorded: {record}\n  tarnish-html: {actual}"));
         }
     }
@@ -326,7 +326,7 @@ fn rendered_specs_match_the_fork() {
                 json::json!({"html": rendered.dom.outer_html(), "hole": hole})
             });
             let actual = outcome(rendered);
-            if actual != recorded {
+            if !same(&recorded, &actual) {
                 failures.push(format!(
                     "{how}: {json}\n  recorded: {recorded}\n  tarnish-html: {actual}"
                 ));
@@ -374,10 +374,40 @@ fn attribute_values_of_nodes_match_the_fork() -> Result<()> {
         };
         let string = dom.attribute_value(&node_of(&dom, record)?)?;
         let actual = json::json!({"string": string});
-        if actual != recorded(record, &["document", "node", "element", "href"]) {
+        let recorded = recorded(record, &["document", "node", "element", "href"]);
+        if !same(&recorded, &actual) {
             failures.push(format!("  recorded: {record}\n  tarnish-html: {actual}"));
         }
     }
     report(failures);
     Ok(())
+}
+
+/// Each name `createElement`, `setAttribute`, `createElementNS` and `setAttributeNS` take, which
+/// the fork refuses with the `DOMException` it throws, or makes an element of, as `outerHTML`
+/// writes it: the element, or a `p` with the attribute set.
+#[test]
+fn names_are_checked_as_the_fork_checks_them() {
+    let (_, fixtures) = fixtures();
+    let mut failures = Vec::new();
+    for record in records(&fixtures, "names") {
+        let name = record["name"].as_str().expect("a name");
+        let namespace = record
+            .get("namespace")
+            .map(|namespace| namespace.as_str().unwrap_or_default());
+        let dom = HtmlDom::new();
+        let made = match record["call"].as_str() {
+            Some("createElement" | "createElementNS") => dom.create_element(namespace, name),
+            _ => dom.create_element(None, "p").and_then(|element| {
+                dom.set_attribute(&element, namespace, name, &"v".into())?;
+                Ok(element)
+            }),
+        };
+        let actual = outcome(made.map(|element| json::json!({"html": element.outer_html()})));
+        let recorded = expected(&recorded(record, &["call", "namespace", "name"]));
+        if !same(&recorded, &actual) {
+            failures.push(format!("  recorded: {record}\n  tarnish-html: {actual}"));
+        }
+    }
+    report(failures);
 }

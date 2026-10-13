@@ -1,6 +1,7 @@
-//! What an application builds its extensions with: attributes changed in place and rendered
-//! under names they make, parse rules whose hooks fail, Markdown hooks that hold what they
-//! need, and code, whose text stays as it is.
+//! What an application builds its extensions with: attributes changed in place, parse rules
+//! whose hooks fail, and Markdown hooks that hold what they need. `harness/record-tiptap.mjs`
+//! records the `code` extensions, whose attribute renders under a name it makes and whose code
+//! keeps its text as it is.
 
 use tarnish::Error;
 use tarnish::json::{Map, Value, json};
@@ -9,8 +10,7 @@ use tarnish_markdown::marked_more_lists::more_lists;
 use tarnish_tiptap::extensions::{document::document, paragraph::paragraph, text::text};
 use tarnish_tiptap::markdown::{MarkdownManager, Parsed};
 use tarnish_tiptap::{
-    DomSpec, Extension, ExtensionAttribute, MarkExtension, NodeExtension, ParseHtml, get_schema,
-    html,
+    DomSpec, Extension, ExtensionAttribute, NodeExtension, ParseHtml, get_schema, html,
 };
 
 /// A document of paragraphs and `figure`s.
@@ -72,23 +72,6 @@ fn an_attribute_without_a_default_is_required() -> tarnish::Result<()> {
 }
 
 #[test]
-fn renders_an_attribute_under_a_name_it_makes() -> tarnish::Result<()> {
-    let name = ["data", "made"].join("-");
-    let figure = figure().add_attributes(vec![
-        ExtensionAttribute::new("made", Value::Null).render_html(move |attrs, rendered| {
-            rendered.merge(name.clone(), attrs.get("made").expect("its attribute"))
-        }),
-    ]);
-    let schema = get_schema(&with(figure))?;
-    let doc = html::parse(&schema, r#"<figure made="x"></figure>"#)?;
-    assert_eq!(
-        html::serialize(&schema, &doc)?,
-        r#"<figure data-made="x"></figure>"#
-    );
-    Ok(())
-}
-
-#[test]
 fn fails_to_parse_where_a_hook_fails() -> tarnish::Result<()> {
     let attrs = NodeExtension::create("figure").parse_html([ParseHtml::tag("figure").get_attrs(
         |figure| {
@@ -121,45 +104,5 @@ fn markdown_hooks_hold_what_they_need() -> tarnish::Result<()> {
     let doc = json!({ "type": "doc", "content": [{ "type": "figure" }] });
     assert_eq!(manager.parse("---")?, doc);
     assert_eq!(manager.serialize(&doc)?, "* * *");
-    Ok(())
-}
-
-#[test]
-fn text_inside_code_stays_as_it_is() -> tarnish::Result<()> {
-    let code = MarkExtension::create("code")
-        .code()
-        .render_markdown(|node, helpers, _| {
-            Ok(["`", &helpers.render_children(node, "")?, "`"].concat())
-        });
-    let block = NodeExtension::create("codeBlock")
-        .code()
-        .group("block")
-        .content("text*")
-        .parse_html([ParseHtml::tag("pre")])
-        .render_markdown(|node, helpers, _| {
-            Ok(["```\n", &helpers.render_children(node, "")?, "\n```"].concat())
-        });
-    let extensions: Vec<Extension> = vec![
-        document().into(),
-        paragraph().into(),
-        text().into(),
-        code.into(),
-        block.into(),
-    ];
-    let manager = MarkdownManager::new(&extensions, Marked::new(more_lists()));
-    let doc = json!({ "type": "doc", "content": [
-        { "type": "paragraph", "content": [
-            { "type": "text", "text": "*a* <b>", "marks": [{ "type": "code" }] },
-            { "type": "text", "text": " *c*" },
-        ] },
-        { "type": "codeBlock", "content": [{ "type": "text", "text": "*d* <e>" }] },
-    ] });
-    assert_eq!(
-        manager.serialize(&doc)?,
-        "`*a* <b>` \\*c\\*\n\n```\n*d* <e>\n```"
-    );
-    let schema = get_schema(&extensions)?;
-    let parsed = html::parse(&schema, "<pre>a  \n b</pre>")?.to_json();
-    assert_eq!(parsed["content"][0]["content"][0]["text"], "a  \n b");
     Ok(())
 }

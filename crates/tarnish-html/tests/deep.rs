@@ -137,27 +137,44 @@ fn specs_render_as_deeply_as_memory_allows() {
 }
 
 /// Before rendering an array from a node's attributes as a spec, `renderSpec` looks for it
-/// through every array and object they hold.
+/// through every array and object they hold: here at the bottom of them. The same array from
+/// another node's attributes renders.
 #[test]
 fn looks_for_a_spec_through_attributes_nested_as_deeply_as_memory_allows() {
     on_dirty_scheduler_stack(|| {
-        let deep = (0..SPEC_DEPTH).fold(Value::Null, |inner, level| match level % 2 {
+        let deep = (0..SPEC_DEPTH).fold(json::json!(["span"]), |inner, level| match level % 2 {
             0 => json::json!([inner]),
             _ => json::json!({"a": inner}),
         });
         let schema = holders();
-        let holder = holder(&schema, json::json!({"deep": deep, "spec": ["span"]}));
+        let holder = holder(&schema, json::json!({"deep": deep, "spec": null}));
         let attrs = holder.attrs_view();
-        let spec = DomSpec::Attr(attrs.get("spec").expect("its spec"));
-        let refused = render_spec_of(&HtmlDom::new(), &spec, attrs).err();
+        let mut bottom = attrs.get("deep").expect("its deep attribute");
+        loop {
+            let inner = match bottom.is_array() {
+                true => bottom.items().next(),
+                false => bottom.entries().next().map(|(_, inner)| inner),
+            };
+            match inner {
+                Some(inner) if inner.as_str().is_none() => bottom = inner,
+                _ => break,
+            }
+        }
+        let refused = render_spec_of(&HtmlDom::new(), &DomSpec::Attr(bottom), attrs).err();
         let attack = "Using an array from an attribute object as a DOM spec. This may be an \
                       attempted cross site scripting attack.";
         assert!(refused == Some(Error::Range(attack.into())));
+
+        let other = self::holder(&schema, json::json!({"spec": ["span"]}));
+        let spec = DomSpec::Attr(other.attrs_view().get("spec").expect("its spec"));
+        let rendered = render_spec_of(&HtmlDom::new(), &spec, attrs).expect("a span");
+        assert_eq!(rendered.dom.outer_html(), "<span></span>");
     });
 }
 
 /// Styles whose CSS nests far deeper than the HTML does: the CSS engine reads each element's
-/// style as the parser walks it, and writes a style it's given as the attribute.
+/// style as the parser walks it, a bold one among them, and writes a style it's given as the
+/// attribute.
 #[test]
 fn styles_nest_as_deeply_as_memory_allows() {
     on_dirty_scheduler_stack(|| {
@@ -176,9 +193,16 @@ fn styles_nest_as_deeply_as_memory_allows() {
             ),
         ];
         for (given, kept) in styles {
-            let html = format!("<p style=\"{given}\">x</p>");
-            let doc = parse_html(&parser, &html, ParseOptions::<HtmlNode>::default());
-            let doc = doc.expect("a document");
+            let parsed = |html: &str| {
+                let doc = parse_html(&parser, html, ParseOptions::<HtmlNode>::default());
+                doc.expect("a document")
+            };
+            let bold = parsed(&format!("<p style=\"font-weight: bold; {given}\">x</p>"));
+            assert_eq!(
+                to_html(&basic::serializer(), bold.content()).expect("HTML"),
+                "<p><strong>x</strong></p>"
+            );
+            let doc = parsed(&format!("<p style=\"{given}\">x</p>"));
             assert_eq!(
                 to_html(&basic::serializer(), doc.content()).expect("HTML"),
                 "<p>x</p>"

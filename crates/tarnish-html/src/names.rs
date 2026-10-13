@@ -165,36 +165,3 @@ pub fn validate_and_extract<'a>(
     }
     Ok((namespace, prefix, local))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn names_are_checked_as_the_dom_checks_them() {
-        assert!(is_element_local_name("a\u{1}b"));
-        assert!(is_element_local_name("_a.b"));
-        assert!(!is_element_local_name("_a~b"));
-        assert!(!is_element_local_name("1a"));
-        assert!(!is_element_local_name("a b"));
-        assert!(is_attribute_local_name("@x"));
-        assert!(!is_attribute_local_name("a=b"));
-        assert!(!is_attribute_local_name(""));
-        let error = NameKind::Element.validate("1a").expect_err("refused");
-        assert_eq!(error.name, "InvalidCharacterError");
-        assert_eq!(error.message, "\"1a\" is not a valid element local name");
-        assert_eq!(
-            validate_and_extract("urn:x", "p:q", NameKind::Attribute),
-            Ok((Some("urn:x"), Some("p"), "q"))
-        );
-        assert_eq!(
-            validate_and_extract("", "q", NameKind::Element),
-            Ok((None, None, "q"))
-        );
-        let error = validate_and_extract("", "p:q", NameKind::Element).expect_err("refused");
-        assert_eq!(
-            error.to_string(),
-            "NamespaceError: A prefix was given but no namespace was provided"
-        );
-    }
-}

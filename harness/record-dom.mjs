@@ -12,6 +12,10 @@
 // - Each node records what an attribute set to it holds, as renderSpec sets one to a
 //   {dom, contentDOM}: a link's href, resolved against its document's base URL, or else the name
 //   of its interface.
+// - Each name createElement, setAttribute, createElementNS and setAttributeNS take records the
+//   outerHTML of the element made, or the DOMException the name throws.
+// - Each parse rule of a schema of its own records where DOMParser.schemaRules puts it, and the
+//   type it names in it.
 import { readFileSync } from "node:fs"
 import { parseHTML } from "linkedom"
 import { DOMParser, DOMSerializer, Node, Schema } from "prosemirror-model"
@@ -166,6 +170,8 @@ const html = [
   '<ol start="1"><li>one</li></ol>',
   '<ol start="abc"><li>not a number</li></ol>',
   '<ol start="Infinity"><li>infinite</li></ol>',
+  '<ol start="0x+10"><li>signed hex</li></ol>',
+  '<ol start="0b+1"><li>signed binary</li></ol>',
   "<ul><li>a</li><ul><li>nested directly</li></ul><li>b</li></ul>",
   "<ol><li>a</li><ol><li>b</li><ul><li>c</li></ul></ol></ol>",
   "<ul><ul><li>first is a list</li></ul></ul>",
@@ -701,6 +707,95 @@ function nodeOf(owner, { element, href, node }) {
   return made
 }
 
+// Every ASCII character, and a letter, a combining mark, an astral character and a lone surrogate,
+// first in a name and after a letter, `_` and `:`.
+const characters = [...[...Array(128).keys()].map(code => String.fromCharCode(code)), "é", "́", "😀", "\ud800"]
+const qualified = [
+  ...["p", "P", "a:p", "A:P", "xml:p", "xmlns", "xmlns:a", "a:xmlns", "XMLNS", "xml", ":p", "p:", ":", "a:b:c"],
+  ...["1:p", "a:1p", "a b:p", "a:p q", "", "a/:p", "a>:p", "a\0:p", "é:p", "a:é", "a=b", "a:b=c", "x-y", "_:p", "a:-"],
+]
+const namespaces = [
+  null,
+  "",
+  "http://www.w3.org/1999/xhtml",
+  "http://www.w3.org/2000/svg",
+  "http://www.w3.org/1998/Math/MathML",
+  "http://www.w3.org/XML/1998/namespace",
+  "http://www.w3.org/2000/xmlns/",
+  "http://www.w3.org/1999/xlink",
+  "urn:x",
+]
+const outer = made => ({ html: made.outerHTML })
+const names = [
+  ...characters
+    .flatMap(character => ["", "a", "_", ":"].map(before => before + character))
+    .map(name => ({ call: "createElement", name, ...outcome(() => outer(document.createElement(name))) })),
+  ...characters
+    .flatMap(character => [character, "a" + character])
+    .map(name => ({
+      call: "setAttribute",
+      name,
+      ...outcome(() => {
+        const element = document.createElement("p")
+        element.setAttribute(name, "v")
+        return outer(element)
+      }),
+    })),
+  ...namespaces.flatMap(namespace =>
+    qualified.flatMap(name => [
+      { call: "createElementNS", namespace, name, ...outcome(() => outer(document.createElementNS(namespace, name))) },
+      {
+        call: "setAttributeNS",
+        namespace,
+        name,
+        ...outcome(() => {
+          const element = document.createElement("p")
+          element.setAttributeNS(namespace, name, "v")
+          return outer(element)
+        }),
+      },
+    ]),
+  ),
+]
+
+// The order DOMParser.schemaRules puts the rules of a mark type and a node type in, and the type
+// it names in each, of rules that say what they make in each way a tag rule and a style rule can,
+// at each priority. A node type's rules are tag rules, as NodeSpec types its parseDOM.
+const ruleSchema = {
+  marks: { em: {} },
+  nodes: { doc: { content: "inline*" }, text: { group: "inline" }, foo: { group: "inline", inline: true } },
+}
+const subsets = fields => fields.reduce((sets, field) => [...sets, ...sets.map(set => [...set, field])], [[]])
+const values = { ignore: true, clearMark: () => true, mark: "other", node: "other" }
+const tagRules = ["tag", ["ignore", "mark", "node"]]
+const styleRules = ["style", ["ignore", "clearMark", "mark"]]
+const parseRules = [
+  ["em", [tagRules, styleRules]],
+  ["foo", [tagRules]],
+].flatMap(([of, kinds]) =>
+  kinds.flatMap(([kind, fields]) =>
+    subsets(fields).flatMap(set =>
+      [undefined, 40, 50, 60].map(priority => ({
+        of,
+        [kind]: [of, kind, ...set, priority ?? "none"].join("-"),
+        ...(priority === undefined ? {} : { priority }),
+        ...Object.fromEntries(set.map(field => [field, values[field]])),
+      })),
+    ),
+  ),
+)
+const withRules = new Schema({
+  nodes: Object.fromEntries(
+    Object.entries(ruleSchema.nodes).map(([name, spec]) => [name, { ...spec, parseDOM: parseRules.filter(rule => rule.of === name) }]),
+  ),
+  marks: { em: { parseDOM: parseRules.filter(rule => rule.of === "em") } },
+})
+const ruleFields = ["tag", "style", "priority", "ignore", "clearMark", "mark", "node"]
+const written = rule =>
+  Object.fromEntries(
+    ruleFields.filter(field => rule[field] !== undefined).map(field => [field, field === "clearMark" ? true : rule[field]]),
+  )
+
 const spec = { topNode: schema.topNodeType.name, nodes: schema.spec.nodes.toObject(), marks: schema.spec.marks.toObject() }
 writeFixture("dom", {
   schema: spec,
@@ -710,4 +805,8 @@ writeFixture("dom", {
   styles,
   renders,
   strings,
+  names,
+  ruleSchema,
+  parseRules: parseRules.map(({ of, ...rule }) => ({ of, ...written(rule) })),
+  schemaRules: DOMParser.schemaRules(withRules).map(written),
 })

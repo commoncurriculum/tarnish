@@ -1,30 +1,28 @@
 //! What @tiptap/markdown's `MarkdownManager` and ProseMirror's `DOMParser` and `DOMSerializer` do
-//! with Tiptap's own extensions, recorded by `harness/record-tiptap.mjs`: tarnish-tiptap's must
-//! make the same documents, Markdown and HTML, or fail with the same error.
+//! with Tiptap's extensions, recorded by `harness/record-tiptap.mjs`: tarnish-tiptap's must make
+//! the same documents, Markdown and HTML, or fail with the same error.
 
 mod own;
 
-use tarnish::Node;
-use tarnish::json::{Value, json};
-use tarnish_fixtures::{outcome, read, records, version};
-use tarnish_js::Error;
-use tarnish_tiptap::html;
+use own::{Converter, input_of, named};
+use tarnish_fixtures::{read, records, same, version};
 
-/// Holds each record of `section` to what `convert` makes of its input, the record's `from`,
-/// as the record has it under `to`, or as its error.
-fn check<T: Into<Value>>(
-    section: &str,
-    from: &str,
-    to: &str,
-    convert: impl Fn(&Value) -> Result<T, Error>,
-) {
+/// Holds each record of `section` to what its conversion makes of the record's input, with the
+/// extensions the record names.
+fn check(section: &str) {
     let fixtures = read("tiptap");
+    let converters = [None, Some("colors"), Some("code")].map(|name| (name, Converter::new(name)));
     let mut failures = Vec::new();
     for mut record in records(&fixtures, section).to_vec() {
-        let input = record.as_object_mut().expect("a record").remove(from);
-        let input = input.expect("an input");
-        let actual = outcome(convert(&input).map(|output| json!({ to: output.into() })));
-        if actual != record {
+        let (_, converter) = converters
+            .iter()
+            .find(|(name, _)| *name == named(&record))
+            .expect("the extensions");
+        let fields = record.as_object_mut().expect("a record");
+        let input = fields.remove(input_of(section)).expect("an input");
+        fields.remove("extensions");
+        let actual = converter.convert(section, &input);
+        if !same(&record, &actual) {
             failures.push(format!(
                 "{input}\n  Tiptap: {record}\n  tarnish-tiptap: {actual}"
             ));
@@ -36,10 +34,6 @@ fn check<T: Into<Value>>(
         failures.len(),
         failures.join("\n\n")
     );
-}
-
-fn text(input: &Value) -> &str {
-    input.as_str().expect("text")
 }
 
 /// Each Tiptap package installed, the extensions among them, is the version ported.
@@ -60,32 +54,20 @@ fn ports_the_installed_tiptap() {
 
 #[test]
 fn parses_markdown_as_tiptap_does() {
-    let markdown = own::markdown();
-    check("parsesMarkdown", "markdown", "doc", |input| {
-        markdown.parse(text(input))
-    });
+    check("parsesMarkdown");
 }
 
 #[test]
 fn serializes_markdown_as_tiptap_does() {
-    let markdown = own::markdown();
-    check("serializesMarkdown", "doc", "markdown", |doc| {
-        markdown.serialize(doc)
-    });
+    check("serializesMarkdown");
 }
 
 #[test]
 fn parses_html_as_tiptap_does() {
-    let schema = own::schema();
-    check("parsesHTML", "html", "doc", |input| {
-        html::parse(&schema, text(input)).map(|doc| doc.to_json())
-    });
+    check("parsesHTML");
 }
 
 #[test]
 fn serializes_html_as_tiptap_does() {
-    let schema = own::schema();
-    check("serializesHTML", "doc", "html", |doc| {
-        Node::from_json(&schema.schema, doc).and_then(|doc| html::serialize(&schema, &doc))
-    });
+    check("serializesHTML");
 }
