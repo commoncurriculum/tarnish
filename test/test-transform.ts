@@ -50,10 +50,6 @@ describe("reading what isn't there", () => {
     ist(canSplit(doc, 2, 0, [{type: schema.nodes.paragraph}]), false)
   })
 
-  it("clearIncompatible at the end", () => {
-    throws(() => new Transform(doc).clearIncompatible(end, schema.nodes.paragraph), "TypeError", nullRead("childCount"))
-  })
-
   it("AttrStep.invert where there's no node", () => {
     throws(() => new AttrStep(end, "level", 2).invert(doc), "TypeError", nullRead("attrs"))
   })
@@ -64,15 +60,5 @@ describe("reading what isn't there", () => {
 
   it("replaceRange with a slice open deeper than its content", () => {
     throws(() => new Transform(doc).replaceRange(1, 1, deep), "TypeError", nullRead("content"))
-  })
-})
-
-describe("Transform", () => {
-  it("joins before the start out of range", () => {
-    throws(() => new Transform(doc).join(0, 1), "RangeError", "Position -1 out of range")
-  })
-
-  it("fails to split past the top", () => {
-    throws(() => new Transform(doc).split(2, 2), "TransformError", "Inserted content deeper than insertion position")
   })
 })

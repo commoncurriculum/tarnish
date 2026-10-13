@@ -26,12 +26,13 @@ describe("DOMParser.parse", () => {
   })
 
   it("parses nothing from a start past the last child without an end", () => {
-    ist(parse(5).childCount, 1)
-    ist(parse(5).firstChild!.childCount, 0)
+    ist(JSON.stringify(parse(5).toJSON()), '{"type":"doc","content":[{"type":"paragraph"}]}')
   })
 
   it("stops at the last child for an end past it", () => {
-    ist(parse(1, 7).textContent, "bc")
+    ist(JSON.stringify(parse(1, 7).toJSON()),
+        '{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"b"}]},' +
+        '{"type":"paragraph","content":[{"type":"text","text":"c"}]}]}')
   })
 })
 
@@ -69,7 +70,9 @@ describe("DOMSerializer.serializeNode", () => {
 
   it("refuses an attribute's own array as a spec", () => {
     let serializer = new DOMSerializer({block: node => node.attrs.spec}, {})
-    ist.throws(() => serializer.serializeNode(node, {document}), /cross site scripting/)
+    ist.throws(() => serializer.serializeNode(node, {document}), (e: Error) =>
+      e instanceof RangeError &&
+      e.message == "Using an array from an attribute object as a DOM spec. This may be an attempted cross site scripting attack.")
   })
 
   it("renders a copy of an attribute's array", () => {
