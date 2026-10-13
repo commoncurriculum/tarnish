@@ -12,6 +12,8 @@
 // - Each node records what an attribute set to it holds, as renderSpec sets one to a
 //   {dom, contentDOM}: a link's href, resolved against its document's base URL, or else the name
 //   of its interface.
+// - Each name createElement, setAttribute, createElementNS and setAttributeNS take records the
+//   outerHTML of the element made, or the DOMException the name throws.
 import { readFileSync } from "node:fs"
 import { parseHTML } from "linkedom"
 import { DOMParser, DOMSerializer, Node, Schema } from "prosemirror-model"
@@ -701,6 +703,57 @@ function nodeOf(owner, { element, href, node }) {
   return made
 }
 
+// Every ASCII character, and a letter, a combining mark, an astral character and a lone surrogate,
+// first in a name and after a letter, `_` and `:`.
+const characters = [...[...Array(128).keys()].map(code => String.fromCharCode(code)), "é", "́", "😀", "\ud800"]
+const qualified = [
+  ...["p", "P", "a:p", "A:P", "xml:p", "xmlns", "xmlns:a", "a:xmlns", "XMLNS", "xml", ":p", "p:", ":", "a:b:c"],
+  ...["1:p", "a:1p", "a b:p", "a:p q", "", "a/:p", "a>:p", "a\0:p", "é:p", "a:é", "a=b", "a:b=c", "x-y", "_:p", "a:-"],
+]
+const namespaces = [
+  null,
+  "",
+  "http://www.w3.org/1999/xhtml",
+  "http://www.w3.org/2000/svg",
+  "http://www.w3.org/1998/Math/MathML",
+  "http://www.w3.org/XML/1998/namespace",
+  "http://www.w3.org/2000/xmlns/",
+  "http://www.w3.org/1999/xlink",
+  "urn:x",
+]
+const outer = made => ({ html: made.outerHTML })
+const names = [
+  ...characters
+    .flatMap(character => ["", "a", "_", ":"].map(before => before + character))
+    .map(name => ({ call: "createElement", name, ...outcome(() => outer(document.createElement(name))) })),
+  ...characters
+    .flatMap(character => [character, "a" + character])
+    .map(name => ({
+      call: "setAttribute",
+      name,
+      ...outcome(() => {
+        const element = document.createElement("p")
+        element.setAttribute(name, "v")
+        return outer(element)
+      }),
+    })),
+  ...namespaces.flatMap(namespace =>
+    qualified.flatMap(name => [
+      { call: "createElementNS", namespace, name, ...outcome(() => outer(document.createElementNS(namespace, name))) },
+      {
+        call: "setAttributeNS",
+        namespace,
+        name,
+        ...outcome(() => {
+          const element = document.createElement("p")
+          element.setAttributeNS(namespace, name, "v")
+          return outer(element)
+        }),
+      },
+    ]),
+  ),
+]
+
 const spec = { topNode: schema.topNodeType.name, nodes: schema.spec.nodes.toObject(), marks: schema.spec.marks.toObject() }
 writeFixture("dom", {
   schema: spec,
@@ -710,4 +763,5 @@ writeFixture("dom", {
   styles,
   renders,
   strings,
+  names,
 })

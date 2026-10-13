@@ -226,32 +226,3 @@ fn write(tree: &Tree, node: NodeId, out: &mut String, split_at: Option<NodeId>) 
     }
     split
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn text_and_attributes_escape_what_the_standard_escapes() {
-        let mut out = String::new();
-        escape_text(&mut out, "a<b>&\"c\u{a0}é\u{120}");
-        out.push('|');
-        escape_attribute(&mut out, "a<b>&\"c\u{a0}é\u{120}");
-        assert_eq!(
-            out,
-            "a&lt;b&gt;&amp;\"c&nbsp;é\u{120}|a&lt;b&gt;&amp;&quot;c&nbsp;é\u{120}"
-        );
-    }
-
-    #[test]
-    fn attribute_names_take_their_namespaces_prefixes() {
-        let xlink = Some("http://www.w3.org/1999/xlink");
-        let xmlns = Some("http://www.w3.org/2000/xmlns/");
-        assert_eq!(attribute_name(None, None, "href"), "href");
-        assert_eq!(attribute_name(xlink, Some("ns1"), "href"), "xlink:href");
-        assert_eq!(attribute_name(xmlns, None, "xmlns"), "xmlns");
-        assert_eq!(attribute_name(xmlns, Some("xmlns"), "a"), "xmlns:a");
-        assert_eq!(attribute_name(Some("urn:x"), Some("p"), "r"), "p:r");
-        assert_eq!(attribute_name(Some("urn:x"), None, "r"), "r");
-    }
-}
