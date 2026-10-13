@@ -394,50 +394,49 @@ impl fmt::Debug for Text {
 
 #[cfg(test)]
 mod tests {
-    use super::{Text, line_breaks, replace_line_breaks, split_lines};
+    use super::Text;
 
-    /// Finding line breaks, and splitting and replacing at them, agree with a scan of the units,
-    /// for text held as UTF-8 and for text with a lone surrogate, held as units.
+    /// Finding line breaks, and splitting and replacing at them, give what `/\r?\n|\r/g`'s
+    /// matches, `split` and `replace` give, for text held as UTF-8 and for text with a lone
+    /// surrogate, held as units.
+    #[cfg(feature = "regexp")]
     #[test]
-    fn finds_line_breaks_as_units() {
-        let texts = [
-            Text::from("a\r\nb\rc\n\n😀é\r"),
-            Text::from("\n"),
-            Text::from("é😀"),
-            Text::from(""),
-            Text::from_units(&[0xd800, 0x0d, 0x0a, 0x61, 0x0d]),
-        ];
-        for text in texts {
-            let units = text.units().into_owned();
-            let mut breaks = Vec::new();
-            let mut index = 0;
-            while index < units.len() {
-                let len = match (units[index], units.get(index + 1)) {
-                    (0x0d, Some(0x0a)) => 2,
-                    (0x0d | 0x0a, _) => 1,
-                    _ => 0,
-                };
-                if len > 0 {
-                    breaks.push((index, len));
+    fn finds_line_breaks_as_the_regex_does() {
+        use super::{Raw, line_breaks, raw_line_breaks, replace_line_breaks, split_lines};
+        let regex = crate::regexp::RegExp::new(r"\r?\n|\r", "g");
+        crate::random::check_same(
+            &[
+                "a", "\r", "\n", "\r\n", "\n\r", "\r\r", "\u{b}", "\u{c}", " ", "é", "😀",
+                "\u{2028}",
+            ],
+            100_000,
+            |src| {
+                let text = Text::from_units(src);
+                (
+                    line_breaks(&text).collect::<Vec<_>>(),
+                    raw_line_breaks(Raw::Utf16(src)),
+                    split_lines(&text).collect::<Vec<_>>(),
+                    replace_line_breaks(&text, ' '),
+                    (text.first_unit(), text.last_unit()),
+                )
+            },
+            |src| {
+                let mut breaks = Vec::new();
+                let mut last_index = 0;
+                while let Some(found) = regex.exec_at(src, last_index) {
+                    breaks.push((found.index(), found.end() - found.index()));
+                    last_index = found.end();
                 }
-                index += len.max(1);
-            }
-            assert_eq!(line_breaks(&text).collect::<Vec<_>>(), breaks, "{text:?}");
-            let mut lines = Vec::new();
-            let mut from = 0;
-            for &(at, len) in &breaks {
-                lines.push(Text::from_units(&units[from..at]));
-                from = at + len;
-            }
-            lines.push(Text::from_units(&units[from..]));
-            assert_eq!(split_lines(&text).collect::<Vec<_>>(), lines, "{text:?}");
-            let joined = lines.iter().skip(1).fold(lines[0].clone(), |joined, line| {
-                joined.concat(&Text::from(" ")).concat(line)
-            });
-            assert_eq!(replace_line_breaks(&text, ' '), joined, "{text:?}");
-            assert_eq!(text.first_unit(), units.first().copied());
-            assert_eq!(text.last_unit(), units.last().copied());
-        }
+                let lines = regex.split(src).into_iter().map(Text::from_units);
+                (
+                    breaks.clone(),
+                    breaks,
+                    lines.collect(),
+                    Text::from_units(&regex.replace(src, " ")),
+                    (src.first().copied(), src.last().copied()),
+                )
+            },
+        );
     }
 
     /// Slicing and joining text as UTF-8 agrees with doing it on the units, wherever the cuts

@@ -138,36 +138,45 @@ mod tests {
     use super::{collapse_spaces, has_non_space, is_html_space, trailing_spaces};
     use crate::Text;
 
-    /// Collapsing and measuring HTML whitespace agree with a scan of the units, for text held
-    /// as UTF-8 and for text with a lone surrogate, held as units.
+    /// Collapsing and measuring HTML whitespace give what the regexes of prosemirror-model's
+    /// from_dom.ts give, for text held as UTF-8 and for text with a lone surrogate, held as
+    /// units.
     #[test]
-    fn scans_whitespace_as_units() {
-        let texts = [
-            Text::from(" a  b\t\r\n😀 \u{a0} é\u{c} "),
-            Text::from("a b"),
-            Text::from("  "),
-            Text::from(""),
-            Text::from_units(&[0x20, 0x20, 0xd800, 0x09, 0x61, 0x0a]),
-        ];
-        for text in texts {
-            let units = text.units().into_owned();
-            let mut collapsed: Vec<u16> = Vec::new();
-            for &unit in &units {
-                if !is_html_space(unit) {
-                    collapsed.push(unit);
-                } else if collapsed.last() != Some(&0x20) {
-                    collapsed.push(0x20);
-                }
-            }
-            assert_eq!(
-                collapse_spaces(&text),
-                Text::from_units(&collapsed),
-                "{text:?}"
-            );
-            let trailing = units.iter().rev().take_while(|&&unit| is_html_space(unit));
-            assert_eq!(trailing_spaces(&text), trailing.count(), "{text:?}");
-            let non_space = units.iter().any(|&unit| !is_html_space(unit));
-            assert_eq!(has_non_space(&text), non_space, "{text:?}");
-        }
+    fn scans_whitespace_as_the_regexes_do() {
+        use tarnish_js::regexp::RegExp;
+        let collapse = RegExp::new(r"[ \t\r\n\u000c]+", "g");
+        let non_space = RegExp::new(r"[^ \t\r\n\u000c]", "");
+        let trailing = RegExp::new(r"[ \t\r\n\u000c]+$", "");
+        let (first, last) = (
+            RegExp::new(r"^[ \t\r\n\u000c]", ""),
+            RegExp::new(r"[ \t\r\n\u000c]$", ""),
+        );
+        tarnish_js::random::check_same(
+            &[
+                "a", " ", "  ", "\t", "\r", "\n", "\r\n", "\u{b}", "\u{c}", "\u{a0}", "\u{2028}",
+                "é", "😀",
+            ],
+            100_000,
+            |src| {
+                let text = Text::from_units(src);
+                let space = |unit: Option<&u16>| unit.is_some_and(|&unit| is_html_space(unit));
+                (
+                    collapse_spaces(&text),
+                    has_non_space(&text),
+                    trailing_spaces(&text),
+                    (space(src.first()), space(src.last())),
+                )
+            },
+            |src| {
+                (
+                    Text::from_units(&collapse.replace(src, " ")),
+                    non_space.test(src),
+                    trailing
+                        .exec(src)
+                        .map_or(0, |found| found.end() - found.index()),
+                    (first.test(src), last.test(src)),
+                )
+            },
+        );
     }
 }
