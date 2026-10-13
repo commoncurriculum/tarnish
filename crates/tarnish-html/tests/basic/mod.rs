@@ -55,64 +55,6 @@ fn is_bold(value: &str) -> bool {
     value == "bold" || value == "bolder" || heavy
 }
 
-/// JavaScript's `+string`.
-fn to_number(text: &str) -> f64 {
-    let is_space = |c: char| {
-        matches!(
-            c,
-            '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | ' ' | '\u{a0}' | '\u{1680}' | '\u{2000}'
-                ..='\u{200a}'
-                    | '\u{2028}'
-                    | '\u{2029}'
-                    | '\u{202f}'
-                    | '\u{205f}'
-                    | '\u{3000}'
-                    | '\u{feff}'
-        )
-    };
-    let text = text.trim_matches(is_space);
-    if text.is_empty() {
-        return 0.0;
-    }
-    let radix = |digits: &str, radix: u32| {
-        let value = digits.chars().try_fold(0.0, |value: f64, digit| {
-            digit
-                .to_digit(radix)
-                .map(|digit| value * f64::from(radix) + f64::from(digit))
-        });
-        value.filter(|_| !digits.is_empty()).unwrap_or(f64::NAN)
-    };
-    for (prefixes, base) in [(["0x", "0X"], 16), (["0o", "0O"], 8), (["0b", "0B"], 2)] {
-        if let Some(digits) = prefixes.iter().find_map(|prefix| text.strip_prefix(prefix)) {
-            return radix(digits, base);
-        }
-    }
-    let unsigned = text.strip_prefix(['+', '-']).unwrap_or(text);
-    if unsigned == "Infinity" {
-        return if text.starts_with('-') {
-            f64::NEG_INFINITY
-        } else {
-            f64::INFINITY
-        };
-    }
-    let (mantissa, exponent) = match unsigned.find(['e', 'E']) {
-        Some(at) => (&unsigned[..at], Some(&unsigned[at + 1..])),
-        None => (unsigned, None),
-    };
-    let digits = |part: &str| part.bytes().all(|byte| byte.is_ascii_digit());
-    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
-    let valid_mantissa =
-        digits(whole) && digits(fraction) && !(whole.is_empty() && fraction.is_empty());
-    let valid_exponent = exponent.is_none_or(|exponent| {
-        let exponent = exponent.strip_prefix(['+', '-']).unwrap_or(exponent);
-        !exponent.is_empty() && digits(exponent)
-    });
-    match valid_mantissa && valid_exponent {
-        true => text.parse().unwrap_or(f64::NAN),
-        false => f64::NAN,
-    }
-}
-
 fn node_rules() -> HashMap<&'static str, Vec<ParseRule<HtmlNode>>> {
     let mut code_block = TagRule::new("pre");
     code_block.element.preserve_whitespace = Some(PreserveWhitespace::Full);
@@ -141,9 +83,9 @@ fn node_rules() -> HashMap<&'static str, Vec<ParseRule<HtmlNode>>> {
         (
             "ordered_list",
             vec![tag_with_attrs("ol", |dom| {
-                let order = match dom.has_attribute("start") {
-                    true => js::number(to_number(&dom.attribute("start").unwrap_or_default())),
-                    false => Value::from(1),
+                let order = match dom.attribute("start") {
+                    Some(start) => js::number(js::string_to_number(&start)),
+                    None => Value::from(1),
                 };
                 Ok(attrs([("order", order)]))
             })],

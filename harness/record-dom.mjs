@@ -170,6 +170,8 @@ const html = [
   '<ol start="1"><li>one</li></ol>',
   '<ol start="abc"><li>not a number</li></ol>',
   '<ol start="Infinity"><li>infinite</li></ol>',
+  '<ol start="0x+10"><li>signed hex</li></ol>',
+  '<ol start="0b+1"><li>signed binary</li></ol>',
   "<ul><li>a</li><ul><li>nested directly</li></ul><li>b</li></ul>",
   "<ol><li>a</li><ol><li>b</li><ul><li>c</li></ul></ol></ol>",
   "<ul><ul><li>first is a list</li></ul></ul>",
