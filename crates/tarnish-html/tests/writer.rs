@@ -1,6 +1,7 @@
 //! The HTML the writer writes as the serializer goes is the HTML of the DOM the serializer
 //! builds, whatever the specs: for random documents whose `toDOM`s give every shape of spec, the
-//! two give the same HTML, or fail with the same error.
+//! two give the same HTML, or fail with the same error, and for the first of them, which
+//! `harness/record-dom.mjs` generates alike, the fork's.
 
 use std::collections::HashMap;
 
@@ -10,6 +11,7 @@ use tarnish::dom::{
 };
 use tarnish::json::{Value, json};
 use tarnish::{Node, Result, Schema, api, js};
+use tarnish_fixtures::{assert_same, read, records, same};
 use tarnish_html::{HtmlDom, HtmlNode, to_html};
 
 type Spec<'a> = DomSpec<'a, HtmlNode>;
@@ -259,25 +261,72 @@ fn outcome(result: Result<String>) -> std::result::Result<String, String> {
     result.map_err(|error| error.to_string())
 }
 
+/// A run as the recorder records it.
+fn recorded(result: &Result<String>) -> Value {
+    tarnish_fixtures::outcome(result.clone().map(|html| json!({"html": html})))
+}
+
+/// The fork's run of a `writes` record, a `DOMException` as an error of the class its name names.
+fn fork(record: &Value) -> Value {
+    match record.get("error") {
+        Some(error) => {
+            let class = error.get("name").unwrap_or(&error["class"]);
+            json!({"error": {"class": class, "message": &error["message"]}})
+        }
+        None => json!({"html": &record["html"]}),
+    }
+}
+
 #[test]
 fn writes_the_html_of_the_dom_it_would_build() {
     let schema = schema();
     let serializer = serializer();
+    let fixtures = read("dom");
+    let writes = records(&fixtures, "writes");
     let mut random = Random(0x9E37_79B9_7F4A_7C15);
-    let (mut written, mut failed) = (0, 0);
-    for _ in 0..20_000 {
+    // The next document, through the DOM and as the writer goes.
+    let mut generate = || {
         let content: Vec<Value> = (0..=random.below(3)).map(|_| random.block(0)).collect();
         let json = json!({"type": "doc", "content": content});
         let doc = Node::from_json(&schema, &json).expect("a document");
-        let expected = outcome(through_dom(&serializer, &doc));
-        let actual = outcome(to_html(&serializer, doc.content()));
-        assert_eq!(actual, expected, "{}", js::json::stringify(&json));
-        match expected {
-            Ok(_) => written += 1,
-            Err(_) => failed += 1,
+        let through = through_dom(&serializer, &doc);
+        (json, through, to_html(&serializer, doc.content()))
+    };
+    let (total, mut written) = (20_000, 0);
+    let mut differences = Vec::new();
+    for record in writes {
+        let (json, through, as_it_goes) = generate();
+        assert_same(&record["doc"], &json);
+        let fork = fork(record);
+        for (how, ran) in [("Through the DOM", &through), ("As it goes", &as_it_goes)] {
+            let ran = recorded(ran);
+            if !same(&fork, &ran) {
+                differences.push(format!(
+                    "{how}: {json}\n  fork: {fork}\n  tarnish-html: {ran}"
+                ));
+            }
         }
+        written += usize::from(through.is_ok());
+    }
+    assert!(
+        differences.is_empty(),
+        "{} differences from the fork:\n\n{}",
+        differences.len(),
+        differences.join("\n\n")
+    );
+    for _ in writes.len()..total {
+        let (json, through, as_it_goes) = generate();
+        let expected = outcome(through);
+        assert_eq!(
+            outcome(as_it_goes),
+            expected,
+            "{}",
+            js::json::stringify(&json)
+        );
+        written += usize::from(expected.is_ok());
     }
     // Both kinds of outcome are common, so neither is compared only rarely.
+    let failed = total - written;
     assert!(
         written > 2_000 && failed > 2_000,
         "{written} written, {failed} failed"

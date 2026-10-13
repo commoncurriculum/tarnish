@@ -4,7 +4,13 @@
 
 mod basic;
 
-use tarnish::dom::{Dom, DomParser, DomSpec, ParseOptions, PreserveWhitespace, render_spec};
+use std::collections::HashMap;
+
+use tarnish::chunk::ValueRef;
+use tarnish::dom::{
+    Dom, DomParser, DomSerializer, DomSpec, NodeKind, ParseOptions, PreserveWhitespace, Rendered,
+    mark_to_dom, node_to_dom, render_spec, render_spec_of,
+};
 use tarnish::json::{self, Map, Value};
 use tarnish::{Node, Result, Schema, api};
 use tarnish_fixtures::{outcome, read, records, same, version};
@@ -334,6 +340,112 @@ fn rendered_specs_match_the_fork() {
         }
     }
     report(failures);
+}
+
+/// A string spec in each form a spec holds one: text, a JSON value, and an attribute's value.
+type StringForm = for<'a> fn(ValueRef<'a>) -> DomSpec<'a, HtmlNode>;
+
+const STRING_FORMS: [(&str, StringForm); 3] = [
+    ("As text", |spec| {
+        DomSpec::Text(spec.as_str().expect("a string").into())
+    }),
+    ("As a value", |spec| DomSpec::Value(spec.to_value())),
+    ("As an attribute's value", |spec| DomSpec::Attr(spec)),
+];
+
+/// The string a `stringSpecs` node or mark holds.
+fn spec(attrs: ValueRef) -> ValueRef {
+    attrs.get("spec").expect("a spec")
+}
+
+/// Each string, as a node's and a mark's whole spec, is read by its UTF-16 units wherever the
+/// serializer renders it, and is text to `DOMSerializer.renderSpec`, given the attributes it came
+/// from or not.
+#[test]
+fn string_specs_render_as_the_fork_renders_them() -> Result<()> {
+    let (_, fixtures) = fixtures();
+    let schema = api::schema(&fixtures["stringSchema"]).expect("the strings' schema");
+    let mut failures = Vec::new();
+    for record in records(&fixtures, "stringSpecs") {
+        let string = &record["string"];
+        let in_doc = |node: Value| {
+            Node::from_json(&schema, &json::json!({"type": "doc", "content": [node]}))
+        };
+        let atom_doc = in_doc(json::json!({"type": "atom", "attrs": {"spec": string}}))?;
+        let text_doc = in_doc(json::json!({"type": "text", "text": "t",
+            "marks": [{"type": "wrap", "attrs": {"spec": string}}]}))?;
+        let (atom, text) = (atom_doc.child(0)?, text_doc.child(0)?);
+        let mark = text.marks().get(0).expect("a mark");
+        for (how, form) in STRING_FORMS {
+            let serializer = DomSerializer::new(
+                HashMap::from([(
+                    "atom".to_owned(),
+                    node_to_dom(move |node| Ok(form(spec(node.attrs_view())))),
+                )]),
+                HashMap::from([(
+                    "wrap".to_owned(),
+                    mark_to_dom(move |mark, _| Ok(form(spec(mark.attrs_view())))),
+                )]),
+            );
+            let dom = HtmlDom::new();
+            let node = serializer.serialize_node(&dom, &atom).and_then(|made| {
+                let (mut children, mut child) = (0, dom.first_child(&made)?);
+                while let Some(next) = child {
+                    (children, child) = (children + 1, dom.next_sibling(&next)?);
+                }
+                Ok(json::json!({"html": made.outer_html(), "children": children}))
+            });
+            let mark_dom = serializer
+                .serialize_mark(&dom, &mark, true)
+                .map(|rendered| {
+                    let rendered = rendered.expect("the mark's DOM");
+                    let hole = rendered.content_dom.map(|hole| hole.outer_html());
+                    json::json!({"html": rendered.dom.outer_html(), "hole": hole})
+                });
+            let marked = serializer.serialize_node(&dom, &text);
+            let marked = marked.map(|made| json::json!({"html": made.outer_html()}));
+            let filled = |doc: &Node<'static>| {
+                let fragment = serializer.serialize_fragment(&dom, doc.content(), None);
+                outcome(fragment.map(|fragment| json::json!({"html": fragment.inner_html()})))
+            };
+            let written = |doc: &Node<'static>| {
+                outcome(to_html(&serializer, doc.content()).map(|html| json::json!({"html": html})))
+            };
+            let made = |rendered: Result<Rendered<HtmlNode>>| {
+                outcome(rendered.and_then(|Rendered { dom: made, .. }| {
+                    Ok(match dom.kind(&made)? {
+                        NodeKind::Text => json::json!({"text": dom.text(&made)?.to_string()}),
+                        _ => json::json!({"html": made.outer_html()}),
+                    })
+                }))
+            };
+            let structure = form(spec(atom.attrs_view()));
+            let alone = made(render_spec(&dom, &structure, None));
+            // The static renderSpec makes text of a string before it reads the attributes.
+            let given = made(render_spec_of(&dom, &structure, atom.attrs_view()));
+            let runs = [
+                ("serialize_node", "node", outcome(node)),
+                ("serialize_mark", "mark", outcome(mark_dom)),
+                ("serialize_node", "marked", outcome(marked)),
+                ("serialize_fragment", "nodeFragment", filled(&atom_doc)),
+                ("to_html", "nodeFragment", written(&atom_doc)),
+                ("serialize_fragment", "markFragment", filled(&text_doc)),
+                ("to_html", "markFragment", written(&text_doc)),
+                ("render_spec", "renderSpec", alone),
+                ("render_spec_of", "renderSpec", given),
+            ];
+            for (call, field, actual) in runs {
+                let recorded = expected(&record[field]);
+                if !same(&recorded, &actual) {
+                    failures.push(format!(
+                        "{how}, {call} of {string}:\n  recorded: {recorded}\n  tarnish-html: {actual}"
+                    ));
+                }
+            }
+        }
+    }
+    report(failures);
+    Ok(())
 }
 
 /// The node a `strings` record names, made in `dom` as the recorder made it.

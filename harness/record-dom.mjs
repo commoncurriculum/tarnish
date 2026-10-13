@@ -16,9 +16,14 @@
 //   outerHTML of the element made, or the DOMException the name throws.
 // - Each parse rule of a schema of its own records where DOMParser.schemaRules puts it, and the
 //   type it names in it.
+// - Each of tests/writer.rs's random documents records the innerHTML of an element that
+//   DOMSerializer.serializeFragment fills with it, of its schema and toDOMs.
+// - Each string, as the spec a node's and a mark's toDOM give, records what DOMSerializer's
+//   serializeNode, serializeMark and serializeFragment make of it, and DOMSerializer.renderSpec's
+//   text node of it.
 import { readFileSync } from "node:fs"
 import { parseHTML } from "linkedom"
-import { DOMParser, DOMSerializer, Node, Schema } from "prosemirror-model"
+import { DOMParser, DOMSerializer, Fragment, Node, Schema } from "prosemirror-model"
 import { schema as basic } from "prosemirror-schema-basic"
 import { addListNodes } from "prosemirror-schema-list"
 import { outcome, writeFixture } from "./fixture.mjs"
@@ -796,6 +801,141 @@ const written = rule =>
     ruleFields.filter(field => rule[field] !== undefined).map(field => [field, field === "clearMark" ? true : rule[field]]),
   )
 
+// The first documents tarnish-html's tests/writer.rs generates, whose toDOMs give every shape of
+// spec, and the innerHTML of an element DOMSerializer.serializeFragment fills with each. The
+// generator, its seed and the toDOMs are writer.rs's, which reads the specs it makes in Rust
+// (`DomSpec::element`) as having no attributes.
+const variants = { variant: { default: 0 }, value: { default: null } }
+const writerSchema = new Schema({
+  nodes: {
+    doc: { content: "block+" },
+    para: { content: "inline*", group: "block", attrs: variants },
+    box: { content: "block+", group: "block", attrs: variants },
+    leaf: { group: "block", attrs: variants },
+    text: { group: "inline" },
+    icon: { group: "inline", inline: true, attrs: variants },
+  },
+  marks: { em: { attrs: variants }, strong: { attrs: variants }, code: { spanning: false, attrs: variants } },
+})
+const blockSpec = (variant, value) =>
+  [
+    ["p", 0],
+    ["div", { class: "x", style: "color: red;  background: BLUE; nonsense", title: value }, 0],
+    ["section", ["h2", `T<&>${nbsp}`], ["div", { "data-a": value }, 0], ["hr"], "after"],
+    ["br", 0],
+    ["template", 0],
+    ["style", 0],
+    ["http://www.w3.org/2000/svg svg", 0],
+    ["DIV", { Title: "t" }, 0],
+    ["p", { title: "x", style: "margin: 0" }, 0],
+    ["div", 0, "x"],
+    ["div", ["a", 0], ["b", 0]],
+    value,
+    ["div", { "x y": "1" }, 0],
+    ["p", { hidden: value, id: 'a"b' }, 0],
+    ["script", "<b>&</b>", ["i", 0]],
+    ["img", "inside", 0],
+    ["div", ["template", ["b", 0]]],
+    ["div", ["br", "x"], ["span", 0]],
+    ["div", ["span", 0], ["em", "after"]],
+    ["div", {}, value, 0],
+  ][Math.min(variant, 19)]
+const leafSpec = (variant, value) =>
+  [value, ["img", { src: value }], ["hr", 0], ["span", {}, value], ["span", { class: "leaf" }, "text"], "leaf & text"][
+    variant % 6
+  ]
+const markSpec = (variant, value) =>
+  [["em", 0], ["strong"], ["span", ["b", 0]], "mark text", ["code", 0], ["br"], ["template"], ["a", { href: value }], ["style"]][
+    variant % 9
+  ]
+const blockDOM = node => blockSpec(node.attrs.variant, node.attrs.value)
+const leafDOM = node => leafSpec(node.attrs.variant, node.attrs.value)
+const markDOM = mark => markSpec(mark.attrs.variant, mark.attrs.value)
+const writerSerializer = new DOMSerializer(
+  { para: blockDOM, box: blockDOM, leaf: leafDOM, icon: leafDOM },
+  { em: markDOM, strong: markDOM, code: markDOM },
+)
+// A xorshift generator, as writer.rs's `Random`.
+const word = (1n << 64n) - 1n
+let state = 0x9e3779b97f4a7c15n
+const below = bound => {
+  state ^= (state << 13n) & word
+  state ^= state >> 7n
+  state ^= (state << 17n) & word
+  return Number(state % BigInt(bound))
+}
+const pick = list => list[below(list.length)]
+const randomValue = () =>
+  pick(["str", '<x> & "y"', ["p", 0], ["div"], [1, 2], { 0: "p", length: 1 }, 0, 1.5, null, true])
+const attrsOf = count => ({ variant: below(count), value: randomValue() })
+const marksOf = () => ["em", "strong", "code"].flatMap(type => (below(3) === 0 ? [{ type, attrs: attrsOf(9) }] : []))
+const inlineOf = () =>
+  Array.from({ length: below(4) }, () => {
+    if (below(4) === 0) return { type: "icon", attrs: attrsOf(6), marks: marksOf() }
+    const text = pick(["a", "<b> & c", nbsp, "x y"])
+    return { type: "text", text, marks: marksOf() }
+  })
+const blockOf = depth => {
+  switch (below(depth > 2 ? 2 : 3)) {
+    case 0:
+      return { type: "para", attrs: attrsOf(20), content: inlineOf() }
+    case 1:
+      return { type: "leaf", attrs: attrsOf(6) }
+    default: {
+      const content = Array.from({ length: below(2) + 1 }, () => blockOf(depth + 1))
+      return { type: "box", attrs: attrsOf(20), content }
+    }
+  }
+}
+const generated = Array.from({ length: 1000 }, () => ({
+  type: "doc",
+  content: Array.from({ length: below(3) + 1 }, () => blockOf(0)),
+}))
+// Each document is read from its JSON text, as the tests read it, so no value is another's.
+const writes = generated.map(doc => JSON.parse(JSON.stringify(doc))).map(doc => ({
+  doc,
+  ...outcome(() => {
+    const container = document.createElement("div")
+    container.appendChild(writerSerializer.serializeFragment(Node.fromJSON(writerSchema, doc).content, { document }))
+    return { html: container.innerHTML }
+  }),
+}))
+
+// The serializer's renderSpec reads a whole spec that is a string by index, as it reads an array:
+// its first UTF-16 unit names an element, and each unit after it is a text node of its own in it.
+// Only the static DOMSerializer.renderSpec makes a text node of the string.
+const stringSchema = {
+  nodes: { doc: { content: "inline*" }, text: { group: "inline" }, atom: { group: "inline", inline: true, attrs: { spec: {} } } },
+  marks: { wrap: { attrs: { spec: {} } } },
+}
+const ofStrings = new Schema(stringSchema)
+const stringSerializer = new DOMSerializer({ atom: node => node.attrs.spec }, { wrap: mark => mark.attrs.spec })
+const filled = node => {
+  const container = document.createElement("div")
+  container.appendChild(node)
+  return { html: container.innerHTML }
+}
+const stringSpecs = ["", "x", "Ab", "a&<b", "<x>", " a", "1", "é", `${nbsp}b`, "😀"].map(string => {
+  const atom = ofStrings.node("atom", { spec: string })
+  const text = ofStrings.text("t", [ofStrings.mark("wrap", { spec: string })])
+  const options = { document }
+  return {
+    string,
+    node: outcome(() => {
+      const made = stringSerializer.serializeNode(atom, options)
+      return { ...filled(made), children: made.childNodes.length }
+    }),
+    mark: outcome(() => {
+      const { dom, contentDOM } = stringSerializer.serializeMark(text.marks[0], true, options)
+      return { html: dom.outerHTML, hole: contentDOM ? contentDOM.outerHTML : null }
+    }),
+    marked: outcome(() => filled(stringSerializer.serializeNode(text, options))),
+    nodeFragment: outcome(() => filled(stringSerializer.serializeFragment(Fragment.from(atom), options))),
+    markFragment: outcome(() => filled(stringSerializer.serializeFragment(Fragment.from(text), options))),
+    renderSpec: outcome(() => ({ text: DOMSerializer.renderSpec(document, string).dom.data })),
+  }
+})
+
 const spec = { topNode: schema.topNodeType.name, nodes: schema.spec.nodes.toObject(), marks: schema.spec.marks.toObject() }
 writeFixture("dom", {
   schema: spec,
@@ -809,4 +949,7 @@ writeFixture("dom", {
   ruleSchema,
   parseRules: parseRules.map(({ of, ...rule }) => ({ of, ...written(rule) })),
   schemaRules: DOMParser.schemaRules(withRules).map(written),
+  writes,
+  stringSchema,
+  stringSpecs,
 })
