@@ -172,12 +172,6 @@ defmodule Tarnish.BridgeTest do
         assert Tarnish.Bridge.each([{"parseHTML", "<p>x</p>", %{}}], opts) === [parsed]
       end
 
-      test "reads a lone surrogate in an answer as U+FFFD, and keeps a backslash before text like its escape",
-           %{opts: opts} do
-        assert Tarnish.Bridge.parse_markdown("x", %{}, opts) ===
-                 {:error, "No Markdown: �\\😀\\ud800"}
-      end
-
       test "converts a document of any size alone as in a batch", %{opts: opts} do
         for paragraphs <- [1, 5_000] do
           sized = document(List.duplicate("x", paragraphs))
@@ -279,15 +273,29 @@ defmodule Tarnish.BridgeTest do
       assert worker_pids(Tarnish.Bridge.Pool) === before
     end
 
-    test "are replaced when a worker's process dies", %{opts: opts} do
-      NimblePool.checkout!(Tarnish.Bridge.Pool, :bridge, fn _from, port ->
-        {:os_pid, os_pid} = Port.info(port, :os_pid)
-        System.cmd("kill", ["-9", to_string(os_pid)])
-        {:ok, :error}
-      end)
+    test "read a lone surrogate in an answer as U+FFFD, and keep a backslash before text like its escape",
+         %{opts: opts} do
+      assert Tarnish.Bridge.parse_markdown("x", %{}, opts) ===
+               {:error, "No Markdown: �\\😀\\ud800"}
+    end
+
+    test "are replaced when an idle worker's process dies", %{opts: opts} do
+      [port | _] = worker_ports(Tarnish.Bridge.Pool)
+      {:os_pid, os_pid} = Port.info(port, :os_pid)
+      monitor = Port.monitor(port)
+      System.cmd("kill", ["-9", to_string(os_pid)])
+      assert_receive {:DOWN, ^monitor, :port, ^port, _}, 5_000
+
+      # The pool takes the port's exit, and starts a worker in its place at its next message.
+      :sys.get_state(Tarnish.Bridge.Pool)
+      replaced = worker_pids(Tarnish.Bridge.Pool)
+      assert length(replaced) === 2
+      refute {:os_pid, os_pid} in replaced
 
       assert Tarnish.Bridge.each(List.duplicate({"parseHTML", "<p>x</p>"}, 4), opts) ===
                List.duplicate({:ok, document(["x"])}, 4)
+
+      assert worker_pids(Tarnish.Bridge.Pool) === replaced
     end
 
     test "of a lazy pool start once a call needs one", %{opts: opts} do
@@ -346,9 +354,12 @@ defmodule Tarnish.BridgeTest do
 
   defp text(text), do: %{"type" => "text", "text" => text}
 
-  defp worker_pids(pool) do
+  defp worker_ports(pool) do
     :sys.get_state(pool)
     {:links, links} = Process.info(Process.whereis(pool), :links)
-    links |> Enum.filter(&is_port/1) |> Enum.map(&Port.info(&1, :os_pid)) |> Enum.sort()
+    Enum.filter(links, &is_port/1)
   end
+
+  defp worker_pids(pool),
+    do: pool |> worker_ports() |> Enum.map(&Port.info(&1, :os_pid)) |> Enum.sort()
 end
