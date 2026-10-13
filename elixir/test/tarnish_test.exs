@@ -9,10 +9,19 @@ defmodule TarnishTest do
   @fixtures Path.expand("../../fixtures/transform.json", __DIR__)
   @external_resource @fixtures
 
-  # What the real prosemirror-model makes of inputs its own tests don't give it, recorded by
-  # `npm run test:js` too.
+  # What the real ProseMirror packages make of inputs their own tests don't give them, and of
+  # the transforms above, recorded by `npm run test:js` too.
   @model Path.expand("../../fixtures/model.json", __DIR__)
   @external_resource @model
+
+  @kinds %{
+    "RangeError" => :range_error,
+    "SyntaxError" => :syntax_error,
+    "ReplaceError" => :replace_error,
+    "TransformError" => :transform_error,
+    "TypeError" => :type_error,
+    "Error" => :js_error
+  }
 
   defp schemas(path) do
     specs = path |> File.read!() |> Jason.decode!(objects: :ordered_objects)
@@ -27,69 +36,140 @@ defmodule TarnishTest do
     %{schemas: schemas(@fixtures), model_schemas: schemas(@model)}
   end
 
+  defp expected(%{"result" => result}), do: {:ok, result}
+
+  defp expected(%{"error" => %{"class" => class, "message" => message}}),
+    do: {:error, {Map.fetch!(@kinds, class), message}}
+
+  # Where each position maps through the steps with each assoc, as ProseMirror maps it.
+  defp assert_mapped(schema, steps, mapped) do
+    for %{"assoc" => assoc, "pos" => [_ | _] = positions} <- mapped do
+      given =
+        for pos <- 0..(length(positions) - 1), do: Tarnish.Mapping.map(schema, steps, pos, assoc)
+
+      assert given === Enum.map(positions, &{:ok, &1}), "assoc #{assoc}"
+    end
+  end
+
   # A section with no records would make no tests, so each must have some.
   %{"tests" => [_ | _] = tests} = @fixtures |> File.read!() |> Jason.decode!()
 
-  for {fixture, index} <- Enum.with_index(tests) do
+  %{
+    "fromJSON" => [_ | _] = from_json,
+    "check" => [_ | _] = check,
+    "transforms" => [_ | _] = transforms,
+    "transformTests" => [_ | _] = transform_tests
+  } = @model |> File.read!() |> Jason.decode!()
+
+  # A spec's types are in order.
+  [_ | _] = new_schema = Jason.decode!(File.read!(@model), objects: :ordered_objects)["newSchema"]
+
+  if length(tests) != length(transform_tests), do: raise("a test without its record")
+
+  for {{fixture, recorded}, index} <- Enum.with_index(Enum.zip(tests, transform_tests)) do
     @fixture fixture
-    test "transform #{index} gives the document ProseMirror gives", %{schemas: schemas} do
+    @recorded recorded
+    @index index
+    test "transform #{index} gives the document, inverse and mapping ProseMirror gives",
+         %{schemas: schemas} do
       %{"schema" => schema, "start" => start, "steps" => steps, "result" => result} = @fixture
+      %{"test" => @index, "inverted" => inverted, "mapped" => mapped} = @recorded
       schema = Enum.at(schemas, schema)
       {:ok, doc} = Tarnish.Node.from_json(schema, start)
 
       {:ok, changed} = Tarnish.Step.apply(doc, steps)
       assert Tarnish.Node.to_json(changed) === result
 
-      {:ok, inverted} = Tarnish.Step.invert(doc, steps)
+      assert Tarnish.Step.invert(doc, steps) === {:ok, inverted}
       {:ok, undone} = Tarnish.Step.apply(changed, inverted)
       assert Tarnish.Node.to_json(undone) === start
 
-      for [from, to] <- @fixture["mapping"] do
-        assert Tarnish.Mapping.map(schema, steps, from, 1) === {:ok, to}
+      assert_mapped(schema, steps, mapped)
+    end
+  end
+
+  for {fixture, index} <- Enum.with_index(from_json) do
+    @fixture fixture
+    test "node #{index} from JSON is the one ProseMirror reads", %{model_schemas: schemas} do
+      schema = Enum.at(schemas, @fixture["schema"])
+      json = if text = @fixture["text"], do: Jason.decode!(text), else: @fixture["json"]
+
+      answer =
+        with {:ok, doc} <- Tarnish.Node.from_json(schema, json),
+             do: {:ok, Tarnish.Node.to_json(doc)}
+
+      assert answer === expected(@fixture)
+    end
+  end
+
+  @from_json from_json
+  test "terms JSON doesn't have, atoms and ordered objects, read as the JSON they stand for",
+       %{model_schemas: schemas} do
+    same = %{"type" => "paragraph", "content" => [%{"type" => "text", "text" => "same"}]}
+    doc = &%{"type" => "doc", "content" => [same, &1]}
+    twin = doc.(%{"type" => "paragraph"})
+
+    %{"result" => written} =
+      Enum.find(@from_json, &(&1["text"] && Jason.decode!(&1["text"]) === twin))
+
+    for term <- [
+          %{"type" => :paragraph},
+          %{type: "paragraph"},
+          Jason.OrderedObject.new([{"type", "paragraph"}])
+        ] do
+      {:ok, read} = Tarnish.Node.from_json(Enum.at(schemas, 5), doc.(term))
+      assert Tarnish.Node.to_json(read) === written, inspect(term)
+    end
+  end
+
+  for {fixture, index} <- Enum.with_index(new_schema) do
+    @fixture fixture
+    test "schema #{index} is ProseMirror's, or its error" do
+      case {Tarnish.Schema.new(@fixture["spec"]), @fixture["error"]} do
+        {answer, nil} ->
+          assert {:ok, schema} = answer
+          assert is_reference(schema)
+
+        {answer, error} ->
+          assert answer === {:error, {Map.fetch!(@kinds, error["class"]), error["message"]}}
       end
     end
   end
 
-  %{"fromJSON" => [_ | _] = from_json, "transforms" => [_ | _] = transforms} =
-    @model |> File.read!() |> Jason.decode!()
-
-  kinds = %{"RangeError" => :range_error, "TypeError" => :type_error, "Error" => :js_error}
-
-  for {fixture, index} <- Enum.with_index(from_json) do
+  for {fixture, index} <- Enum.with_index(check) do
     @fixture fixture
-    @kinds kinds
-    test "node #{index} from JSON is the one ProseMirror reads", %{model_schemas: schemas} do
+    test "check #{index} is ProseMirror's", %{model_schemas: schemas} do
       schema = Enum.at(schemas, @fixture["schema"])
+      expected = with {:ok, nil} <- expected(@fixture), do: :ok
 
-      expected =
-        case @fixture do
-          %{"result" => result} ->
-            {:ok, result}
-
-          %{"error" => %{"class" => class, "message" => message}} ->
-            {:error, {@kinds[class], message}}
-        end
-
-      answer =
+      checked =
         with {:ok, doc} <- Tarnish.Node.from_json(schema, @fixture["json"]),
-             do: {:ok, Tarnish.Node.to_json(doc)}
+             do: Tarnish.Node.check(doc)
 
-      assert answer === expected
+      assert checked === expected
     end
   end
 
   for {fixture, index} <- Enum.with_index(transforms) do
     @fixture fixture
-    test "a step splitting a surrogate pair leaves U+FFFD for each half, #{index}",
+    test "steps #{index} give ProseMirror's text, U+FFFD for each lone surrogate, or its error",
          %{model_schemas: schemas} do
-      %{"schema" => schema, "start" => start, "steps" => steps, "result" => result} = @fixture
-      {:ok, doc} = Tarnish.Node.from_json(Enum.at(schemas, schema), start)
-      {:ok, changed} = Tarnish.Step.apply(doc, steps)
-      assert Tarnish.Node.to_json(changed) === Tarnish.JSON.decode!(result)
+      %{"schema" => schema, "start" => start, "steps" => steps} = @fixture
+      schema = Enum.at(schemas, schema)
+      {:ok, doc} = Tarnish.Node.from_json(schema, start)
 
-      {:ok, inverted} = Tarnish.Step.invert(doc, steps)
-      {:ok, undone} = Tarnish.Step.apply(changed, inverted)
-      assert Tarnish.Node.to_json(undone) === start
+      case @fixture do
+        %{"result" => result, "inverted" => inverted, "mapped" => mapped} ->
+          {:ok, changed} = Tarnish.Step.apply(doc, steps)
+          written = Tarnish.JSON.decode!(result)
+          assert written === Map.get(@fixture, "wellFormed", written)
+          assert Tarnish.Node.to_json(changed) === written
+          assert Tarnish.Step.invert(doc, steps) === {:ok, inverted}
+          assert_mapped(schema, steps, mapped)
+
+        %{"error" => _} ->
+          assert Tarnish.Step.apply(doc, steps) === expected(@fixture)
+      end
     end
   end
 
@@ -115,101 +195,118 @@ defmodule TarnishTest do
     end
 
     test "refuse types in a map, which loses their order", _ do
-      assert_raise ArgumentError, fn -> Tarnish.Schema.new(%{"nodes" => %{"doc" => %{}}}) end
-    end
-  end
+      for {spec, key} <- [
+            {%{"nodes" => %{"doc" => %{}, "text" => %{}}}, "nodes"},
+            {%{"nodes" => [{"doc", %{}}, {"text", %{}}], "marks" => %{"em" => %{}}}, "marks"}
+          ] do
+        error = assert_raise ArgumentError, fn -> Tarnish.Schema.new(spec) end
 
-  describe "errors" do
-    setup %{schemas: [schema | _]}, do: %{schema: schema}
-
-    test "a schema without its top node", _ do
-      assert Tarnish.Schema.new(%{"nodes" => [{"text", %{}}]}) ===
-               {:error, {:range_error, "Schema is missing its top node type ('doc')"}}
-    end
-
-    test "a content expression that doesn't parse", _ do
-      spec = %{"nodes" => [{"doc", %{"content" => "paragraph+"}}, {"text", %{}}]}
-
-      assert Tarnish.Schema.new(spec) ===
-               {:error,
-                {:syntax_error,
-                 "No node type or group 'paragraph' found (in content expression 'paragraph+')"}}
-    end
-
-    test "a document that doesn't fit the schema", %{schema: schema} do
-      doc = doc(schema, %{"type" => "doc", "content" => [%{"type" => "text", "text" => "loose"}]})
-
-      assert Tarnish.Node.check(doc) ===
-               {:error, {:range_error, "Invalid content for node doc: <\"loose\">"}}
-    end
-
-    test "a step that doesn't apply", %{schema: schema} do
-      doc = doc(schema, %{"type" => "doc", "content" => [%{"type" => "paragraph"}]})
-      step = %{"stepType" => "replace", "from" => 0, "to" => 1}
-
-      assert Tarnish.Step.apply(doc, [step]) ===
-               {:error, {:transform_error, "Inconsistent open depths"}}
-    end
-
-    test "a term that isn't JSON", %{schema: schema} do
-      assert_raise ArgumentError, fn -> Tarnish.Node.from_json(schema, {:not, :json}) end
-      text = %{"type" => "text", "text" => {:not, :json}}
-      json = %{"type" => "doc", "content" => [%{"type" => "paragraph", "content" => [text]}]}
-      assert_raise ArgumentError, fn -> Tarnish.Node.from_json(schema, json) end
-    end
-  end
-
-  describe "calls with more work than a normal scheduler takes" do
-    setup %{schemas: [schema | _]}, do: %{schema: schema}
-
-    defp paragraphs(count, text) do
-      paragraph = %{"type" => "paragraph", "content" => [%{"type" => "text", "text" => text}]}
-      %{"type" => "doc", "content" => List.duplicate(paragraph, count)}
-    end
-
-    test "go to a dirty scheduler, with the same answers", %{schema: schema} do
-      for json <- [paragraphs(10_000, "many"), paragraphs(1, String.duplicate("long ", 200_000))] do
-        assert @native.node_from_json(schema, json) === :dirty
-        doc = doc(schema, json)
-        assert Tarnish.Node.to_json(doc) === json
-        assert Tarnish.Node.check(doc) === :ok
+        assert error.message ===
+                 "#{key} must be a list of {name, spec} pairs, since a map doesn't keep their order"
       end
     end
+  end
 
-    test "write JSON on a dirty scheduler", %{schema: schema} do
-      # Two texts with the same marks are read as one, so every paragraph is written anew.
-      split = %{"type" => "paragraph", "content" => [text("ma"), text("ny")]}
-      doc = doc(schema, %{"type" => "doc", "content" => List.duplicate(split, 10_000)})
-      assert @native.to_json(doc.ref, doc.json) === :dirty
-      assert Tarnish.Node.to_json(doc) === paragraphs(10_000, "many")
+  test "a term that isn't JSON is refused", %{schemas: [schema | _]} do
+    assert_raise ArgumentError, fn -> Tarnish.Node.from_json(schema, {:not, :json}) end
+    text = %{"type" => "text", "text" => {:not, :json}}
+    json = %{"type" => "doc", "content" => [%{"type" => "paragraph", "content" => [text]}]}
+    assert_raise ArgumentError, fn -> Tarnish.Node.from_json(schema, json) end
+  end
+
+  defp text(text, marks \\ []) do
+    case marks do
+      [] -> %{"type" => "text", "text" => text}
+      marks -> %{"type" => "text", "text" => text, "marks" => marks}
+    end
+  end
+
+  defp paragraph(content), do: %{"type" => "paragraph", "content" => content}
+
+  defp paragraphs(count, text),
+    do: %{"type" => "doc", "content" => List.duplicate(paragraph([text(text)]), count)}
+
+  # Each call is made on a normal scheduler first, which answers `:dirty` past what it takes on,
+  # for the call to be made again on a dirty scheduler.
+  test "each call goes to a dirty scheduler past a normal one's limits, with the same answers",
+       %{schemas: [schema | _]} do
+    long = String.duplicate("long ", 200_000)
+    small = doc(schema, paragraphs(2, "few"))
+    many = doc(schema, paragraphs(200, "text"))
+    lengthy = doc(schema, paragraphs(1, long))
+    # Two texts with the same marks are read as one, so every paragraph is written anew.
+    split = paragraph([text("ma"), text("ny")])
+    split = doc(schema, %{"type" => "doc", "content" => List.duplicate(split, 10_000)})
+    loose = doc(schema, %{"type" => "doc", "content" => [text(long)]})
+
+    x = [text("x")]
+    insert = %{"stepType" => "replace", "from" => 2, "to" => 2, "slice" => %{"content" => x}}
+    inserts = List.duplicate(insert, 200)
+    %{"content" => [_ | rest]} = paragraphs(200, "text")
+    first = paragraph([text("t" <> String.duplicate("x", 200) <> "ext")])
+    inserted = %{"type" => "doc", "content" => [first | rest]}
+    deletes = List.duplicate(%{"stepType" => "replace", "from" => 2, "to" => 3}, 200)
+    ops = List.duplicate(%{"op" => "insert", "pos" => 2, "content" => x}, 200)
+
+    strong = %{"type" => "strong"}
+    whole = [%{"op" => "addMark", "from" => 0, "to" => 1200, "mark" => strong}]
+
+    marks =
+      for from <- 1..1195//6,
+          do: %{"stepType" => "addMark", "mark" => strong, "from" => from, "to" => from + 4}
+
+    marked = List.duplicate(paragraph([text("text", [strong])]), 200)
+    marked = %{"type" => "doc", "content" => marked}
+
+    transformed = fn ops ->
+      {:ok, %Tarnish.Transform{doc: changed, steps: steps}} = Tarnish.Transform.new(many, ops)
+      {Tarnish.Node.to_json(changed), steps}
     end
 
-    test "apply many steps on a dirty scheduler", %{schema: schema} do
-      doc = doc(schema, paragraphs(200, "text"))
-      slice = %{"content" => [%{"type" => "text", "text" => "x"}]}
+    applied = fn steps ->
+      {:ok, changed} = Tarnish.Step.apply(many, steps)
+      Tarnish.Node.to_json(changed)
+    end
 
-      steps =
-        List.duplicate(%{"stepType" => "replace", "from" => 2, "to" => 2, "slice" => slice}, 200)
-
-      assert @native.apply_steps(doc.ref, steps) === :dirty
-      {:ok, applied} = Tarnish.Step.apply(doc, steps)
-      %{"content" => [_ | rest]} = paragraphs(200, "text")
-      first = paragraph([text("t" <> String.duplicate("x", 200) <> "ext")])
-      assert Tarnish.Node.to_json(applied) === %{"type" => "doc", "content" => [first | rest]}
+    # The light call, a big input and a small one, and the public call and its answer for the
+    # big input.
+    for {name, light, big, little, public, expected} <- [
+          {"node_from_json of many nodes", &@native.node_from_json(schema, &1),
+           paragraphs(10_000, "many"), paragraphs(2, "few"),
+           &Tarnish.Node.to_json(doc(schema, &1)), paragraphs(10_000, "many")},
+          {"node_from_json of a long text", &@native.node_from_json(schema, &1),
+           paragraphs(1, long), paragraphs(2, "few"), &Tarnish.Node.to_json(doc(schema, &1)),
+           paragraphs(1, long)},
+          {"to_json", &@native.to_json(&1.ref, &1.json), split, small, &Tarnish.Node.to_json/1,
+           paragraphs(10_000, "many")},
+          {"check", &@native.check(&1.ref), loose, small, &Tarnish.Node.check/1,
+           {:error,
+            {:range_error,
+             "Invalid content for node doc: <\"long long long long long long long long long lon"}}},
+          {"apply_steps", &@native.apply_steps(many.ref, &1), inserts, [insert], applied,
+           inserted},
+          {"invert_steps", &@native.invert_steps(many.ref, &1), inserts, [insert],
+           &Tarnish.Step.invert(many, &1), {:ok, deletes}},
+          {"map_position", &@native.map_position(schema, &1, 5, 1),
+           List.duplicate(insert, 20_000), [insert], &Tarnish.Mapping.map(schema, &1, 5, 1),
+           {:ok, 20_005}},
+          {"transform of many ops", &@native.transform(many.ref, &1), ops, [hd(ops)], transformed,
+           {inserted, inserts}},
+          {"transform over a wide range", &@native.transform(many.ref, &1), whole,
+           [%{hd(whole) | "to" => 6}], transformed, {marked, marks}},
+          {"text_between", &@native.text_between(&1.ref, 0, 1_000_002, "\n", nil), lengthy, small,
+           &Tarnish.Node.text_between(&1, 0, 1_000_002, "\n"), {:ok, long}},
+          {"text_content", &@native.text_content(&1.ref), lengthy, small,
+           &Tarnish.Node.text_content/1, long}
+        ] do
+      assert light.(big) === :dirty, name
+      refute light.(little) === :dirty, name
+      assert public.(big) === expected, name
     end
   end
 
   describe "a document's JSON" do
     setup %{schemas: [schema | _]}, do: %{schema: schema}
-
-    defp text(text, marks \\ []) do
-      case marks do
-        [] -> %{"type" => "text", "text" => text}
-        marks -> %{"type" => "text", "text" => text, "marks" => marks}
-      end
-    end
-
-    defp paragraph(content), do: %{"type" => "paragraph", "content" => content}
 
     defp heading(level, text),
       do: %{"type" => "heading", "attrs" => %{"level" => level}, "content" => [text(text)]}
@@ -219,77 +316,40 @@ defmodule TarnishTest do
       assert :erts_debug.same(Tarnish.Node.to_json(doc(schema, json)), json)
     end
 
-    test "shares the maps of the nodes steps leave", %{schema: schema} do
+    test "shares the maps of the nodes steps and ops leave", %{schema: schema} do
       [first, second, third] =
         content = for text <- ~w(one two three), do: paragraph([text(text)])
 
       doc = doc(schema, %{"type" => "doc", "content" => content})
-      slice = %{"content" => [text("!")]}
-      step = %{"stepType" => "replace", "from" => 9, "to" => 9, "slice" => slice}
-      {:ok, changed} = Tarnish.Step.apply(doc, [step])
-      %{"type" => "doc", "content" => [one, two, three]} = json = Tarnish.Node.to_json(changed)
-      assert map_size(json) === 2
-      assert :erts_debug.same(one, first) and :erts_debug.same(three, third)
-      assert two === paragraph([text("two!")]) and not :erts_debug.same(two, second)
-    end
-
-    test "is what ProseMirror writes, whatever the map read", %{schema: schema} do
       em = %{"type" => "em"}
-      strong = %{"type" => "strong"}
 
-      for {read, written} <- [
-            {%{"type" => :paragraph}, %{"type" => "paragraph"}},
-            {%{type: "paragraph"}, %{"type" => "paragraph"}},
-            {%{"type" => "paragraph", "extra" => 1}, %{"type" => "paragraph"}},
-            {%{"type" => "paragraph", "attrs" => %{}}, %{"type" => "paragraph"}},
-            {%{"type" => "paragraph", "content" => []}, %{"type" => "paragraph"}},
-            {paragraph([%{"type" => "text", "text" => "a", "marks" => []}]),
-             paragraph([text("a")])},
-            {paragraph([text("a"), text("b")]), paragraph([text("ab")])},
-            {paragraph([text("a", [strong, em])]), paragraph([text("a", [em, strong])])},
-            {paragraph([text("a", [%{"type" => "em", "attrs" => nil}])]),
-             paragraph([text("a", [em])])},
-            {%{"type" => "heading", "content" => [text("a")]}, heading(1, "a")},
-            {heading(1.0, "a"), heading(1, "a")},
-            # Past a double, which JavaScript reads as Infinity and writes as null.
-            {heading(Integer.pow(2, 1024), "a"), heading(nil, "a")},
-            {heading(2, "a") |> put_in(["attrs", "extra"], 1), heading(2, "a")},
-            {Jason.OrderedObject.new([{"type", "paragraph"}]), %{"type" => "paragraph"}}
-          ] do
-        json = %{"type" => "doc", "content" => [paragraph([text("same")]), read]}
-        written = %{"type" => "doc", "content" => [paragraph([text("same")]), written]}
-        assert Tarnish.Node.to_json(doc(schema, json)) === written, inspect(read)
+      step = %{
+        "stepType" => "replace",
+        "from" => 9,
+        "to" => 9,
+        "slice" => %{"content" => [text("!")]}
+      }
+
+      op = %{"op" => "addMark", "from" => 6, "to" => 9, "mark" => em}
+
+      transformed = fn doc ->
+        with {:ok, transform} <- Tarnish.Transform.new(doc, [op]), do: {:ok, transform.doc}
       end
-    end
-  end
 
-  # Far deeper than a dirty scheduler's stack could recurse through.
-  describe "deeply nested documents" do
-    setup %{schemas: [schema | _]}, do: %{schema: schema}
+      for {change, two} <- [
+            {&Tarnish.Step.apply(&1, [step]), paragraph([text("two!")])},
+            {transformed, paragraph([text("two", [em])])}
+          ] do
+        {:ok, changed} = change.(doc)
 
-    @depth 100_000
+        %{"type" => "doc", "content" => [one, changed_two, three]} =
+          json = Tarnish.Node.to_json(changed)
 
-    test "nest as deeply as memory allows", %{schema: schema} do
-      quote =
-        Enum.reduce(1..@depth, %{"type" => "paragraph"}, fn _, inner ->
-          %{"type" => "blockquote", "content" => [inner]}
-        end)
-
-      json = %{"type" => "doc", "content" => [quote]}
-      doc = doc(schema, json)
-      assert Tarnish.Node.check(doc) === :ok
-      {:ok, same} = Tarnish.Step.apply(doc, [])
-      assert Tarnish.Node.to_json(same) === json
-    end
-
-    test "hold attributes that nest as deeply", _ do
-      doc_spec = %{content: "text*", attrs: %{data: %{default: nil}}}
-      {:ok, schema} = Tarnish.Schema.new(%{nodes: [doc: doc_spec, text: %{}]})
-      data = Enum.reduce(1..@depth, [], fn _, inner -> [inner] end)
-      json = %{"type" => "doc", "attrs" => %{"data" => data}}
-      doc = doc(schema, json)
-      assert Tarnish.Node.check(doc) === :ok
-      assert Tarnish.Node.to_json(doc) === json
+        assert map_size(json) === 2
+        assert :erts_debug.same(one, first) and :erts_debug.same(three, third)
+        assert changed_two === two
+        refute :erts_debug.same(changed_two, second)
+      end
     end
   end
 end

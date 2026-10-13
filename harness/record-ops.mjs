@@ -1,6 +1,7 @@
-// Records what the real ProseMirror packages make of transform ops, and of `textBetween` and
-// `textContent`, to fixtures/ops.json, for the Rust, Elixir and C tests of tarnish's
-// `transform`, `text_between` and `text_content` to expect.
+// Records what the real ProseMirror packages make of transform ops, with where every position
+// maps through the steps they make, and of `textBetween` and `textContent`, to fixtures/ops.json,
+// for the Rust, Elixir and C tests of tarnish's `transform`, `map_position`, `text_between` and
+// `text_content` to expect.
 //
 // An op is an object naming a `Transform` method in "op", with the method's arguments by name as
 // ProseMirror's JSON. `transform` below is what an op means, and crates/tarnish/src/api/ops.rs
@@ -9,8 +10,8 @@
 // leave it out for `liftTarget` or `findWrapping` to compute.
 import { readFileSync } from "node:fs"
 import { Fragment, Node, NodeRange, Schema, Slice } from "prosemirror-model"
-import { Step, Transform, findWrapping, liftTarget } from "prosemirror-transform"
-import { outcome, writeFixture } from "./fixture.mjs"
+import { Mapping, Step, Transform, findWrapping, liftTarget } from "prosemirror-transform"
+import { mapped, outcome, writeFixture } from "./fixture.mjs"
 
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value)
 const field = (json, key) => (isObject(json) && Object.hasOwn(json, key) ? json[key] : undefined)
@@ -249,8 +250,20 @@ function transform(doc, ops) {
 const recorded = JSON.parse(readFileSync(new URL("../fixtures/transform.json", import.meta.url), "utf8"))
 // The schemas prosemirror-transform's tests use: prosemirror-schema-basic with
 // prosemirror-schema-list, then one whose hard_break is the linebreak replacement, one with
-// definingForContent blockquotes, one whose doc takes comment marks, and one of text only.
-const schemas = recorded.schemas
+// definingForContent blockquotes, one whose doc takes comment marks, and one of text only. Then
+// one whose `inner` nodes nest in each other.
+const schemas = [
+  ...recorded.schemas,
+  {
+    nodes: {
+      doc: { content: "outer+" },
+      outer: { content: "inner" },
+      inner: { content: "inner | paragraph" },
+      paragraph: { content: "text*" },
+      text: {},
+    },
+  },
+]
 const built = schemas.map(spec => new Schema(spec))
 
 const text = (text, ...marks) => (marks.length ? { type: "text", marks, text } : { type: "text", text })
@@ -306,6 +319,8 @@ const docs = {
   comments: doc(node("p", "abc"), node("p", "def")),
   // In schema 4: text 0-10
   text: doc("plain text"),
+  // In schema 5: 0-7 outer, 1-6 inner, 2-5 paragraph "x"
+  shallow: doc(node("outer", node("inner", p("x")))),
 }
 
 const cases = []
@@ -698,6 +713,12 @@ add(
   [{ op: "replaceWith", from: 0, to: 10, content: [text("new")] }],
 )
 
+// "ep t" from inside three `inner` nodes, open at every level, at the top of a document that
+// takes only its outermost node, whose start each level down is closed.
+const inner = content => node("inner", content)
+const deep = Node.fromJSON(built[5], doc(node("outer", inner(inner(inner(p("deep text")))))))
+add(5, docs.shallow, [{ op: "replace", from: 0, to: 0, slice: deep.slice(7, 11, true).toJSON() }])
+
 add(
   0,
   plain,
@@ -716,54 +737,76 @@ const transforms = cases.map(({ schema, doc, ops }) => ({
   doc,
   ops,
   ...outcome(() => {
-    const tr = transform(Node.fromJSON(built[schema], doc), ops)
-    return { result: tr.doc.toJSON(), steps: tr.steps.map(step => step.toJSON()) }
+    const start = Node.fromJSON(built[schema], doc)
+    const tr = transform(start, ops)
+    const steps = tr.steps.map(step => step.toJSON())
+    // Mapped through the steps read back from their JSON, as `map_position` takes them, where
+    // they read back: a step may hold a node whose attributes `Node.fromJSON` refuses.
+    const read = outcome(() => ({ maps: steps.map(json => Step.fromJSON(built[schema], json).getMap()) }))
+    return {
+      result: tr.doc.toJSON(),
+      steps,
+      eq: tr.doc.eq(start),
+      ...(read.maps && { mapped: mapped(new Mapping(read.maps), start.content.size) }),
+    }
   }),
 }))
 
-const leaves = doc(p("a", br, "b"), hr, p(image("i.png")), blockquote(p("q"), hr))
+// Jason, among other JSON readers, refuses a lone surrogate, so text holding one is recorded as
+// the text JSON.stringify writes for it.
+const written = text => (text.isWellFormed() ? text : { resultJSON: JSON.stringify(text) })
+const between = (schema, doc, from, to, blockSeparator, leafText) =>
+  Node.fromJSON(built[schema], doc).textBetween(from, to, blockSeparator ?? undefined, leafText ?? undefined)
+const given = (blockSeparator, leafText) => ({
+  ...(blockSeparator != null && { blockSeparator }),
+  ...(leafText != null && { leafText }),
+})
+
+// Past the end, and an end before the start.
 const textBetween = [
-  [0, rich, 0, 86],
-  [0, rich, 0, 86, "\n"],
-  [0, rich, 0, 86, "\n", "[leaf]"],
-  [0, rich, 0, 86, "", "*"],
-  [0, rich, 0, 86, null, "*"],
-  [0, rich, 0, 86, "\n\n", ""],
-  [0, rich, 10, 40, " | "],
   [0, rich, 40, 10, "\n"],
-  [0, rich, 86, 86],
   [0, rich, 0, 87],
   [0, rich, 50, 200, "\n"],
-  [0, lists, 0, 35, "\n"],
-  [0, quotes, 2, 9, "/"],
-  [0, leaves, 0, 15, "\n", "→"],
-  [0, leaves, 0, 15, "\n"],
-  [0, leaves, 3, 11, " ", "□"],
-  [0, doc(p("a😀b"), p("é")), 1, 8, "¶"],
-  [0, doc(p("a😀b"), p("é")), 2, 4],
-  [0, doc(p("a😀b"), p("é")), 1, 3],
-  [0, doc(p("a😀b"), p("é")), 3, 8, "|"],
-  [0, p("in ", text("a", em), " paragraph"), 1, 4],
-  [0, text("hello"), 1, 3],
   [0, text("hello"), 0, 100],
-  [1, breaks, 0, 20, "\n", "⏎"],
-  [4, docs.text, 2, 7],
   [4, docs.text, 0, 11],
 ].map(([schema, doc, from, to, blockSeparator, leafText]) => ({
   schema,
   doc,
   from,
   to,
-  ...(blockSeparator != null && { blockSeparator }),
-  ...(leafText != null && { leafText }),
+  ...given(blockSeparator, leafText),
   ...outcome(() => {
-    const node = Node.fromJSON(built[schema], doc)
-    const result = node.textBetween(from, to, blockSeparator ?? undefined, leafText ?? undefined)
-    // Jason, among other JSON readers, refuses a lone surrogate, so text holding one is recorded
-    // as the text JSON.stringify writes for it.
-    return result.isWellFormed() ? { result } : { resultJSON: JSON.stringify(result) }
+    const result = written(between(schema, doc, from, to, blockSeparator, leafText))
+    return typeof result === "string" ? { result } : result
   }),
 }))
+
+// For each document, and block separator and leaf text, the text between every two positions in
+// it, `texts[from][to - from]`: a text node's positions are in its text.
+const leaves = doc(p("a", br, "b"), hr, p(image("i.png")), blockquote(p("q"), hr))
+const textsBetween = []
+for (const [schema, json] of [
+  [0, rich],
+  [0, lists],
+  [0, quotes],
+  [0, leaves],
+  [0, doc(p("a😀b"), p("é"))],
+  [0, p("in ", text("a", em), " paragraph")],
+  [0, text("a😀b")],
+  [1, breaks],
+  [4, docs.text],
+]) {
+  const node = Node.fromJSON(built[schema], json)
+  const size = node.isText ? node.nodeSize : node.content.size
+  for (const [blockSeparator, leafText] of [[], ["\n"], [null, "*"], [" | ", ""], ["\n", "[leaf]"]]) {
+    const texts = Array.from({ length: size + 1 }, (_, from) =>
+      Array.from({ length: size + 1 - from }, (_, length) =>
+        written(between(schema, json, from, from + length, blockSeparator, leafText)),
+      ),
+    )
+    textsBetween.push({ schema, doc: json, ...given(blockSeparator, leafText), texts })
+  }
+}
 
 const textContent = [
   [0, plain],
@@ -777,4 +820,4 @@ const textContent = [
   [4, docs.text],
 ].map(([schema, doc]) => ({ schema, doc, result: Node.fromJSON(built[schema], doc).textContent }))
 
-writeFixture("ops", { schemas, transforms, textBetween, textContent })
+writeFixture("ops", { schemas, transforms, textBetween, textsBetween, textContent })

@@ -11,6 +11,23 @@ export function outcome(run) {
   }
 }
 
+// Where every position of a document `size` long maps through `mapping`, with `assoc` -1 and 1:
+// the positions mapped to, in order, and the positions whose `MapResult` has each flag.
+export function mapped(mapping, size) {
+  return [-1, 1].map(assoc => {
+    const results = Array.from({ length: size + 1 }, (_, pos) => mapping.mapResult(pos, assoc))
+    const flagged = flag => results.flatMap((result, pos) => (result[flag] ? [pos] : []))
+    return {
+      assoc,
+      pos: results.map(result => result.pos),
+      deleted: flagged("deleted"),
+      deletedBefore: flagged("deletedBefore"),
+      deletedAfter: flagged("deletedAfter"),
+      deletedAcross: flagged("deletedAcross"),
+    }
+  })
+}
+
 // Writes fixtures/<name>.json: an object of `fields`, each on a line of its own, and each record
 // of a list on a line of its own, so that a diff shows which records changed.
 export function writeFixture(name, fields) {

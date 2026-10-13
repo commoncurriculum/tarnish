@@ -46,10 +46,22 @@ defmodule Tarnish.DeepTest do
     schema: schema
   } do
     doc = doc(schema, %{"type" => "doc", "content" => [quotes(@paragraph)]})
+    assert Tarnish.Node.check(doc) === :ok
     text = %{"type" => "text", "text" => "x"}
     {:ok, changed} = Tarnish.Step.apply(doc, [replace(@depth + 1, @depth + 1, [text])])
+    assert Tarnish.Node.check(changed) === :ok
     paragraph = %{"type" => "paragraph", "content" => [text]}
-    assert Tarnish.Node.to_json(changed) == %{"type" => "doc", "content" => [quotes(paragraph)]}
+    assert Tarnish.Node.to_json(changed) === %{"type" => "doc", "content" => [quotes(paragraph)]}
+  end
+
+  test "a document holds attributes that nest deep, read, checked and written whole", %{
+    schema: schema
+  } do
+    holding = %{"type" => "quote", "attrs" => %{"data" => value()}, "content" => [@paragraph]}
+    json = %{"type" => "doc", "content" => [holding]}
+    doc = doc(schema, json)
+    assert Tarnish.Node.check(doc) === :ok
+    assert Tarnish.Node.to_json(doc) === json
   end
 
   test "steps read deep, and the content they insert is written whole", %{schema: schema} do
@@ -58,7 +70,7 @@ defmodule Tarnish.DeepTest do
     inserted = [holding, quotes(@paragraph)]
     {:ok, changed} = Tarnish.Step.apply(doc, [replace(0, 0, inserted)])
 
-    assert Tarnish.Node.to_json(changed) == %{
+    assert Tarnish.Node.to_json(changed) === %{
              "type" => "doc",
              "content" => inserted ++ [@paragraph]
            }
@@ -68,7 +80,7 @@ defmodule Tarnish.DeepTest do
     deleted = quotes(@paragraph)
     doc = doc(schema, %{"type" => "doc", "content" => [deleted, @paragraph]})
     delete = %{"stepType" => "replace", "from" => 0, "to" => 2 * @depth + 2}
-    assert Tarnish.Step.invert(doc, [delete]) == {:ok, [replace(0, 0, [deleted])]}
+    assert Tarnish.Step.invert(doc, [delete]) === {:ok, [replace(0, 0, [deleted])]}
   end
 
   test "a batch of the NIF's reads deep requests on its threads" do
@@ -77,6 +89,6 @@ defmodule Tarnish.DeepTest do
     # The test NIF's serializeMarkdown writes the document's JSON.
     written = {:ok, Jason.encode!(value)}
     requests = [{"serializeMarkdown", value}, {"serializeMarkdown", value}]
-    assert Tarnish.Bridge.each(requests, backend: :nif) == [written, written]
+    assert Tarnish.Bridge.each(requests, backend: :nif) === [written, written]
   end
 end
