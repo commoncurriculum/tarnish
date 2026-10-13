@@ -429,11 +429,9 @@ fn fit_at_the_top(levels: usize) -> Node<'static> {
     tr.doc().clone()
 }
 
+/// fixtures/ops.json records what ProseMirror makes of three levels.
 #[test]
 fn deeply_open_slices_close_where_shallow_documents_take_them() {
-    // prosemirror-transform 1.12.0's answer.
-    let expected = r#"{"type":"doc","content":[{"type":"outer","content":[{"type":"inner","content":[{"type":"inner","content":[{"type":"inner","content":[{"type":"paragraph","content":[{"type":"text","text":"ep t"}]}]}]}]}]},{"type":"outer","content":[{"type":"inner","content":[{"type":"paragraph","content":[{"type":"text","text":"x"}]}]}]}]}"#;
-    assert_eq!(fit_at_the_top(3).to_json_string(), expected);
     on_dirty_scheduler_stack(|| {
         let fitted = fit_at_the_top(FITTED);
         fitted.check().expect("a valid document");

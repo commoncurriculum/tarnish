@@ -33,6 +33,7 @@ defmodule Tarnish.OpsTest do
   %{
     "transforms" => [_ | _] = transforms,
     "textBetween" => [_ | _] = text_between,
+    "textsBetween" => [_ | _] = texts_between,
     "textContent" => [_ | _] = text_content
   } = @fixtures |> File.read!() |> Jason.decode!()
 
@@ -50,6 +51,7 @@ defmodule Tarnish.OpsTest do
   # Text with a lone surrogate is recorded as its JSON, and comes back with U+FFFD for each lone
   # surrogate.
   defp expected(%{"resultJSON" => json}), do: {:ok, Tarnish.JSON.decode!(json)}
+  defp expected(text) when is_binary(text), do: {:ok, text}
 
   for {fixture, index} <- Enum.with_index(transforms) do
     @fixture fixture
@@ -62,6 +64,18 @@ defmodule Tarnish.OpsTest do
              do: {:ok, Tarnish.Node.to_json(changed), steps}
 
       assert transformed === expected(@fixture)
+
+      # Where each position maps through the steps, which are mapped where they read back from
+      # their JSON.
+      schema = Enum.at(schemas, @fixture["schema"])
+
+      for %{"assoc" => assoc, "pos" => [_ | _] = positions} <- Map.get(@fixture, "mapped", []) do
+        mapped =
+          for pos <- 0..(length(positions) - 1),
+              do: Tarnish.Mapping.map(schema, @fixture["steps"], pos, assoc)
+
+        assert mapped === Enum.map(positions, &{:ok, &1}), "assoc #{assoc}"
+      end
     end
   end
 
@@ -81,6 +95,24 @@ defmodule Tarnish.OpsTest do
         )
 
       assert text === expected(@fixture)
+    end
+  end
+
+  for {fixture, index} <- Enum.with_index(texts_between) do
+    @fixture fixture
+    test "textBetween every two positions #{index} is ProseMirror's", %{schemas: schemas} do
+      doc = doc(schemas, @fixture)
+      %{"texts" => [_ | _] = texts} = @fixture
+      separator = @fixture["blockSeparator"]
+      leaf = @fixture["leafText"]
+
+      for {from_here, from} <- Enum.with_index(texts) do
+        given =
+          for to <- from..(from + length(from_here) - 1),
+              do: Tarnish.Node.text_between(doc, from, to, separator, leaf)
+
+        assert given === Enum.map(from_here, &expected/1), "from #{from}"
+      end
     end
   end
 
@@ -173,12 +205,6 @@ defmodule Tarnish.OpsTest do
       assert Tarnish.Node.text_content(doc) === long
       assert @native.text_between(doc.ref, 0, 1_000_002, "\n", nil) === :dirty
       assert Tarnish.Node.text_between(doc, 0, 1_000_002, "\n") === {:ok, long}
-    end
-
-    test "has U+FFFD for each half of a surrogate pair a position splits", %{schema: schema} do
-      {:ok, doc} = Tarnish.Node.from_json(schema, paragraphs(1, "a😀b"))
-      assert Tarnish.Node.text_between(doc, 1, 3) === {:ok, "a�"}
-      assert Tarnish.Node.text_between(doc, 3, 5) === {:ok, "�b"}
     end
   end
 end

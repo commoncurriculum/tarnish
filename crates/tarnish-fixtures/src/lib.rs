@@ -7,6 +7,7 @@ pub mod recursion;
 use std::collections::BTreeMap;
 
 use tarnish::json::{self, Map, Value, json};
+use tarnish::transform::{MapResult, Mappable, Mapping, Step};
 use tarnish::{Error, Schema, api};
 
 /// `fixtures/<name>.json`.
@@ -47,6 +48,38 @@ pub fn outcome<T: Into<Value>>(result: Result<T, Error>) -> Value {
         Ok(fields) => fields.into(),
         Err(error) => json!({"error": {"class": error.class(), "message": error.message()}}),
     }
+}
+
+/// Where every position of a document `size` long maps through the steps, with `assoc` -1 and 1,
+/// as `harness/fixture.mjs`'s `mapped` records it.
+pub fn mapped(schema: &Schema, steps: &Value, size: usize) -> Value {
+    let mut mapping = Mapping::new();
+    for step in steps.as_array().expect("steps") {
+        let step = Step::from_json(schema, step).expect("a step");
+        mapping.append_map(step.get_map(), None);
+    }
+    let assocs = [-1, 1].map(|assoc| {
+        let results: Vec<MapResult> = (0..=size)
+            .map(|pos| mapping.map_result(pos, assoc))
+            .collect();
+        let flagged = |flag: fn(&MapResult) -> bool| -> Value {
+            let at = results
+                .iter()
+                .enumerate()
+                .filter(|(_, result)| flag(result));
+            Value::Array(at.map(|(pos, _)| pos.into()).collect())
+        };
+        let pos: Vec<Value> = results.iter().map(|result| result.pos.into()).collect();
+        json!({
+            "assoc": assoc,
+            "pos": pos,
+            "deleted": flagged(MapResult::deleted),
+            "deletedBefore": flagged(MapResult::deleted_before),
+            "deletedAfter": flagged(MapResult::deleted_after),
+            "deletedAcross": flagged(MapResult::deleted_across),
+        })
+    });
+    Value::Array(assocs.into())
 }
 
 /// Whether two values are the same as `JSON.stringify` writes them: the order of an object's keys

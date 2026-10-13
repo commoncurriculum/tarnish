@@ -1,16 +1,29 @@
 /*
- * Runs every transform prosemirror-transform's own tests make through the C library, from the
- * file harness/test-c.mjs writes: a count and that many schema specs, then a count and, for
- * each transform, its schema's index, the starting document, the steps, the document they
- * give, and the positions mapped through them as "from to" pairs. The JSON is what
- * JSON.stringify writes, so the library's output must equal it byte for byte.
+ * Runs the fixtures harness/test-c.mjs writes through the C library. The JSON is what
+ * JSON.stringify writes, so the library's output must equal it byte for byte. The file is
+ * sections of a count and that many records, and ends with "end":
  *
- * Then fixtures/ops.json: a count and that many schema specs; a count and, for each op list, its
- * schema's index, the starting document, the ops, and "ok" with the document and steps they
- * give or "error" with the error; a count and, for each textBetween, its schema's index, the
- * document, "from to", the block separator and leaf text, and "ok" with the text or "error"
- * with the error; and a count and, for each textContent, its schema's index, the document and
- * the text. Text is the hex of its UTF-8, "-" being text not given.
+ * - schema specs, of fixtures/transform.json then fixtures/model.json;
+ * - transforms, prosemirror-transform's own tests' then fixtures/model.json's: the schema's
+ *   index, the starting document and the steps, then "ok" with the document they give, the steps
+ *   undoing them, and the position each position maps to with assoc -1 and then 1, or "error"
+ *   with the error;
+ * - schema specs, each with "ok" or "error" and the error;
+ * - documents to check: the schema's index, the document, and "ok" or "error" with the error;
+ *
+ * then fixtures/ops.json:
+ *
+ * - schema specs;
+ * - op lists: the schema's index, the starting document and the ops, then "ok" with the document
+ *   and steps they give and the positions mapped through the steps, "-" where the steps aren't
+ *   mapped, or "error" with the error;
+ * - textBetween: the schema's index, the document, "from to", the block separator and leaf text,
+ *   and "ok" with the text or "error" with the error;
+ * - textBetween from every position to every one after it: the schema's index, the document, the
+ *   block separator and leaf text, the count of positions, and each text, `to` faster;
+ * - textContent: the schema's index, the document and the text.
+ *
+ * Text is the hex of its UTF-8, "-" being text not given.
  */
 #define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
@@ -22,24 +35,69 @@
 static FILE *fixtures;
 static int failures;
 
+static _Noreturn void malformed(const char *what) {
+    fprintf(stderr, "The fixtures are malformed: %s\n", what);
+    exit(2);
+}
+
 static char *read_line(void) {
     char *line = NULL;
     size_t capacity = 0;
     ssize_t length = getline(&line, &capacity, fixtures);
-    if (length < 0) {
-        fprintf(stderr, "The fixtures ended early\n");
-        exit(2);
-    }
+    if (length < 0)
+        malformed("they ended early");
     if (length > 0 && line[length - 1] == '\n')
         line[length - 1] = '\0';
     return line;
 }
 
-static size_t read_count(void) {
-    char *line = read_line();
-    size_t count = strtoul(line, NULL, 10);
+static size_t read_number(void) {
+    char *line = read_line(), *end;
+    size_t number = strtoul(line, &end, 10);
+    if (end == line || *end != '\0')
+        malformed("a number expected");
     free(line);
+    return number;
+}
+
+/* A section's count, of which there must be some: a loop over none passes. */
+static size_t read_count(const char *section) {
+    size_t count = read_number();
+    if (count == 0) {
+        fprintf(stderr, "No %s in the fixtures\n", section);
+        exit(2);
+    }
     return count;
+}
+
+/* The index of one of `count` schemas. */
+static size_t read_schema(size_t count) {
+    size_t index = read_number();
+    if (index >= count)
+        malformed("a schema's index past the schemas");
+    return index;
+}
+
+/* Whether the record that follows is "ok", or "error". */
+static bool read_ok(void) {
+    char *line = read_line();
+    bool ok = strcmp(line, "ok") == 0;
+    if (!ok && strcmp(line, "error") != 0)
+        malformed("\"ok\" or \"error\" expected");
+    free(line);
+    return ok;
+}
+
+static void read_end(void) {
+    char *line = read_line();
+    if (strcmp(line, "end") != 0)
+        malformed("\"end\" expected");
+    free(line);
+    char *more = NULL;
+    size_t capacity = 0;
+    if (getline(&more, &capacity, fixtures) >= 0)
+        malformed("more after \"end\"");
+    free(more);
 }
 
 static void fail(const char *test, const char *what, const char *expected, const char *actual) {
@@ -51,6 +109,17 @@ static void fail(const char *test, const char *what, const char *expected, const
 static void expect_error(const char *test, bool failed, char *error, const char *expected) {
     if (!failed || !error || strcmp(error, expected) != 0)
         fail(test, "the error", expected, failed ? error : "(no error)");
+    tarnish_free(error);
+}
+
+/* Checks that a call gave `expected` when `ok`, and otherwise failed with `expected` as its error.
+ * Frees what it gave and the error. */
+static void expect_outcome(const char *test, const char *what, bool ok, const char *expected, char *given,
+                           char *error) {
+    bool same = ok ? given && strcmp(given, expected) == 0 : !given && error && strcmp(error, expected) == 0;
+    if (!same)
+        fail(test, ok ? what : "the error", expected, given ? given : error);
+    tarnish_free(given);
     tarnish_free(error);
 }
 
@@ -73,87 +142,138 @@ static void expect_json(const char *test, const char *what, const char *expected
     tarnish_free(json);
 }
 
-static void run_transform(const char *test, const TarnishSchema_t *schema, const char *start, const char *steps,
-                          const char *result, char *mapping) {
-    TarnishNode_t *doc = read_node(test, schema, start);
-    if (!doc)
-        return;
-    char *error = NULL;
-    TarnishNode_t *changed = tarnish_apply_steps(doc, steps, &error);
-    char *inverted = changed ? tarnish_invert_steps(doc, steps, &error) : NULL;
-    if (!changed || !inverted) {
-        fail(test, changed ? "the inverted steps" : "the document", "no error", error);
-        tarnish_free(error);
-    } else {
-        expect_json(test, "the document", result, changed);
-        TarnishNode_t *undone = tarnish_apply_steps(changed, inverted, &error);
-        if (!undone) {
-            fail(test, "the document the inverted steps give", start, error);
-            tarnish_free(error);
-        } else {
-            expect_json(test, "the document the inverted steps give", start, undone);
+static TarnishSchema_t **read_schemas(const char *section, size_t *count) {
+    *count = read_count(section);
+    TarnishSchema_t **schemas = calloc(*count, sizeof *schemas);
+    for (size_t index = 0; index < *count; index++) {
+        char *spec = read_line(), *error = NULL;
+        if (!(schemas[index] = tarnish_schema_new(spec, &error))) {
+            fprintf(stderr, "%s %zu: %s\n", section, index, error);
+            exit(1);
         }
-        tarnish_node_free(undone);
+        free(spec);
     }
-    tarnish_free(inverted);
-    tarnish_node_free(changed);
-    tarnish_node_free(doc);
+    return schemas;
+}
 
-    for (char *cursor = mapping, *end; *cursor; cursor = end) {
-        size_t from = strtoul(cursor, &end, 10);
-        size_t to = strtoul(end, &end, 10);
+static void free_schemas(TarnishSchema_t **schemas, size_t count) {
+    for (size_t index = 0; index < count; index++)
+        tarnish_schema_free(schemas[index]);
+    free(schemas);
+}
+
+/* Checks that each position maps through the steps with `assoc` to the one `expected` has for it,
+ * in order: none when it's "-". */
+static void expect_mapped(const char *test, const TarnishSchema_t *schema, const char *steps, int assoc,
+                          const char *expected) {
+    if (strcmp(expected, "-") == 0)
+        return;
+    size_t pos = 0;
+    for (const char *cursor = expected; *cursor; pos++) {
+        char *end;
+        size_t to = strtoul(cursor, &end, 10);
+        if (end == cursor)
+            malformed("a position expected");
+        cursor = end;
         size_t mapped = 0;
-        error = NULL;
-        if (!tarnish_map_position(schema, steps, from, 1, &mapped, &error)) {
-            fail(test, "the mapped position", "a position", error);
+        char *error = NULL, what[80];
+        snprintf(what, sizeof what, "position %zu mapped with assoc %d", pos, assoc);
+        if (!tarnish_map_position(schema, steps, pos, assoc, &mapped, &error)) {
+            fail(test, what, "a position", error);
             tarnish_free(error);
         } else if (mapped != to) {
-            char expected[32], actual[32];
-            snprintf(expected, sizeof expected, "%zu", to);
+            char wanted[32], actual[32];
+            snprintf(wanted, sizeof wanted, "%zu", to);
             snprintf(actual, sizeof actual, "%zu", mapped);
-            fail(test, "the mapped position", expected, actual);
+            fail(test, what, wanted, actual);
         }
+    }
+    if (pos == 0)
+        malformed("no positions");
+}
+
+static void read_mapped(const char *test, const TarnishSchema_t *schema, const char *steps) {
+    for (int assoc = -1; assoc <= 1; assoc += 2) {
+        char *expected = read_line();
+        expect_mapped(test, schema, steps, assoc, expected);
+        free(expected);
     }
 }
 
+static void run_transform(const char *test, const TarnishSchema_t *schema) {
+    char *start = read_line(), *steps = read_line();
+    bool ok = read_ok();
+    char *expected = read_line(), *expected_inverted = ok ? read_line() : NULL;
+    TarnishNode_t *doc = read_node(test, schema, start);
+    if (doc) {
+        char *error = NULL;
+        TarnishNode_t *changed = tarnish_apply_steps(doc, steps, &error);
+        if (!ok) {
+            expect_error(test, changed == NULL, error, expected);
+        } else if (changed) {
+            expect_json(test, "the document", expected, changed);
+            error = NULL;
+            char *inverted = tarnish_invert_steps(doc, steps, &error);
+            expect_outcome(test, "the inverted steps", true, expected_inverted, inverted, error);
+        } else {
+            fail(test, "the document", expected, error);
+            tarnish_free(error);
+        }
+        tarnish_node_free(changed);
+        tarnish_node_free(doc);
+    }
+    if (ok)
+        read_mapped(test, schema, steps);
+    free(start);
+    free(steps);
+    free(expected);
+    free(expected_inverted);
+}
+
+static void run_schema(const char *test) {
+    char *spec = read_line();
+    bool ok = read_ok();
+    char *expected = ok ? NULL : read_line(), *error = NULL;
+    TarnishSchema_t *schema = tarnish_schema_new(spec, &error);
+    if (ok && !schema)
+        fail(test, "the schema", "a schema", error);
+    if (!ok)
+        expect_error(test, schema == NULL, error, expected);
+    else
+        tarnish_free(error);
+    tarnish_schema_free(schema);
+    free(spec);
+    free(expected);
+}
+
+static void run_check(const char *test, const TarnishSchema_t *schema) {
+    char *json = read_line();
+    bool ok = read_ok();
+    char *expected = ok ? NULL : read_line(), *error = NULL;
+    TarnishNode_t *node = tarnish_node_from_json(schema, json, &error);
+    bool valid = node && tarnish_check(node, &error);
+    if (ok && !valid)
+        fail(test, "the check", "no error", error);
+    if (!ok)
+        expect_error(test, !valid, error, expected);
+    else
+        tarnish_free(error);
+    tarnish_node_free(node);
+    free(json);
+    free(expected);
+}
+
+/* What only the library refuses: what isn't JSON, and NULL where it writes. */
 static void run_errors(const TarnishSchema_t *schema) {
     char *error = NULL;
-    TarnishSchema_t *missing = tarnish_schema_new("{\"nodes\":{\"text\":{}}}", &error);
-    expect_error("a schema without its top node", missing == NULL, error,
-                 "RangeError: Schema is missing its top node type ('doc')");
-
-    error = NULL;
-    TarnishSchema_t *unparsed =
-        tarnish_schema_new("{\"nodes\":{\"doc\":{\"content\":\"paragraph+\"},\"text\":{}}}", &error);
-    expect_error("a content expression that doesn't parse", unparsed == NULL, error,
-                 "SyntaxError: No node type or group 'paragraph' found (in content expression 'paragraph+')");
-
-    error = NULL;
-    TarnishSchema_t *nul = tarnish_schema_new("{\"nodes\":{\"doc\":{\"content\":\"para\\u0000graph+\"},\"text\":{}}}", &error);
-    expect_error("an error whose message holds a NUL", nul == NULL, error,
-                 "SyntaxError: No node type or group 'para' found (in content expression 'para\\u0000graph+')");
-
-    error = NULL;
-    TarnishNode_t *loose =
-        tarnish_node_from_json(schema, "{\"type\":\"doc\",\"content\":[{\"type\":\"text\",\"text\":\"loose\"}]}", &error);
-    bool valid = loose && tarnish_check(loose, &error);
-    expect_error("a document that doesn't fit the schema", !valid, error,
-                 "RangeError: Invalid content for node doc: <\"loose\">");
-    tarnish_node_free(loose);
-
-    error = NULL;
-    TarnishNode_t *doc = tarnish_node_from_json(schema, "{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\"}]}", &error);
-    TarnishNode_t *applied = tarnish_apply_steps(doc, "[{\"stepType\":\"replace\",\"from\":0,\"to\":1}]", &error);
-    expect_error("a step that doesn't apply", applied == NULL, error, "TransformError: Inconsistent open depths");
-
-    error = NULL;
     TarnishNode_t *unread = tarnish_node_from_json(schema, "{\"type\":", &error);
     expect_error("text that isn't JSON", unread == NULL, error, "SyntaxError: Invalid JSON");
 
     error = NULL;
-    valid = tarnish_map_position(schema, "[]", 0, 1, NULL, &error);
+    bool valid = tarnish_map_position(schema, "[]", 0, 1, NULL, &error);
     expect_error("nowhere to map into", !valid, error, "Error: The place to map into was NULL");
 
+    TarnishNode_t *doc = read_node("an error", schema, "{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\"}]}");
     if (tarnish_apply_steps(doc, "null", NULL) != NULL)
         fail("an error with nowhere to report it", "the result", "(NULL)", "a document");
     tarnish_node_free(doc);
@@ -201,20 +321,9 @@ static char *read_text(void) {
     return line;
 }
 
-/* Checks that a call gave `expected` when `ok`, and otherwise failed with `expected` as its error.
- * Frees what it gave and the error. */
-static void expect_outcome(const char *test, const char *what, bool ok, const char *expected, char *given,
-                           char *error) {
-    bool same = ok ? given && strcmp(given, expected) == 0 : !given && error && strcmp(error, expected) == 0;
-    if (!same)
-        fail(test, ok ? what : "the error", expected, given ? given : error);
-    tarnish_free(given);
-    tarnish_free(error);
-}
-
 static void run_op_list(const char *test, const TarnishSchema_t *schema) {
-    char *start = read_line(), *ops = read_line(), *outcome = read_line();
-    bool ok = strcmp(outcome, "ok") == 0;
+    char *start = read_line(), *ops = read_line();
+    bool ok = read_ok();
     char *expected = read_line(), *expected_steps = ok ? read_line() : NULL;
     TarnishNode_t *doc = read_node(test, schema, start);
     if (doc) {
@@ -226,17 +335,17 @@ static void run_op_list(const char *test, const TarnishSchema_t *schema) {
         tarnish_node_free(changed);
         tarnish_node_free(doc);
     }
+    if (ok)
+        read_mapped(test, schema, expected_steps);
     free(start);
     free(ops);
-    free(outcome);
     free(expected);
     free(expected_steps);
 }
 
 static void run_text_between(const char *test, const TarnishSchema_t *schema) {
     char *start = read_line(), *range = read_line(), *separator = read_text(), *leaf = read_text();
-    char *outcome = read_line();
-    bool ok = strcmp(outcome, "ok") == 0;
+    bool ok = read_ok();
     char *expected = ok ? read_text() : read_line();
     char *end;
     size_t from = strtoul(range, &end, 10), to = strtoul(end, NULL, 10);
@@ -251,8 +360,27 @@ static void run_text_between(const char *test, const TarnishSchema_t *schema) {
     free(range);
     free(separator);
     free(leaf);
-    free(outcome);
     free(expected);
+}
+
+static void run_texts_between(const char *test, const TarnishSchema_t *schema) {
+    char *start = read_line(), *separator = read_text(), *leaf = read_text();
+    size_t positions = read_count("positions");
+    TarnishNode_t *doc = read_node(test, schema, start);
+    for (size_t from = 0; from < positions; from++) {
+        for (size_t to = from; to < positions; to++) {
+            char *expected = read_text(), *error = NULL, what[80];
+            snprintf(what, sizeof what, "the text from %zu to %zu", from, to);
+            if (doc)
+                expect_outcome(test, what, true, expected,
+                               tarnish_text_between(doc, from, to, separator, leaf, &error), error);
+            free(expected);
+        }
+    }
+    tarnish_node_free(doc);
+    free(start);
+    free(separator);
+    free(leaf);
 }
 
 static void run_text_content(const char *test, const TarnishSchema_t *schema) {
@@ -291,39 +419,17 @@ static void run_op_errors(const TarnishSchema_t *schema) {
     tarnish_node_free(doc);
 }
 
-/* Runs the records of fixtures/ops.json, and gives how many there were. */
-static size_t run_ops(void) {
-    size_t schema_count = read_count();
-    TarnishSchema_t **schemas = calloc(schema_count, sizeof *schemas);
-    for (size_t index = 0; index < schema_count; index++) {
-        char *spec = read_line(), *error = NULL;
-        if (!(schemas[index] = tarnish_schema_new(spec, &error))) {
-            fprintf(stderr, "Ops schema %zu: %s\n", index, error);
-            exit(1);
-        }
-        free(spec);
+/* Runs a section of records that each start with a schema's index, and gives how many it ran. */
+static size_t run_section(const char *section, TarnishSchema_t **schemas, size_t schema_count,
+                          void (*run)(const char *, const TarnishSchema_t *)) {
+    size_t count = read_count(section);
+    for (size_t index = 0; index < count; index++) {
+        size_t schema = read_schema(schema_count);
+        char test[64];
+        snprintf(test, sizeof test, "%s %zu", section, index);
+        run(test, schemas[schema]);
     }
-
-    void (*const runs[])(const char *, const TarnishSchema_t *) = {run_op_list, run_text_between,
-                                                                   run_text_content};
-    const char *const names[] = {"op list", "textBetween", "textContent"};
-    size_t records = 0;
-    for (size_t kind = 0; kind < 3; kind++) {
-        size_t count = read_count();
-        for (size_t index = 0; index < count; index++) {
-            size_t schema = read_count();
-            char test[48];
-            snprintf(test, sizeof test, "%s %zu", names[kind], index);
-            runs[kind](test, schemas[schema]);
-        }
-        records += count;
-    }
-
-    run_op_errors(schemas[0]);
-    for (size_t index = 0; index < schema_count; index++)
-        tarnish_schema_free(schemas[index]);
-    free(schemas);
-    return records;
+    return count;
 }
 
 int main(int argc, char **argv) {
@@ -332,44 +438,38 @@ int main(int argc, char **argv) {
         return 2;
     }
 
-    size_t schema_count = read_count();
-    TarnishSchema_t **schemas = calloc(schema_count, sizeof *schemas);
-    for (size_t index = 0; index < schema_count; index++) {
-        char *spec = read_line(), *error = NULL;
-        if (!(schemas[index] = tarnish_schema_new(spec, &error))) {
-            fprintf(stderr, "Schema %zu: %s\n", index, error);
-            return 1;
-        }
-        free(spec);
-    }
-
-    size_t test_count = read_count();
-    for (size_t index = 0; index < test_count; index++) {
-        size_t schema = read_count();
-        char *start = read_line(), *steps = read_line(), *result = read_line(), *mapping = read_line();
+    size_t schema_count;
+    TarnishSchema_t **schemas = read_schemas("schemas", &schema_count);
+    size_t records = run_section("transforms", schemas, schema_count, run_transform);
+    size_t specs = read_count("specs");
+    for (size_t index = 0; index < specs; index++) {
         char test[32];
-        snprintf(test, sizeof test, "transform %zu", index);
-        run_transform(test, schemas[schema], start, steps, result, mapping);
-        free(start);
-        free(steps);
-        free(result);
-        free(mapping);
+        snprintf(test, sizeof test, "spec %zu", index);
+        run_schema(test);
     }
-    size_t op_records = run_ops();
+    records += specs;
+    records += run_section("checks", schemas, schema_count, run_check);
+
+    size_t ops_schema_count;
+    TarnishSchema_t **ops_schemas = read_schemas("ops schemas", &ops_schema_count);
+    records += run_section("op lists", ops_schemas, ops_schema_count, run_op_list);
+    records += run_section("textBetween", ops_schemas, ops_schema_count, run_text_between);
+    records += run_section("textBetween ranges", ops_schemas, ops_schema_count, run_texts_between);
+    records += run_section("textContent", ops_schemas, ops_schema_count, run_text_content);
+    read_end();
 
     run_errors(schemas[0]);
+    run_op_errors(ops_schemas[0]);
     run_deep();
 
-    for (size_t index = 0; index < schema_count; index++)
-        tarnish_schema_free(schemas[index]);
-    free(schemas);
+    free_schemas(schemas, schema_count);
+    free_schemas(ops_schemas, ops_schema_count);
     fclose(fixtures);
 
     if (failures) {
         fprintf(stderr, "%d failed\n", failures);
         return 1;
     }
-    printf("%zu transforms, %zu op lists and texts, the errors and a deep document: all passed\n", test_count,
-           op_records);
+    printf("%zu records, the library's own errors and a deep document: all passed\n", records);
     return 0;
 }
