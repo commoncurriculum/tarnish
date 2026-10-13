@@ -129,9 +129,11 @@ jobs:
       # Rust links a program statically on musl, which a library can't be.
       RUSTFLAGS: -C target-feature=-crt-static
     steps:
-      # stylo's build script, which the tests' NIF builds, runs Python.
-      - run: apk add --no-cache bash build-base curl git python3
+      # stylo's build script, which the tests' NIF builds, runs Python. The tests hold the NIF's
+      # conversions to the Node workers'.
+      - run: apk add --no-cache bash build-base curl git nodejs npm python3
       - uses: actions/checkout@v4
+      - run: npm ci
       - name: Install Rust
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
@@ -139,7 +141,7 @@ jobs:
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: Load the NIF and run the Elixir tests
         working-directory: elixir
-        run: mix local.hex --force && mix local.rebar --force && mix deps.get && mix test --exclude bridge
+        run: mix local.hex --force && mix local.rebar --force && mix deps.get && mix test
       - name: Load the C library with dlopen
         run: |
           cargo build --release -p tarnish-c
