@@ -4,7 +4,9 @@
 
 pub mod recursion;
 
-use tarnish::json::{self, Value, json};
+use std::collections::BTreeMap;
+
+use tarnish::json::{self, Map, Value, json};
 use tarnish::{Error, Schema, api};
 
 /// `fixtures/<name>.json`.
@@ -47,16 +49,33 @@ pub fn outcome<T: Into<Value>>(result: Result<T, Error>) -> Value {
     }
 }
 
+/// Whether two values are the same as `JSON.stringify` writes them: the order of an object's keys
+/// counts, as it does in what JavaScript writes, where `Value`'s `==` takes any order.
+pub fn same(expected: &Value, actual: &Value) -> bool {
+    json::stringify(expected) == json::stringify(actual)
+}
+
+/// Asserts that `actual` is `expected`, as [`same`] compares them.
+#[track_caller]
+pub fn assert_same(expected: &Value, actual: &Value) {
+    let (expected, actual) = (json::stringify(expected), json::stringify(actual));
+    assert!(expected == actual, "{actual} where {expected} was expected");
+}
+
 /// Asserts that `record`, without the fields `inputs` names, is `outcome`: each field the run
-/// gave as the record has it, and no field the record has that the run didn't give.
+/// gave the same, as [`same`] compares them, as the record has it, and no field the record has
+/// that the run didn't give. The order of the fields themselves, which a test assembles, doesn't
+/// count.
 #[track_caller]
 pub fn expect(record: &Value, inputs: &[&str], outcome: Value) {
-    let mut recorded = record.as_object().expect("a record's fields").clone();
-    for input in inputs {
-        recorded.remove(input);
-    }
-    assert!(
-        Value::Object(recorded) == outcome,
-        "{outcome} where {record} was recorded"
-    );
+    let written = |fields: &Map, skipped: &[&str]| -> BTreeMap<String, String> {
+        let kept = fields
+            .iter()
+            .filter(|(key, _)| !skipped.contains(&key.as_str()));
+        kept.map(|(key, value)| (key.to_string(), json::stringify(value)))
+            .collect()
+    };
+    let recorded = written(record.as_object().expect("a record's fields"), inputs);
+    let ran = written(outcome.as_object().expect("a run's fields"), &[]);
+    assert!(recorded == ran, "{ran:?} where {recorded:?} was recorded");
 }
