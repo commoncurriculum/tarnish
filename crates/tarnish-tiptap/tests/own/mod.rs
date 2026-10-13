@@ -97,15 +97,6 @@ fn code() -> Vec<Extension> {
     ]
 }
 
-pub fn schema() -> TiptapSchema {
-    get_schema(&extensions()).expect("the schema")
-}
-
-/// `new MarkdownManager({ extensions, marked })`, with a marked that uses marked-more-lists.
-pub fn markdown() -> MarkdownManager {
-    MarkdownManager::new(&extensions(), Marked::new(more_lists()))
-}
-
 /// The schema and the Markdown manager, `new MarkdownManager({ extensions, marked })` with a
 /// marked that uses marked-more-lists, of the extensions a record names.
 pub struct Converter {
