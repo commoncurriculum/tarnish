@@ -7,7 +7,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
 use tarnish::dom::{
-    DomParser, DomSerializer, DomSpec, MarkToDom, NodeToDom, ParseOptions, ParseRule, Rule, TagRule,
+    DomParser, DomSerializer, DomSpec, GetAttrsResult, MarkToDom, NodeToDom, ParseOptions,
+    ParseRule, Rule, TagRule,
 };
 use tarnish::{Error, Node, Schema, Value, api, json};
 use tarnish_html::{HtmlNode, parse_html, to_html};
@@ -16,6 +17,11 @@ use tarnish_nif::convert::{Conversions, Document};
 /// `NO_MARKDOWN`, with U+FFFD for its lone surrogate, as the pool reads it.
 const NO_MARKDOWN: &str = "No Markdown: \u{FFFD}\\😀\\ud800";
 
+/// `parsed`.
+fn parsed(text: &str, message: &str) -> Result<Value, Error> {
+    json::from_str(text).map_err(|_| Error::Other(message.into()))
+}
+
 struct Html {
     schema: Schema,
     parser: DomParser<HtmlNode>,
@@ -23,7 +29,8 @@ struct Html {
 }
 
 static HTML: LazyLock<Html> = LazyLock::new(|| {
-    let spec = r#"{"nodes": {"doc": {"content": "paragraph+"}, "paragraph": {"content": "text*"},
+    let spec = r#"{"nodes": {"doc": {"content": "paragraph+"},
+                             "paragraph": {"content": "text*", "attrs": {"data": {"default": null}}},
                              "text": {}},
                    "marks": {"em": {}, "strong": {}}}"#;
     let schema = api::schema(&json::from_str(spec).expect("JSON")).expect("a schema");
@@ -31,10 +38,26 @@ static HTML: LazyLock<Html> = LazyLock::new(|| {
         let tag = |selector: &&str| ParseRule::Tag(Rule::new(TagRule::new(*selector)));
         selectors.iter().map(tag).collect()
     };
+    let mut paragraph = TagRule::new("p");
+    paragraph.get_attrs = Some(Arc::new(|element: &HtmlNode| {
+        let data = element.attribute("data-json");
+        let data = parsed(data.as_deref().unwrap_or("null"), "data-json holds no JSON")?;
+        Ok(GetAttrsResult::Attrs(json::object!({"data": data})))
+    }));
     let marks = vec![tags(&["i", "em"]), tags(&["b", "strong"])];
-    let nodes = vec![vec![], tags(&["p"]), vec![]];
+    let nodes = vec![vec![], vec![ParseRule::Tag(Rule::new(paragraph))], vec![]];
     let parser = DomParser::from_schema(schema.clone(), marks, nodes).expect("a parser");
-    let paragraph: NodeToDom<HtmlNode> = Arc::new(|_| Ok(json::json!(["p", 0]).into()));
+    let paragraph: NodeToDom<HtmlNode> = Arc::new(|node| {
+        let spec = match node.attrs().get("data") {
+            Some(data) if !data.is_null() => {
+                let mut written = String::new();
+                data.write_json(&mut written);
+                json::json!(["p", {"data-json": written}, 0])
+            }
+            _ => json::json!(["p", 0]),
+        };
+        Ok(spec.into())
+    });
     let mark = |tag: &'static str| -> MarkToDom<HtmlNode> {
         Arc::new(move |_, _| Ok(DomSpec::from(json::json!([tag, 0]))))
     };
@@ -65,8 +88,8 @@ impl Conversions for Html {
         &self.schema
     }
 
-    fn parse_markdown(&self, _: &str, _: Option<&Value>) -> Result<Value, Error> {
-        Err(Error::Other(NO_MARKDOWN.into()))
+    fn parse_markdown(&self, markdown: &str, _: Option<&Value>) -> Result<Value, Error> {
+        parsed(markdown, NO_MARKDOWN)
     }
 
     fn serialize_markdown(&self, document: &Value, _: Option<&Value>) -> Result<String, Error> {

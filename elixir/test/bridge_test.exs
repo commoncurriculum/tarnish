@@ -14,6 +14,96 @@ defmodule Tarnish.BridgeTest do
     "text" => "x"
   }
 
+  # Terms of each kind Jason encodes: integers at each width the external format writes one in,
+  # and past a double's range; floats JavaScript writes as integers or with an exponent; atoms,
+  # some past Latin-1, which the VM gives out only in the external format; charlists, which it
+  # writes as bytes where it can; maps whose keys JSON.parse orders otherwise than Jason writes
+  # them, or reads as one key; maps past a flatmap's 32 keys; structs; and documents of such
+  # terms.
+  @terms [
+    0,
+    255,
+    256,
+    -1,
+    Integer.pow(2, 31) - 1,
+    Integer.pow(2, 31),
+    -Integer.pow(2, 31),
+    -Integer.pow(2, 31) - 1,
+    Integer.pow(2, 53) - 1,
+    Integer.pow(2, 53) + 1,
+    -Integer.pow(2, 63),
+    Integer.pow(2, 63),
+    Integer.pow(2, 64) - 1,
+    Integer.pow(2, 64) + 1,
+    Integer.pow(2, 200) + 1,
+    Integer.pow(2, 1024),
+    -Integer.pow(2, 1024),
+    0.5,
+    -0.0,
+    1.0,
+    1.0e20,
+    1.0e21,
+    5.0e-324,
+    1.7976931348623157e308,
+    nil,
+    true,
+    false,
+    :foo,
+    :Fïrst,
+    :"✓",
+    "",
+    "Fïrst ✓",
+    "\"\\\n\x01\u{2028}",
+    ~c"abc",
+    [1, 2, 255],
+    ~c"✓",
+    [],
+    [nil, [true, [[]]]],
+    %{},
+    %{:a => 1, "a" => 2, 7 => 3},
+    %{"10" => 1, "2" => 2, "01" => 3, "b" => 4},
+    %{-1 => 1, 4_294_967_294 => 2, 4_294_967_295 => 3},
+    %{:"✓" => 1, :a => 2},
+    %{Integer.pow(2, 64) => 1, nil => 2, true => 3},
+    %{1.5 => 1},
+    Map.new(1..40, &{"k#{&1}", &1}),
+    Map.put(Map.new(1..40, &{:"k#{&1}", &1}), "k7", 0),
+    Jason.OrderedObject.new([{"b", 1}, {"10", 2}, {"a", 3}, {"2", 4}, {"01", 5}]),
+    Jason.OrderedObject.new([{:b, 1}, {"b", 2}, {7, 3}]),
+    Jason.OrderedObject.new([]),
+    ~D[2024-01-02],
+    %{"d" => ~D[2024-01-02], "t" => [~D[2024-01-03]]},
+    %{
+      type: :doc,
+      content: [
+        Jason.OrderedObject.new([
+          {"type", "paragraph"},
+          {"content", [%{type: :text, text: :"Fïrst ✓"}]}
+        ])
+      ]
+    },
+    %{
+      "type" => "doc",
+      "content" => [
+        %{
+          "type" => "paragraph",
+          "content" => [
+            %{:text => "Old", "text" => "First", "type" => "text"},
+            %{:a => 1, :"✓" => 2, "text" => "Second", "type" => "text"}
+          ]
+        }
+      ]
+    }
+  ]
+
+  # JSON texts: each term's as Jason writes it, numbers written otherwise, past a double's range
+  # among them, a lone surrogate's escape, and a key written twice.
+  @texts Enum.map(@terms, &Jason.encode!/1) ++
+           ["1e400", "-1e400", "-0", "1E2", "0.1", ~S("\ud800"), ~S({"a":1,"a":[2]})]
+
+  # Terms Jason can't encode, to which a test adds a pid, which an attribute can't hold.
+  @refused [{"First"}, [1 | 2], <<0xFF>>, MapSet.new([1])]
+
   setup %{backend: backend} do
     start_supervised!({Tarnish.Bridge, backend: backend})
     %{opts: [backend: backend]}
@@ -88,44 +178,6 @@ defmodule Tarnish.BridgeTest do
                  {:error, "No Markdown: �\\😀\\ud800"}
       end
 
-      test "reads a request as Jason encodes it", %{opts: opts} do
-        # An atom past Latin-1, whose name the VM gives out only in the external format.
-        text = %{type: :text, text: :"Fïrst ✓"}
-        paragraph = Jason.OrderedObject.new([{"type", "paragraph"}, {"content", [text]}])
-        as_terms = %{type: :doc, content: [paragraph]}
-
-        for {operation, expected} <- serialized("<p>Fïrst ✓</p>", as_terms) do
-          request = {operation, as_terms}
-          assert Tarnish.Bridge.each([request], opts) === [expected]
-          assert Tarnish.Bridge.each([request, request], opts) === [expected, expected]
-        end
-      end
-
-      test "reads a map's keys as Jason writes them", %{opts: opts} do
-        # A key written twice keeps its first place and its last value.
-        twice = %{:text => "Old", "text" => "First", "type" => "text"}
-        # An atom key past Latin-1, after a key already read, has the map read again whole.
-        past_latin1 = %{:a => 1, :"✓" => 2, "text" => "First", "type" => "text"}
-
-        for {node, as_read} <- [{twice, text("First")}, {past_latin1, past_latin1}],
-            {operation, expected} <- serialized("<p>First</p>", holding(as_read)) do
-          request = {operation, holding(node)}
-          assert Tarnish.Bridge.each([request], opts) === [expected]
-          assert Tarnish.Bridge.each([request, request], opts) === [expected, expected]
-        end
-      end
-
-      test "reads a struct as its Jason.Encoder writes it", %{opts: opts} do
-        as_struct = holding(text(~D[2024-01-02]))
-        as_written = document(["2024-01-02"])
-
-        for {operation, expected} <- serialized("<p>2024-01-02</p>", as_written) do
-          assert Tarnish.Bridge.each([{operation, as_struct}], opts) === [expected]
-          requests = [{operation, as_struct}, {operation, as_written}]
-          assert Tarnish.Bridge.each(requests, opts) === [expected, expected]
-        end
-      end
-
       test "converts a document of any size alone as in a batch", %{opts: opts} do
         for paragraphs <- [1, 5_000] do
           sized = document(List.duplicate("x", paragraphs))
@@ -145,6 +197,35 @@ defmodule Tarnish.BridgeTest do
     end
   end
 
+  # The tests' conversions show how each backend read a term in the JSON serializeMarkdown and a
+  # paragraph's data-json write of it, and how it wrote a value in the term parseMarkdown and
+  # data-json make of JSON.
+  describe "the NIF and the Node workers" do
+    @describetag backend: :node
+
+    test "read each term as Jason encodes it, alone and in a batch" do
+      requests =
+        for term <- @terms,
+            input <- [%{"v" => term}, holding(text(term)), holding_data(term), term],
+            operation <- ["serializeMarkdown", "serializeHTML"],
+            do: {operation, input}
+
+      for request <- requests, do: assert_same_answers([request])
+      assert_same_answers(requests)
+    end
+
+    test "make each value the term Jason decodes from the JSON JavaScript writes, alone and in a batch" do
+      requests =
+        for text <- @texts,
+            html = ~s(<p data-json="#{escape(text)}">x</p>),
+            request <- [{"parseMarkdown", text}, {"parseHTML", html}],
+            do: request
+
+      for request <- requests, do: assert_same_answers([request])
+      assert_same_answers(requests)
+    end
+  end
+
   describe "the NIF" do
     @describetag backend: :nif
 
@@ -156,14 +237,20 @@ defmodule Tarnish.BridgeTest do
       assert Tarnish.TestNative.convert_light({"parseHTML", @long_to_parse}) === :dirty
     end
 
-    test "gives :not_json for a term Jason encodes through its Jason.Encoder, and raises for one it can't",
-         %{opts: opts} do
+    test "gives :not_json for a term Jason encodes through its Jason.Encoder" do
       request = {"serializeHTML", holding(text(~D[2024-01-02]))}
       assert Tarnish.TestNative.convert_light(request) === :not_json
       assert Tarnish.TestNative.convert([request, request]) === [:not_json, :not_json]
+    end
 
-      assert_raise Protocol.UndefinedError, fn ->
-        Tarnish.Bridge.serialize_html(holding({"First"}), %{}, opts)
+    test "raises for a term Jason can't encode as Jason.encode! raises for it", %{opts: opts} do
+      for term <- [self() | @refused],
+          input <- [%{"v" => term}, holding(text(term)), holding_data(term)],
+          operation <- ["serializeMarkdown", "serializeHTML"] do
+        raised = catch_error(Jason.encode!(input))
+        request = {operation, input}
+        assert catch_error(Tarnish.Bridge.each([request], opts)) === raised
+        assert catch_error(Tarnish.Bridge.each([{"parseHTML", "x"}, request], opts)) === raised
       end
     end
 
@@ -230,17 +317,32 @@ defmodule Tarnish.BridgeTest do
     end
   end
 
-  # The answer of each serialization of a document read as `doc_json`: its HTML, and the
-  # "Markdown" of the tests' conversions, which is the JSON `JSON.stringify` writes for it.
-  defp serialized(html, doc_json),
-    do: [{"serializeHTML", {:ok, html}}, {"serializeMarkdown", {:ok, Jason.encode!(doc_json)}}]
+  defp assert_same_answers(requests) do
+    nif = Tarnish.Bridge.each(requests, backend: :nif)
+    node = Tarnish.Bridge.each(requests, backend: :node)
+    assert Enum.zip(requests, nif) === Enum.zip(requests, node)
+  end
+
+  defp escape(text) do
+    String.replace(text, ["&", "\""], fn
+      "&" -> "&amp;"
+      "\"" -> "&quot;"
+    end)
+  end
 
   defp document(texts),
     do: %{"type" => "doc", "content" => Enum.map(texts, &paragraph([text(&1)]))}
 
   defp holding(node), do: %{"type" => "doc", "content" => [paragraph([node])]}
 
-  defp paragraph(content), do: %{"type" => "paragraph", "content" => content}
+  # A document whose paragraph's data is `data`.
+  defp holding_data(data) do
+    paragraph = %{"type" => "paragraph", "attrs" => %{"data" => data}, "content" => [text("x")]}
+    %{"type" => "doc", "content" => [paragraph]}
+  end
+
+  defp paragraph(content),
+    do: %{"type" => "paragraph", "attrs" => %{"data" => nil}, "content" => content}
 
   defp text(text), do: %{"type" => "text", "text" => text}
 
