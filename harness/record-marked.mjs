@@ -242,6 +242,14 @@ const inputs = [
 
   // Everything together.
   "# Title\n\nIntro with **bold**, *em*, `code` and [a link](x).\n\n- one\n- two\n  1. nested\n\n> quote\n\n```\ncode\n```\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\n---\n\nThe end.",
+
+  // Nesting one to three deep, which tests/deep.rs folds into the tokens of any depth.
+  ...[1, 2, 3].flatMap(depth => [
+    ">".repeat(depth) + " x",
+    "> ".repeat(depth) + "x\ny",
+    "1. ".repeat(depth) + "x",
+    ...[["**a ", " a**"], ["*a ", " a*"], ["~~a ", " a~~"]].map(([open, close]) => open.repeat(depth) + "x" + close.repeat(depth)),
+  ]),
 ]
 
 // Each marker marked-more-lists' bullet pattern reads, which ends with a `.` or a `)`: every roman
