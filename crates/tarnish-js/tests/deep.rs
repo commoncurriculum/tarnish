@@ -23,6 +23,12 @@ fn arrays(levels: usize, inside: Value) -> Value {
     (0..levels).fold(inside, |inner, _| Value::Array(vec![inner]))
 }
 
+fn objects(levels: usize, inside: Value) -> Value {
+    (0..levels).fold(inside, |inner, _| {
+        Value::Object([("a".into(), inner)].into_iter().collect())
+    })
+}
+
 #[test]
 fn values_nest_as_deeply_as_memory_allows() {
     on_dirty_scheduler_stack(|| {
@@ -50,14 +56,17 @@ const RED_ZONE: usize = 128 << 10;
 /// in more stack than that.
 #[test]
 fn json_parses_as_deeply_as_serde_reads_where_little_room_is_left() {
-    for (open, close) in [("[", "]"), ("{\"a\":", "}")] {
+    for (open, close, expected) in [
+        ("[", "]", arrays(127, 1.into())),
+        ("{\"a\":", "}", objects(127, 1.into())),
+    ] {
         let text = open.repeat(127) + "1" + &close.repeat(127);
         let parsed = std::thread::Builder::new()
             .stack_size(RED_ZONE)
-            .spawn(move || json::from_str(&text).is_ok())
+            .spawn(move || json::from_str(&text).ok())
             .expect("a thread")
             .join();
-        assert!(parsed.expect("no overflow"), "{open}");
+        assert!(parsed.expect("no overflow") == Some(expected), "{open}");
     }
 }
 
