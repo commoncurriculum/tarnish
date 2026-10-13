@@ -244,6 +244,29 @@ const inputs = [
   "# Title\n\nIntro with **bold**, *em*, `code` and [a link](x).\n\n- one\n- two\n  1. nested\n\n> quote\n\n```\ncode\n```\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\n---\n\nThe end.",
 ]
 
+// Each marker marked-more-lists' bullet pattern reads, which ends with a `.` or a `)`: every roman
+// numeral its pattern matches, the empty one among them, every letter, and numbers of each size.
+const roman = ([c, l, x, v, i]) => [
+  c,
+  x + c,
+  ...["", l].flatMap(fifty =>
+    [0, 1, 2, 3].flatMap(tens =>
+      [i + x, i + v, ...["", v].flatMap(five => [0, 1, 2, 3].map(ones => five + i.repeat(ones)))].map(
+        last => fifty + x.repeat(tens) + last,
+      ),
+    ),
+  ),
+]
+const letters = [..."abcdefghijklmnopqrstuvwxyz"]
+const markers = new Set([
+  ...roman([..."CLXVI"]),
+  ...roman([..."clxvi"]),
+  ...letters,
+  ...letters.map(letter => letter.toUpperCase()),
+  ...["0", "1", "2", "9", "10", "99", "007", "00", "123456789", "1234567890"],
+])
+const listed = [...markers].flatMap(marker => [".", ")"].map(delimiter => `${marker}${delimiter} a\n${marker}${delimiter} b`))
+
 function project(token) {
   const out = { type: token.type, raw: token.raw }
   if (typeof token.text === "string") out.text = token.text
@@ -278,5 +301,5 @@ function project(token) {
   return out
 }
 
-const lexed = inputs.map(input => ({ input, ...outcome(() => ({ tokens: marked.lexer(input).map(project) })) }))
-writeFixture("marked", { lexed })
+const lex = input => ({ input, ...outcome(() => ({ tokens: marked.lexer(input).map(project) })) })
+writeFixture("marked", { lexed: inputs.map(lex), markers: listed.map(lex) })
