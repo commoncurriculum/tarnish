@@ -29,7 +29,12 @@ pub struct TiptapSchema {
 /// `getSchema(extensions)`: the extensions sorted by priority, their node and mark types in that
 /// order, and each type's attributes those `addGlobalAttributes` gives it, then its own.
 pub fn get_schema(extensions: &[Extension]) -> Result<TiptapSchema> {
-    let extensions = sort_extensions(extensions);
+    schema_of(extensions.iter().collect())
+}
+
+/// `getSchema` of the extensions given.
+pub(crate) fn schema_of(mut extensions: Vec<&Extension>) -> Result<TiptapSchema> {
+    sort(&mut extensions);
     let names = |of: fn(&Kind) -> bool| -> Vec<&'static str> {
         let typed = extensions.iter().filter(|extension| of(&extension.kind));
         typed.map(|extension| extension.name).collect()
@@ -162,8 +167,12 @@ fn extra_node_fields(extensions: &[&Extension], node: &Extension) -> Map {
 /// `sortExtensions`: highest priority first, and equal priorities in the order given.
 pub fn sort_extensions(extensions: &[Extension]) -> Vec<&Extension> {
     let mut sorted: Vec<&Extension> = extensions.iter().collect();
-    sorted.sort_by_key(|extension| std::cmp::Reverse(extension.priority));
+    sort(&mut sorted);
     sorted
+}
+
+fn sort(extensions: &mut [&Extension]) {
+    extensions.sort_by_key(|extension| std::cmp::Reverse(extension.priority));
 }
 
 /// `Object.fromEntries` of the attributes' defaults: a name given twice, as a global attribute
