@@ -1,5 +1,8 @@
 //! The extensions `harness/record-tiptap.mjs` gives the `MarkdownManager` and `getSchema`: Tiptap's
-//! own, and the others a record names, and the conversions it records with them.
+//! own, and the others a record names, and the conversions it records with them. [`lists`] has
+//! the configurations `harness/record-tiptap-lists.mjs` names.
+
+pub mod lists;
 
 use tarnish::Node;
 use tarnish::json::{Value, json};
@@ -111,13 +114,22 @@ pub fn named(record: &Value) -> Option<&str> {
 
 impl Converter {
     pub fn new(extensions: Option<&str>) -> Converter {
-        let extensions = match extensions {
-            None => self::extensions(),
-            Some("colors") => colors(),
-            Some("code") => code(),
-            Some(other) => panic!("no extensions {other}"),
+        let (extensions, indentation) = match extensions {
+            None => (self::extensions(), None),
+            Some("colors") => (colors(), None),
+            Some("code") => (code(), None),
+            Some(other) => {
+                lists::configuration(other).unwrap_or_else(|| panic!("no extensions {other}"))
+            }
         };
-        Converter::of(&extensions)
+        let converter = Converter::of(&extensions);
+        match indentation {
+            Some(indentation) => Converter {
+                markdown: converter.markdown.with_indentation(indentation),
+                ..converter
+            },
+            None => converter,
+        }
     }
 
     /// The converter of `extensions`.

@@ -3,6 +3,7 @@
 //! save the flat list items' parse rules. An application extends one with the rest it needs.
 
 pub mod bold;
+pub mod bullet_list;
 pub mod document;
 pub mod flat_list;
 pub mod hard_break;
@@ -10,11 +11,15 @@ pub mod heading;
 pub mod highlight;
 pub mod image;
 pub mod italic;
+pub mod list_item;
+pub mod ordered_list;
 pub mod paragraph;
 pub mod strike;
 pub mod subscript;
 pub mod superscript;
 pub mod table;
+pub mod task_item;
+pub mod task_list;
 pub mod text;
 pub mod text_style;
 pub mod underline;

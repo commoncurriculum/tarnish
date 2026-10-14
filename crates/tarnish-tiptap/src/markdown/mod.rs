@@ -8,6 +8,7 @@ mod serialize;
 mod types;
 mod utils;
 
+pub(crate) use nesting::Lines;
 pub use nesting::{
     IndentedBlockConfig, IndentedBlocks, parse_indented_blocks, render_nested_markdown_content,
 };

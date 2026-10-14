@@ -197,7 +197,7 @@ impl<'s> Lines<'s> {
     }
 
     /// Where line `i` starts, if `src` has it: after the newline that ends the line before.
-    fn start(&self, i: usize) -> Option<usize> {
+    pub(crate) fn start(&self, i: usize) -> Option<usize> {
         match i.checked_sub(1) {
             None => Some(0),
             Some(before) => {
