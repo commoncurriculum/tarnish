@@ -1,7 +1,10 @@
 //! `src/table/utilities/markdown.ts`: a table as Markdown, and the pipes in code spans that
 //! Table's `markdownTokenizer` escapes for marked.
 
+use std::sync::LazyLock;
+
 use tarnish_js::json::Value;
+use tarnish_js::regexp::RegExp;
 use tarnish_js::units::Units;
 use tarnish_js::{self as js, Error, stack, utf16, value};
 use tarnish_markdown::marked::{Lexer, Token};
@@ -144,7 +147,8 @@ pub fn tokenize(src: &Units, _: &[Token], lexer: &mut Lexer) -> Result<Option<To
 }
 
 /// `raw.replace(/[ \t]*\r?\n[ \t]*/g, '<br>')`: each line break, and the spaces and tabs around
-/// it, as a `<br>`.
+/// it, as a `<br>`. The regex backtracks through a run of blanks from each of its starts, which
+/// a nested table's padding makes quadratic in the run.
 fn line_breaks_to_br(raw: &str) -> String {
     let bytes = raw.as_bytes();
     let mut result = String::with_capacity(raw.len());
@@ -179,22 +183,11 @@ fn line_breaks_to_br(raw: &str) -> String {
     result
 }
 
+static WHITESPACE: LazyLock<RegExp> = LazyLock::new(|| RegExp::new(r"\s+", "g"));
+
 /// `collapseWhitespace(s)`: each run of whitespace a space, and none at either end.
 fn collapse_whitespace(text: &str) -> String {
-    let mut collapsed = String::with_capacity(text.len());
-    let mut in_run = false;
-    for character in text.chars() {
-        if js::is_whitespace(character) {
-            if !in_run {
-                collapsed.push(' ');
-            }
-            in_run = true;
-        } else {
-            collapsed.push(character);
-            in_run = false;
-        }
-    }
-    js::trim(&collapsed).to_owned()
+    utf16::to_string(utf16::trim(&WHITESPACE.replace(&utf16::from(text), " ")))
 }
 
 /// A cell as `renderTableToMarkdown` reads it.
@@ -322,23 +315,6 @@ mod tests {
             let expected = utf16::to_string(&regex.replace(&raw, "<br>"));
             let raw = utf16::to_string(&raw);
             assert_eq!(super::line_breaks_to_br(&raw), expected, "{raw:?}");
-        }
-    }
-
-    #[test]
-    fn whitespace_collapses_where_the_regex_finds_it() {
-        let regex = RegExp::new(r"\s+", "g");
-        let alphabet = [
-            " ", "\t", "\n", "\u{A0}", "\u{3000}", "\u{FEFF}", "\u{85}", "a",
-        ];
-        for text in strings(&alphabet, 200_000) {
-            let replaced = utf16::to_string(&regex.replace(&text, " "));
-            let text = utf16::to_string(&text);
-            assert_eq!(
-                super::collapse_whitespace(&text),
-                tarnish_js::trim(&replaced),
-                "{text:?}"
-            );
         }
     }
 }
