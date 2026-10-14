@@ -22,7 +22,7 @@ use tarnish_tiptap::extensions::strike::strike;
 use tarnish_tiptap::extensions::subscript::subscript;
 use tarnish_tiptap::extensions::superscript::superscript;
 use tarnish_tiptap::extensions::text::text;
-use tarnish_tiptap::extensions::text_style::{color, text_style};
+use tarnish_tiptap::extensions::text_style::{ColorOptions, TextStyleOptions, color, text_style};
 use tarnish_tiptap::extensions::underline::underline;
 use tarnish_tiptap::markdown::MarkdownManager;
 use tarnish_tiptap::{
@@ -51,16 +51,16 @@ fn own_but_highlight() -> Vec<Extension> {
 pub fn extensions() -> Vec<Extension> {
     let mut own = own_but_highlight();
     own.push(highlight(HighlightOptions { multicolor: false }).into());
-    own.push(text_style().into());
+    own.push(text_style(TextStyleOptions::default()).into());
     own
 }
 
 /// Tiptap's own extensions, Highlight with its colors and after TextStyle, and Color.
 fn colors() -> Vec<Extension> {
     let mut colors = own_but_highlight();
-    colors.push(text_style().into());
+    colors.push(text_style(TextStyleOptions::default()).into());
     colors.push(highlight(HighlightOptions { multicolor: true }).into());
-    colors.push(color().into());
+    colors.push(color(ColorOptions::default()).into());
     colors
 }
 

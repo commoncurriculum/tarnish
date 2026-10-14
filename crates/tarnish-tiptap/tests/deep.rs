@@ -10,7 +10,7 @@ use own::{Converter, input_of, named};
 use tarnish::js::stack::on_dirty_scheduler_stack;
 use tarnish::json::{Value, json};
 use tarnish_fixtures::{expect, read, records, same};
-use tarnish_tiptap::extensions::text_style::color;
+use tarnish_tiptap::extensions::text_style::{ColorOptions, color};
 use tarnish_tiptap::{get_schema, html};
 
 const DOCUMENTS: usize = 20_000;
@@ -255,7 +255,7 @@ fn converts_what_nests_as_deeply_as_memory_allows() {
 fn colors_nest_as_deeply_as_memory_allows() {
     on_dirty_scheduler_stack(|| {
         let mut extensions = own::extensions();
-        extensions.push(color().into());
+        extensions.push(color(ColorOptions::default()).into());
         let schema = get_schema(&extensions).expect("the schema");
         let parens = "(".repeat(CSSES) + &")".repeat(CSSES);
         let color = format!("var(--a,{parens})");

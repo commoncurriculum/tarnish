@@ -1,48 +1,168 @@
-//! `@tiptap/extension-text-style`: `TextStyle` and `Color`.
+//! `@tiptap/extension-text-style`: `TextStyle`, the extensions that give it the styles it spans,
+//! `BackgroundColor`, `Color`, `FontFamily`, `FontSize` and `LineHeight`, and `TextStyleKit`.
+//! `@tiptap/extension-color` and `@tiptap/extension-font-family` are `Color` and `FontFamily`.
 
 use tarnish_html::HtmlNode;
 use tarnish_js::Result;
-use tarnish_js::json::Map;
-use tarnish_js::json::Value;
+use tarnish_js::json::{Map, Value};
 use tarnish_js::value::nullable_string;
 
 use crate::DomSpec;
 use crate::{
-    ExtensionAttribute, GlobalAttributes, GlobalTypes, MarkExtension, ParseHtml, PlainExtension,
-    get_style_property,
+    Extension, ExtensionAttribute, GlobalAttributes, GlobalTypes, MarkExtension, ParseHtml,
+    PlainExtension, element_attrs, get_style_property, merge_objects, rendered_object,
 };
 
-pub fn text_style() -> MarkExtension {
-    MarkExtension::create("textStyle")
-        .priority(101)
-        .parse_html([ParseHtml::tag("span").not_consuming().get_attrs(|span| {
-            if !span.has_attribute("style") {
-                return Ok(None);
-            }
-            merge_nested_span_styles(span)?;
-            Ok(Some(Map::new()))
-        })])
-        .render_html(|_, html| Ok(DomSpec::wrapping("span", html)))
+pub struct TextStyleOptions {
+    pub html_attributes: Map,
+    /// Whether a span's nested spans get its style ahead of theirs as it's parsed.
+    pub merge_nested_span_styles: bool,
 }
 
-pub fn color() -> PlainExtension {
-    PlainExtension::create("color").add_global_attributes(vec![GlobalAttributes {
-        types: GlobalTypes::Named(&["textStyle"]),
-        attributes: vec![
-            ExtensionAttribute::new("color", Value::Null)
-                .parse_html(|element| {
-                    let value = get_style_property(element, "color")
-                        .unwrap_or_else(|| element.style_value("color"));
-                    Some(Value::String(value.replace(['\'', '"'], "")))
-                })
-                .render_html(|attributes, rendered| match attributes.get("color") {
-                    Some(color) if color.truthy() => {
-                        rendered.merge("style", format!("color: {}", color.to_js_string()?))
-                    }
-                    _ => Ok(()),
-                }),
-        ],
+impl Default for TextStyleOptions {
+    fn default() -> Self {
+        TextStyleOptions {
+            html_attributes: Map::new(),
+            merge_nested_span_styles: true,
+        }
+    }
+}
+
+pub fn text_style(options: TextStyleOptions) -> MarkExtension {
+    let merge = options.merge_nested_span_styles;
+    let configured = options.html_attributes;
+    MarkExtension::create("textStyle")
+        .priority(101)
+        .parse_html([ParseHtml::tag("span")
+            .not_consuming()
+            .get_attrs(move |span| {
+                if !span.has_attribute("style") {
+                    return Ok(None);
+                }
+                if merge {
+                    merge_nested_span_styles(span)?;
+                }
+                Ok(Some(Map::new()))
+            })])
+        .render_html(move |_, html| {
+            let html = if configured.is_empty() {
+                html
+            } else {
+                element_attrs(merge_objects([&configured, &rendered_object(&html)])?)?
+            };
+            Ok(DomSpec::wrapping("span", html))
+        })
+}
+
+/// The options of each extension that gives types a style: the types it gives it to.
+pub struct StyleOptions {
+    pub types: &'static [&'static str],
+}
+
+impl Default for StyleOptions {
+    fn default() -> Self {
+        StyleOptions {
+            types: &["textStyle"],
+        }
+    }
+}
+
+pub type BackgroundColorOptions = StyleOptions;
+pub type ColorOptions = StyleOptions;
+pub type FontFamilyOptions = StyleOptions;
+pub type FontSizeOptions = StyleOptions;
+pub type LineHeightOptions = StyleOptions;
+
+pub fn background_color(options: BackgroundColorOptions) -> PlainExtension {
+    styled("backgroundColor", "background-color", true, options)
+}
+
+pub fn color(options: ColorOptions) -> PlainExtension {
+    styled("color", "color", true, options)
+}
+
+pub fn font_family(options: FontFamilyOptions) -> PlainExtension {
+    styled("fontFamily", "font-family", false, options)
+}
+
+pub fn font_size(options: FontSizeOptions) -> PlainExtension {
+    styled("fontSize", "font-size", false, options)
+}
+
+pub fn line_height(options: LineHeightOptions) -> PlainExtension {
+    styled("lineHeight", "line-height", false, options)
+}
+
+/// An extension named `name` that gives its types an attribute of the same name: the CSS
+/// `property` of the element's inline style, without its quotes where `unquoted`, and the style
+/// it renders.
+fn styled(
+    name: &'static str,
+    property: &'static str,
+    unquoted: bool,
+    options: StyleOptions,
+) -> PlainExtension {
+    let attribute = ExtensionAttribute::new(name, Value::Null)
+        .parse_html(move |element| {
+            let value = get_style_property(element, property)
+                .unwrap_or_else(|| element.style_value(property));
+            Some(Value::String(if unquoted {
+                value.replace(['\'', '"'], "")
+            } else {
+                value
+            }))
+        })
+        .render_html(move |attributes, rendered| match attributes.get(name) {
+            Some(value) if value.truthy() => {
+                rendered.merge("style", format!("{property}: {}", value.to_js_string()?))
+            }
+            _ => Ok(()),
+        });
+    PlainExtension::create(name).add_global_attributes(vec![GlobalAttributes {
+        types: GlobalTypes::Named(options.types),
+        attributes: vec![attribute],
     }])
+}
+
+/// Which of its extensions `TextStyleKit` adds, with their options: `None` for `false`.
+pub struct TextStyleKitOptions {
+    pub background_color: Option<BackgroundColorOptions>,
+    pub color: Option<ColorOptions>,
+    pub font_family: Option<FontFamilyOptions>,
+    pub font_size: Option<FontSizeOptions>,
+    pub line_height: Option<LineHeightOptions>,
+    pub text_style: Option<TextStyleOptions>,
+}
+
+impl Default for TextStyleKitOptions {
+    fn default() -> Self {
+        TextStyleKitOptions {
+            background_color: Some(StyleOptions::default()),
+            color: Some(StyleOptions::default()),
+            font_family: Some(StyleOptions::default()),
+            font_size: Some(StyleOptions::default()),
+            line_height: Some(StyleOptions::default()),
+            text_style: Some(TextStyleOptions::default()),
+        }
+    }
+}
+
+/// `TextStyleKit`, and the extensions it adds after it, as `flattenExtensions` puts them.
+pub fn text_style_kit(options: TextStyleKitOptions) -> Vec<Extension> {
+    let styles = [
+        options.background_color.map(background_color),
+        options.color.map(color),
+        options.font_family.map(font_family),
+        options.font_size.map(font_size),
+        options.line_height.map(line_height),
+    ];
+    let kit = PlainExtension::create("textStyleKit").into();
+    let styles = styles.into_iter().flatten().map(Extension::from);
+    let text_style = options.text_style.map(|options| text_style(options).into());
+    std::iter::once(kit)
+        .chain(styles)
+        .chain(text_style)
+        .collect()
 }
 
 /// `mergeNestedSpanStyles`: each span inside `element`, down to the first span on each path,

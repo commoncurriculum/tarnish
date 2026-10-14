@@ -20,7 +20,10 @@ import { Strike } from "@tiptap/extension-strike"
 import { Subscript } from "@tiptap/extension-subscript"
 import { Superscript } from "@tiptap/extension-superscript"
 import { Text } from "@tiptap/extension-text"
-import { TextStyle } from "@tiptap/extension-text-style"
+import { Color } from "@tiptap/extension-color"
+import { FontFamily } from "@tiptap/extension-font-family"
+import * as textStyles from "@tiptap/extension-text-style"
+import { BackgroundColor, FontSize, LineHeight, TextStyle, TextStyleKit } from "@tiptap/extension-text-style"
 import { Underline } from "@tiptap/extension-underline"
 import { MarkdownManager } from "@tiptap/markdown"
 import { DOMParser, DOMSerializer, Node } from "@tiptap/pm/model"
@@ -82,10 +85,35 @@ const Rule = TiptapNode.create({ name: "rule", group: "block", atom: true, selec
 const Tag = Mark.create({ name: "tag", inclusive: false })
 const Free = Mark.create({ name: "free", inclusive: true })
 
+// @tiptap/extension-color and @tiptap/extension-font-family are the text style package's.
+if (Color !== textStyles.Color || FontFamily !== textStyles.FontFamily) {
+  throw new Error("Color and FontFamily aren't @tiptap/extension-text-style's")
+}
+const styles = [BackgroundColor, Color, FontFamily, FontSize, LineHeight]
+
 const configurations = {
   own,
   globals: [Document, Paragraph, Text, Heading, HardBreak, Bold, Italic, Globals],
   specs: [Document, Paragraph, Text, Chip, Rule, Tag, Free],
+  styles: [...own, ...styles],
+  kit: [Document, Paragraph, Text, Heading, Bold, TextStyleKit],
+  kitOptions: [
+    Document,
+    Paragraph,
+    Text,
+    Heading,
+    Bold,
+    TextStyleKit.configure({
+      backgroundColor: false,
+      lineHeight: false,
+      color: { types: ["textStyle", "heading"] },
+      fontSize: { types: ["paragraph"] },
+      textStyle: {
+        HTMLAttributes: { class: "styled", style: "font-weight: bold; color: black", "data-x": null, "data-n": 0 },
+        mergeNestedSpanStyles: false,
+      },
+    }),
+  ],
 }
 
 const converters = Object.fromEntries(
@@ -103,6 +131,7 @@ const fixture = name => JSON.parse(readFileSync(new URL(`../fixtures/${name}.jso
 const unique = values => [...new Set(values)]
 // The inputs of each configuration in `inputs`, each once.
 const each = inputs => Object.entries(inputs).flatMap(([name, list]) => unique(list).map(input => [name, input]))
+const paragraph = (...content) => ({ type: "doc", content: [{ type: "paragraph", content }] })
 
 const schemas = Object.entries(converters).map(([name, { schema }]) => ({
   extensions: name,
@@ -123,8 +152,68 @@ const schemas = Object.entries(converters).map(([name, { schema }]) => ({
   ]),
 }))
 
+// The inputs html5ever builds another tree from than the fork's parse5 does, which tarnish-html's
+// tests/recorded.rs holds to html5ever's tree, as harness/record-tiptap.mjs leaves them out.
+const otherTrees = new Set([
+  "<select><option>a<b>x</b></option></select>",
+  "<select><option>a<p>b</p></select>",
+  "<p><span>a<isindex>b</span>c</p>",
+  "<math><mi><![CDATA[x<y]]></mi></math>",
+  "<math><mi><![CDATA[x]]></mi></math>",
+  "<svg><desc><![CDATA[x]]></desc></svg>",
+  "<svg><foreignObject><![CDATA[x]]></foreignObject></svg>",
+  "<math><annotation-xml encoding=text/html><![CDATA[x]]></annotation-xml></math>",
+])
+// fixtures/dom.json's HTML that `pattern` matches.
+const domHTML = pattern =>
+  fixture("dom")
+    .parses.map(record => record.html)
+    .filter(html => !otherTrees.has(html) && pattern.test(html))
+// fixtures/marked.json's Markdown that `pattern` matches.
+const markedMarkdown = pattern =>
+  fixture("marked")
+    .lexed.map(record => record.input)
+    .filter(markdown => pattern.test(markdown))
+
+const styleHTML = [
+  '<p><span style="color: red; background-color: #FF0; font-family: Georgia, serif; font-size: 12px; line-height: 1.5">x</span></p>',
+  `<p><span style="font-family: 'Comic Sans', &quot;A B&quot;; background-color: 'red'; color: &quot;blue&quot;">q</span></p>`,
+  '<p><span style="FONT-SIZE: 9PX; Line-Height: 2">caps</span><span style="font-size: 1em; font-size: 2em">last</span></p>',
+  '<p><span style="">empty</span><span style="font-size">no colon</span><span style="font-size: ">no value</span></p>',
+  '<p><span style="font-size: 3px !important; line-height: normal">important</span></p>',
+  '<p><span style="color: red"><span style="font-size: 4px">nested</span>out</span></p>',
+  '<p><span style="font-family: a"><b><span style="line-height: 3">deeper</span></b></span></p>',
+  '<h1 style="color: blue; font-size: 5px">heading</h1><p style="font-size: 6px; color: green">para</p>',
+  "<p><span>no style</span><span class=x>class</span></p>",
+  '<p><span style="background: blue; font: 12px serif">shorthands</span></p>',
+]
+const styleDocs = [
+  ...["red", "", null, 0, 1, "'a'", { an: "object" }].map(value =>
+    paragraph({
+      type: "text",
+      text: "x",
+      marks: [
+        {
+          type: "textStyle",
+          attrs: { backgroundColor: value, color: value, fontFamily: value, fontSize: value, lineHeight: value },
+        },
+      ],
+    }),
+  ),
+  paragraph({ type: "text", text: "x", marks: [{ type: "textStyle" }] }),
+  paragraph({ type: "text", text: "x", marks: [{ type: "textStyle", attrs: { fontSize: "1px" } }, { type: "bold" }] }),
+  {
+    type: "doc",
+    content: [
+      { type: "heading", attrs: { level: 1, color: "red" }, content: [{ type: "text", text: "h" }] },
+      { type: "paragraph", attrs: { fontSize: "2px" }, content: [{ type: "text", text: "p" }] },
+    ],
+  },
+]
+
 const parsesMarkdown = each({
   globals: ["plain **bold**"],
+  styles: ['<span style="color: red">x</span>', "plain *em*"],
 }).map(([name, markdown]) => ({
   extensions: name,
   markdown,
@@ -137,6 +226,9 @@ const parsesHTML = each({
     '<p every="x" node="1" named="true" made="1.5">a<strong every="" mark="false" named="-2">b</strong></p>',
     '<h2 every node="+.5" named="1e3">x</h2><p named="0x1"><br every="y" node="2."></p>',
   ],
+  styles: [...styleHTML, ...domHTML(/style|<span/i)],
+  kit: styleHTML,
+  kitOptions: styleHTML,
 }).map(([name, html]) => ({
   extensions: name,
   html,
@@ -159,7 +251,6 @@ const documents = docs =>
     ])
   })
 
-const paragraph = (...content) => ({ type: "doc", content: [{ type: "paragraph", content }] })
 const docs = {
   globals: [
     {
@@ -171,6 +262,9 @@ const docs = {
     },
     paragraph({ type: "text", text: "x", marks: [{ type: "bold", attrs: { every: 1, mark: "m", named: true } }] }),
   ],
+  styles: styleDocs,
+  kit: styleDocs,
+  kitOptions: styleDocs,
 }
 
 const serializesMarkdown = documents(docs).map(([name, doc]) => ({

@@ -9,8 +9,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use own::{Converter, input_of};
-use tarnish::json::{Map, Value, json};
+use tarnish::json::{Map, Value, json, object};
 use tarnish_fixtures::{outcome, read, records, same};
+use tarnish_tiptap::extensions::text_style::{
+    StyleOptions, TextStyleKitOptions, TextStyleOptions, background_color, color, font_family,
+    font_size, line_height, text_style_kit,
+};
 use tarnish_tiptap::extensions::{
     bold::bold, document::document, hard_break::hard_break, heading::HeadingOptions,
     heading::heading, italic::italic, paragraph::paragraph, text::text,
@@ -86,11 +90,43 @@ fn specs() -> Vec<Extension> {
     with([chip.into(), rule.into(), tag.into(), free.into()])
 }
 
+/// Document, Paragraph, Text, Heading and Bold, and the extensions of a `TextStyleKit`.
+fn kit(options: TextStyleKitOptions) -> Vec<Extension> {
+    let base = with([heading(HeadingOptions::default()).into(), bold().into()]);
+    base.into_iter().chain(text_style_kit(options)).collect()
+}
+
 /// The extensions of each configuration the recorder names.
 fn configuration(name: &str) -> Vec<Extension> {
     match name {
         "own" => own::extensions(),
         "specs" => specs(),
+        "styles" => {
+            let styles = [background_color, color, font_family, font_size, line_height];
+            let styles = styles.map(|style| style(StyleOptions::default()).into());
+            own::extensions().into_iter().chain(styles).collect()
+        }
+        "kit" => kit(TextStyleKitOptions::default()),
+        "kitOptions" => kit(TextStyleKitOptions {
+            background_color: None,
+            line_height: None,
+            color: Some(StyleOptions {
+                types: &["textStyle", "heading"],
+            }),
+            font_size: Some(StyleOptions {
+                types: &["paragraph"],
+            }),
+            text_style: Some(TextStyleOptions {
+                html_attributes: object!({
+                    "class": "styled",
+                    "style": "font-weight: bold; color: black",
+                    "data-x": null,
+                    "data-n": 0,
+                }),
+                merge_nested_span_styles: false,
+            }),
+            ..TextStyleKitOptions::default()
+        }),
         "globals" => vec![
             document().into(),
             paragraph().into(),
