@@ -101,6 +101,7 @@ fn configuration(name: &str) -> Configuration {
             extensions.push(renders().into());
             extensions
         }
+        "nodeType" => node_type(),
         "all" => all(),
         other => panic!("no configuration {other}"),
     }
@@ -340,6 +341,47 @@ fn application_code() -> Vec<Extension> {
         code.into(),
         block.into(),
         figure.into(),
+    ]
+}
+
+/// HTMLAttributes holding a `nodeType`.
+fn node_typed(node_type: Value) -> Map {
+    object!({"data-x": "y", "nodeType": node_type})
+}
+
+/// Paragraph, Heading, HardBreak, Bold and Italic with a `nodeType` among their HTMLAttributes,
+/// and a node whose attribute renders under the name `nodeType`.
+fn node_type() -> Vec<Extension> {
+    let typed = NodeExtension::create("typed")
+        .group("block")
+        .atom()
+        .add_attributes(vec![ExtensionAttribute::new("nodeType", Value::Null)])
+        .render_html(|_, html| Ok(DomSpec::element("div", html, Vec::new())));
+    vec![
+        document().into(),
+        paragraph(ParagraphOptions {
+            html_attributes: node_typed(Value::Null),
+        })
+        .into(),
+        text().into(),
+        heading(HeadingOptions {
+            html_attributes: node_typed(json!(1)),
+            ..HeadingOptions::default()
+        })
+        .into(),
+        hard_break(HardBreakOptions {
+            html_attributes: node_typed(json!(0)),
+        })
+        .into(),
+        bold(BoldOptions {
+            html_attributes: node_typed(json!("1")),
+        })
+        .into(),
+        italic(ItalicOptions {
+            html_attributes: node_typed(json!("x")),
+        })
+        .into(),
+        typed.into(),
     ]
 }
 

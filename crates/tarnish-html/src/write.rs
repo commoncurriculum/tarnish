@@ -254,7 +254,8 @@ const PLAIN: [bool; 256] = {
 
 /// Whether the DOM would make an element or attribute of this name with the name as it is: a
 /// name of lower-case ASCII letters, digits and `-_.:`, an element's starting with a letter,
-/// which is valid and which nothing lower-cases. Other names go through the DOM.
+/// which is valid and which nothing lower-cases. Other names go through the DOM, `nodeType`
+/// among them, which makes `renderSpec` take a spec's attributes for a DOM node.
 fn plain_name(name: &str, kind: NameKind) -> bool {
     let bytes = name.as_bytes();
     let starts = match kind {

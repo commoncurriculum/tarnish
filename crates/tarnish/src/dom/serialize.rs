@@ -9,7 +9,7 @@ use std::sync::Arc;
 use rustc_hash::FxHashMap;
 
 use super::{Dom, NodeKind};
-use crate::chunk::{Kind, ValueRef};
+use crate::chunk::{JsonView, Kind, ValueRef};
 use crate::js;
 use crate::js::stack;
 use crate::js::value::Nullish;
@@ -31,8 +31,8 @@ pub enum DomSpec<'a, N> {
         items: Vec<DomSpec<'a, N>>,
         origin: Option<(usize, u32)>,
     },
-    /// A string, as [`DomSpec::Text`] renders, the content hole `0` or an attributes object. An
-    /// array is read as a [`DomSpec::Array`] with no origin.
+    /// A string, as [`DomSpec::Text`] renders, the content hole `0` or an attributes object, or
+    /// any JSON `renderSpec` reads, as it reads an attribute's value.
     Value(Value),
     /// `[tag, attrs, ...children]`, setting its attributes in order.
     Element {
@@ -622,13 +622,13 @@ fn suspicious() -> Error {
     )
 }
 
-/// `renderSpec` of a value from a node's or mark's attributes, which JSON can make anything: an
-/// array, an object read as one by its indices and `length`, or a string read by its units, as
-/// an element. No JSON object is a DOM node, so one `renderSpec` takes for a node is refused as
-/// `appendChild` refuses it.
-fn render_attr<D: Dom>(
+/// `renderSpec` of a JSON value, such as one from a node's or mark's attributes, which JSON can
+/// make anything: an array, an object read as one by its indices and `length`, or a string read
+/// by its units, as an element. No JSON object is a DOM node, so one `renderSpec` takes for a
+/// node is refused as `appendChild` refuses it.
+fn render_json<'v, D: Dom>(
     dom: &D,
-    structure: ValueRef,
+    structure: impl JsonView<'v>,
     xml_ns: Option<&str>,
     block_arrays_in: Option<ValueRef>,
 ) -> Result<Rendered<D::Node>> {
@@ -639,14 +639,7 @@ fn render_attr<D: Dom>(
         Kind::Object(_) => false,
         Kind::Bool(_) | Kind::Number(_) => return Err(invalid()),
     };
-    let is_node = |value: ValueRef| -> Result<bool> {
-        Ok(value.is_object()
-            && value
-                .get("nodeType")
-                .map_or(Ok(f64::NAN), ValueRef::to_number)?
-                == 1.0)
-    };
-    if is_node(structure)? || structure.get("dom").map_or(Ok(false), is_node)? {
+    if is_node(Some(structure))? || is_node(structure.get("dom"))? {
         return Err(Error::Type(
             "Failed to execute 'appendChild' on 'Node': parameter 1 is not of type 'Node'.".into(),
         ));
@@ -655,12 +648,13 @@ fn render_attr<D: Dom>(
         true => structure.items().nth(index),
         false => structure.get(&index.to_string()),
     };
-    let Some(tag) = item(0).and_then(ValueRef::as_str) else {
+    let Some(Kind::String(tag)) = item(0).map(JsonView::kind) else {
         return Err(invalid());
     };
     if array
         && let Some(attrs) = block_arrays_in
-        && holds_spec_array(attrs, structure.id())
+        && let Some(origin) = structure.place()
+        && holds_spec_array(attrs, origin)
     {
         return Err(suspicious());
     }
@@ -668,53 +662,74 @@ fn render_attr<D: Dom>(
     let element = dom.create_element(namespace, tag)?;
     let mut start = 1;
     if let Some(attrs) = item(1)
-        && attrs.is_object()
-        && attrs.get("nodeType").is_none_or(ValueRef::is_null)
+        && matches!(attrs.kind(), Kind::Object(_))
+        && attrs
+            .get("nodeType")
+            .is_none_or(|node_type| matches!(node_type.kind(), Kind::Null))
     {
         start = 2;
         for (name, value) in attrs.entries() {
-            if !value.is_null() {
+            if !matches!(value.kind(), Kind::Null) {
                 set_attribute(dom, &element, name, &value.to_value())?;
             }
         }
     }
     let length = match array {
-        true => structure.len() as f64,
+        true => structure.items().len() as f64,
         false => structure
             .get("length")
-            .map_or(Ok(f64::NAN), ValueRef::to_number)?,
+            .map_or(Ok(f64::NAN), JsonView::to_number)?,
     };
     let mut content_dom = None;
     let mut index = start;
     while (index as f64) < length {
         let child =
             item(index).ok_or_else(|| js::value::cannot_read(Nullish::Undefined, "nodeType"))?;
-        if child.as_f64() == Some(0.0) {
-            if (index as f64) < length - 1.0 || index > start {
-                return Err(hole_not_alone());
+        let inner = match child.kind() {
+            Kind::Number(number) if number.as_f64() == 0.0 => {
+                if (index as f64) < length - 1.0 || index > start {
+                    return Err(hole_not_alone());
+                }
+                return Ok(Rendered {
+                    dom: element.clone(),
+                    content_dom: Some(element),
+                });
             }
-            return Ok(Rendered {
-                dom: element.clone(),
-                content_dom: Some(element),
-            });
-        }
-        let inner = match child.as_str() {
-            Some(string) => text(dom, string)?,
-            None => stack::grow(|| render_attr(dom, child, namespace, block_arrays_in))?,
+            Kind::String(string) => text(dom, string)?,
+            _ => stack::grow(|| render_json(dom, child, namespace, block_arrays_in))?,
         };
-        dom.append_child(&element, &inner.dom)?;
-        if let Some(inner_content) = inner.content_dom {
-            if content_dom.is_some() {
-                return Err(Error::Range("Multiple content holes".into()));
-            }
-            content_dom = Some(inner_content);
-        }
+        append(dom, &element, inner, &mut content_dom)?;
         index += 1;
     }
     Ok(Rendered {
         dom: element,
         content_dom,
     })
+}
+
+/// `value.nodeType == 1`, of an object.
+fn is_node<'v>(value: Option<impl JsonView<'v>>) -> Result<bool> {
+    let object = value.filter(|value| matches!(value.kind(), Kind::Object(_)));
+    let node_type = object.and_then(|object| object.get("nodeType"));
+    Ok(node_type.map_or(Ok(f64::NAN), JsonView::to_number)? == 1.0)
+}
+
+/// Appends a child's DOM to `element`, `content_dom` taking its content's, which only one child
+/// may have.
+fn append<D: Dom>(
+    dom: &D,
+    element: &D::Node,
+    inner: Rendered<D::Node>,
+    content_dom: &mut Option<D::Node>,
+) -> Result<()> {
+    dom.append_child(element, &inner.dom)?;
+    if let Some(inner_content) = inner.content_dom {
+        if content_dom.is_some() {
+            return Err(Error::Range("Multiple content holes".into()));
+        }
+        *content_dom = Some(inner_content);
+    }
+    Ok(())
 }
 
 fn text<D: Dom>(dom: &D, text: &str) -> Result<Rendered<D::Node>> {
@@ -724,8 +739,6 @@ fn text<D: Dom>(dom: &D, text: &str) -> Result<Rendered<D::Node>> {
     })
 }
 
-// bounded: once, for a value's array, which renders as the array spec it reads as; children
-// render through `fill`, which grows the stack
 fn render<D: Dom>(
     dom: &D,
     structure: &DomSpec<D::Node>,
@@ -743,8 +756,8 @@ fn render<D: Dom>(
             return Ok(rendered.clone());
         }
         DomSpec::Text(string) => return render_string(dom, string, xml_ns),
-        DomSpec::Value(Value::String(string)) => return render_string(dom, string, xml_ns),
-        DomSpec::Attr(value) => return render_attr(dom, *value, xml_ns, block_arrays_in),
+        DomSpec::Value(value) => return render_json(dom, value, xml_ns, block_arrays_in),
+        DomSpec::Attr(value) => return render_json(dom, *value, xml_ns, block_arrays_in),
         DomSpec::Element {
             tag,
             attrs,
@@ -752,23 +765,18 @@ fn render<D: Dom>(
         } => {
             let (namespace, tag) = qualified(tag, xml_ns);
             let element = dom.create_element(namespace, tag)?;
-            set_spec_attributes(dom, &element, attrs)?;
-            return fill(dom, element, children, namespace, block_arrays_in);
+            let first = spec_attributes(dom, &element, attrs)?;
+            return fill(dom, element, first, children, namespace, block_arrays_in);
         }
         DomSpec::Wrapping { tag, attrs } => {
             let (namespace, tag) = qualified(tag, xml_ns);
             let element = dom.create_element(namespace, tag)?;
-            set_spec_attributes(dom, &element, attrs)?;
-            return Ok(Rendered {
-                dom: element.clone(),
-                content_dom: Some(element),
-            });
+            let first = spec_attributes(dom, &element, attrs)?;
+            let hole = [DomSpec::Hole];
+            return fill(dom, element, first, &hole, namespace, block_arrays_in);
         }
         DomSpec::Array { items, origin } => (items, *origin),
-        DomSpec::Value(array @ Value::Array(_)) => {
-            return render(dom, &array.clone().into(), xml_ns, block_arrays_in);
-        }
-        _ => return Err(invalid()),
+        DomSpec::Node(_) | DomSpec::Rendered(_) | DomSpec::Hole => return Err(invalid()),
     };
     let tag = match items.first() {
         Some(DomSpec::Value(Value::String(tag))) => tag.as_str(),
@@ -797,7 +805,9 @@ fn render<D: Dom>(
             }
             2
         }
-        Some(DomSpec::Value(Value::Object(attrs))) => {
+        Some(DomSpec::Value(Value::Object(attrs)))
+            if attrs.get("nodeType").is_none_or(Value::is_null) =>
+        {
             set_attributes(dom, &element, attrs)?;
             2
         }
@@ -806,24 +816,32 @@ fn render<D: Dom>(
     fill(
         dom,
         element,
+        None,
         &items[start.min(items.len())..],
         namespace,
         block_arrays_in,
     )
 }
 
-/// Renders a spec's children into its element, which a hole must be the only one of.
+/// Renders a spec's children into its element after `first`, attributes `renderSpec` took for
+/// a DOM node. A hole must be the only child.
 fn fill<D: Dom>(
     dom: &D,
     element: D::Node,
+    first: Option<Value>,
     children: &[DomSpec<D::Node>],
     namespace: Option<&str>,
     block_arrays_in: Option<ValueRef>,
 ) -> Result<Rendered<D::Node>> {
     let mut content_dom = None;
+    let alone = first.is_none() && children.len() == 1;
+    if let Some(first) = &first {
+        let inner = render_json(dom, first, namespace, block_arrays_in)?;
+        append(dom, &element, inner, &mut content_dom)?;
+    }
     for child in children {
         if is_hole(child) {
-            if children.len() > 1 {
+            if !alone {
                 return Err(hole_not_alone());
             }
             return Ok(Rendered {
@@ -832,13 +850,7 @@ fn fill<D: Dom>(
             });
         }
         let inner = stack::grow(|| render_or_text(dom, child, namespace, block_arrays_in))?;
-        dom.append_child(&element, &inner.dom)?;
-        if let Some(inner_content) = inner.content_dom {
-            if content_dom.is_some() {
-                return Err(Error::Range("Multiple content holes".into()));
-            }
-            content_dom = Some(inner_content);
-        }
+        append(dom, &element, inner, &mut content_dom)?;
     }
     Ok(Rendered {
         dom: element,
@@ -883,13 +895,24 @@ fn set_attributes<D: Dom>(dom: &D, element: &D::Node, attrs: &Map) -> Result<()>
     Ok(())
 }
 
-fn set_spec_attributes<D: Dom>(dom: &D, element: &D::Node, attrs: &SpecAttrs) -> Result<()> {
+/// Sets a spec's attributes on its element, as `renderSpec` does those whose `nodeType` is null.
+/// Any others it takes for a DOM node, the element's first child, which they are given as.
+fn spec_attributes<D: Dom>(dom: &D, element: &D::Node, attrs: &SpecAttrs) -> Result<Option<Value>> {
+    if attrs
+        .get("nodeType")
+        .is_some_and(|node_type| !node_type.is_null())
+    {
+        let object = attrs
+            .iter()
+            .map(|(name, value)| (name.into(), value.to_value()));
+        return Ok(Some(Value::Object(object.collect())));
+    }
     for (name, value) in attrs.iter() {
         if !value.is_null() {
             set_attribute(dom, element, name, &value.to_value())?;
         }
     }
-    Ok(())
+    Ok(None)
 }
 
 /// Whether the attributes hold the array `origin` where it could be taken for a spec: starting

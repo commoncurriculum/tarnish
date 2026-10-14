@@ -3,10 +3,11 @@
 // code mark and code block, and a figure whose attribute renders under a name it makes;
 // `htmlAttributes` and `htmlAttributeValues`, each with HTMLAttributes and an application's
 // attribute that renders some of the same ones; `levels` and `noLevels`, with Heading's levels;
-// `multicolor`, with Highlight's; `inline` and `base64`, with Image's; and `renderedValues`, with
-// an application's attributes that render classes and styles of any value. The options reach no
-// Markdown, since MarkdownManager reads the schema only for HTML, which it keeps as text without
-// a `window`. `all` has every group's extensions, as the other recorders record them: it records
+// `multicolor`, with Highlight's; `inline` and `base64`, with Image's; `renderedValues`, with
+// an application's attributes that render classes and styles of any value; and `nodeType`, with
+// attributes named `nodeType`, which renderSpec takes for a DOM node but where they're null. The
+// options reach no Markdown, since MarkdownManager reads the schema only for HTML, which it keeps
+// as text without a `window`. `all` has every group's extensions, as the other recorders record them: it records
 // fixtures/marked.json's and fixtures/dom.json's inputs, and what one group nests in another's.
 import { Extension, Mark, Node as TiptapNode } from "@tiptap/core"
 import { Audio } from "@tiptap/extension-audio"
@@ -147,6 +148,17 @@ const Renders = Extension.create({
     },
   ],
 })
+// A node whose attribute renders under the name `nodeType`.
+const Typed = TiptapNode.create({
+  name: "typed",
+  group: "block",
+  atom: true,
+  addAttributes: () => ({ nodeType: { default: null } }),
+  renderHTML: ({ HTMLAttributes }) => ["div", HTMLAttributes],
+})
+// HTMLAttributes holding a `nodeType`, on an element that holds content and one that doesn't, of
+// a node and of a mark.
+const nodeTyped = nodeType => ({ HTMLAttributes: { "data-x": "y", nodeType } })
 // Tiptap's own extensions, with `extension` configured.
 const replaced = (extension, configured) => own.map(each => (each === extension ? configured : each))
 
@@ -348,6 +360,15 @@ const renderedDocs = rendered.flatMap(([first, second]) => {
   const attrs = { first, second }
   return [doc({ type: "paragraph", attrs, content: [text("p")] }), doc(paragraph(text("b", { type: "bold", attrs })))]
 })
+// Each type of `nodeType` alone, and Typed with a `nodeType` of each kind of value.
+const nodeTypeDocs = [
+  doc(paragraph(text("p"))),
+  doc({ type: "heading", content: [text("h")] }),
+  doc(paragraph(text("a"), { type: "hardBreak" })),
+  doc(paragraph(text("b", "bold"))),
+  doc(paragraph(text("i", "italic"))),
+  ...[1, "1", true, [1], 0, "x", {}, null].map(nodeType => doc({ type: "typed", attrs: { nodeType } })),
+]
 
 // Tiptap's own extensions with an option that reaches the parse rules and renderHTML of `type`:
 // the HTML inputs that hold such an element, and the documents of that type.
@@ -481,6 +502,19 @@ record("tiptap", {
   renderedValues: {
     extensions: [...replaced(Paragraph, Paragraph.configure({ HTMLAttributes: { class: "option", style: "color: blue" } })), Renders],
     serializesHTML: renderedDocs,
+  },
+  nodeType: {
+    extensions: [
+      Document,
+      Paragraph.configure(nodeTyped(null)),
+      Text,
+      Heading.configure(nodeTyped(1)),
+      HardBreak.configure(nodeTyped(0)),
+      Bold.configure(nodeTyped("1")),
+      Italic.configure(nodeTyped("x")),
+      Typed,
+    ],
+    serializesHTML: nodeTypeDocs,
   },
   all: {
     extensions: [

@@ -170,13 +170,7 @@ impl<'c> ValueRef<'c> {
 
     /// `Number(value)`.
     pub fn to_number(self) -> crate::Result<f64> {
-        Ok(match self.kind() {
-            Kind::Null => 0.0,
-            Kind::Bool(boolean) => f64::from(u8::from(boolean)),
-            Kind::Number(number) => number.as_f64(),
-            Kind::String(string) => crate::js::string_to_number(string),
-            Kind::Array(_) | Kind::Object(_) => crate::js::string_to_number(&self.to_js_string()?),
-        })
+        JsonView::to_number(self)
     }
 
     pub fn is_object(self) -> bool {
@@ -360,6 +354,17 @@ pub(crate) trait JsonView<'v>: Copy {
                 return Err(crate::js::no_primitive());
             }
             Kind::Object(_) => Cow::Borrowed("[object Object]"),
+        })
+    }
+
+    /// `Number(value)`.
+    fn to_number(self) -> crate::Result<f64> {
+        Ok(match self.kind() {
+            Kind::Null => 0.0,
+            Kind::Bool(boolean) => f64::from(u8::from(boolean)),
+            Kind::Number(number) => number.as_f64(),
+            Kind::String(string) => crate::js::string_to_number(string),
+            Kind::Array(_) | Kind::Object(_) => crate::js::string_to_number(&self.to_js_string()?),
         })
     }
 
