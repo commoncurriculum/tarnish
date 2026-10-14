@@ -238,14 +238,14 @@ impl<K> Extension<K> {
     /// matches only where `src` starts with `start`.
     pub fn markdown_tokenizer(
         mut self,
-        start: &'static str,
+        start: impl Into<Cow<'static, str>>,
         tokenize: impl Fn(&Units, &[Token], &mut Lexer) -> Result<Option<Token>, Error>
         + Send
         + Sync
         + 'static,
     ) -> Self {
         self.markdown.tokenizer = Some(MarkdownTokenizer {
-            start: Start::Inline(start),
+            start: Start::Inline(start.into()),
             tokenize: Arc::new(tokenize),
         });
         self

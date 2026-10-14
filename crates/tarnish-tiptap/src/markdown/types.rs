@@ -2,6 +2,7 @@
 //! extension's `renderMarkdown`, `parseMarkdown` and `markdownTokenizer` take and return.
 //! `@tiptap/markdown`'s `MarkdownManager` provides the helpers.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use super::ParseHelpers;
@@ -69,7 +70,7 @@ pub(crate) struct MarkdownTokenizer {
 #[derive(Clone)]
 pub(crate) enum Start {
     /// Inline, the level Tiptap defaults to, starting where the string starts in `src`.
-    Inline(&'static str),
+    Inline(Cow<'static, str>),
     /// Block, starting where `start(src)` says.
     Block(BlockStart),
 }

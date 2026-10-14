@@ -305,7 +305,7 @@ impl<'m> Lexer<'m> {
             keep_prev_char = false;
 
             for extension in &marked.inline {
-                if !utf16::starts_with(&src, extension.start) {
+                if !utf16::starts_with(&src, &extension.start) {
                     continue;
                 }
                 if let Some(token) = (extension.tokenizer)(self, &src, &tokens)? {
@@ -445,7 +445,7 @@ impl<'m> Starts<'m> {
                 let starts = marked
                     .inline
                     .iter()
-                    .any(|extension| utf16::starts_with(&after[at..], extension.start));
+                    .any(|extension| utf16::starts_with(&after[at..], &extension.start));
                 if starts {
                     break Some(at + from);
                 }

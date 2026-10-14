@@ -150,9 +150,10 @@ impl MarkdownManager {
             }))
         });
         match start {
-            Start::Inline(start) => self
-                .marked
-                .use_inline_extension(InlineExtension { start, tokenizer }),
+            Start::Inline(start) => self.marked.use_inline_extension(InlineExtension {
+                start: start.clone(),
+                tokenizer,
+            }),
             Start::Block(start) => self.marked.use_block_extension(BlockExtension {
                 start: Some(Arc::clone(start)),
                 tokenizer,

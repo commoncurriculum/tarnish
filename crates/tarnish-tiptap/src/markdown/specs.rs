@@ -1,17 +1,37 @@
 //! `@tiptap/core`'s Markdown specs in `utilities/markdown`: `createBlockMarkdownSpec` and
 //! `createAtomBlockMarkdownSpec`, which give a node Pandoc's `:::name {attributes}` blocks, and
-//! the `parseAttributes` and `serializeAttributes` of their attributes.
+//! the `parseAttributes` and `serializeAttributes` of their attributes, and
+//! `createInlineMarkdownSpec`'s self-closing `[name attributes]` shortcodes.
 
 use std::sync::LazyLock;
 
 use tarnish_js::json::{Map, Value, json};
 use tarnish_js::regexp::{Match, RegExp};
 use tarnish_js::units::Units;
-use tarnish_js::{self as js, Error, stack, utf16};
+use tarnish_js::{self as js, Error, stack, utf16, value};
 use tarnish_markdown::marked::{Lexer, Token};
 
+use super::parse::REGEX_SPECIAL;
 use super::{Parsed, RenderContext, RenderHelpers};
 use crate::NodeExtension;
+
+/// One of `allowedAttributes`: `name`, or `{ name, skipIfDefault }`, which leaves the attribute
+/// out where it is `=== skipIfDefault`.
+#[derive(Clone)]
+pub struct AllowedAttribute {
+    pub name: &'static str,
+    /// `None` for `undefined`, which no attribute is.
+    pub skip_if_default: Option<Value>,
+}
+
+impl From<&'static str> for AllowedAttribute {
+    fn from(name: &'static str) -> Self {
+        AllowedAttribute {
+            name,
+            skip_if_default: None,
+        }
+    }
+}
 
 /// What a block's content is made of.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -64,6 +84,8 @@ impl NodeExtension {
         node_name: &'static str,
         allowed_attributes: &'static [&'static str],
     ) -> Self {
+        let allowed_attributes: Vec<AllowedAttribute> =
+            allowed_attributes.iter().copied().map(Into::into).collect();
         let atom = RegExp::new(
             &format!(r"^:::{node_name}(?:\s+\{{([^}}]*)\}})?\s*:::(?:\n|$)"),
             "",
@@ -95,11 +117,71 @@ impl NodeExtension {
         )
         .render_markdown(move |node, _: &dyn RenderHelpers, _: &RenderContext| {
             let attrs = js::or(node.get("attrs"), &js::EMPTY_OBJECT);
-            let filtered = filter_attributes(attrs, allowed_attributes)?;
+            let filtered = filter_attributes(attrs, &allowed_attributes)?;
             let attrs = serialize_attributes(&Value::Object(filtered))?;
             Ok(format!(":::{node_name}{} :::", braced(&attrs)))
         })
     }
+
+    /// `...createInlineMarkdownSpec({ nodeName, name, selfClosing: true, allowedAttributes,
+    /// parseAttributes, serializeAttributes })`: the node is a `[name attributes]` shortcode,
+    /// which renders the allowed attributes in their order. Its tokenizer starts at `[name`,
+    /// where Tiptap's starts only at a shortcode that closes: the text before one that doesn't
+    /// stops at its `[` anyway.
+    pub fn self_closing_inline_markdown_spec(
+        self,
+        node_name: &'static str,
+        name: &'static str,
+        allowed_attributes: Vec<AllowedAttribute>,
+        parse_attributes: fn(&[u16]) -> Map,
+        serialize_attributes: fn(&Map) -> Result<String, Error>,
+    ) -> Self {
+        let escaped = utf16::to_string(&REGEX_SPECIAL.replace(&utf16::from(name), r"\$&"));
+        let shortcode = RegExp::new(&format!(r"^\[{escaped}\s*([^\]]*)\]"), "");
+        self.markdown_tokenizer(format!("[{name}"), move |src, _, _| {
+            let Some(found) = shortcode.exec(src) else {
+                return Ok(None);
+            };
+            let attributes = parse_attributes(utf16::trim(found.get(1).unwrap_or_default()));
+            let mut extra = Map::with_capacity(2);
+            extra.push("content".into(), json!(""));
+            extra.push("attributes".into(), Value::Object(attributes));
+            Ok(Some(Token {
+                extra: Some(Box::new(extra)),
+                ..Token::new(node_name, src.slice_of(found.all()))
+            }))
+        })
+        .parse_markdown(move |token, helpers| {
+            let attrs = token_attributes(token);
+            Ok(Parsed::Node(helpers.create_node(
+                node_name,
+                Some(attrs),
+                None,
+            )))
+        })
+        .render_markdown(move |node, _: &dyn RenderHelpers, _: &RenderContext| {
+            read_content_text(node)?;
+            let attrs = js::or(node.get("attrs"), &js::EMPTY_OBJECT);
+            let attrs = serialize_attributes(&filter_attributes(attrs, &allowed_attributes)?)?;
+            Ok(match attrs.is_empty() {
+                true => format!("[{name}]"),
+                false => format!("[{name} {attrs}]"),
+            })
+        })
+    }
+}
+
+/// `node.content.filter((child) => child.type === 'text').map((child) => child.text).join('')`
+/// where `node.content && node.content.length > 0`, the text a shortcode with content renders,
+/// as far as reading it fails where the JS does: a self-closing one leaves it out.
+fn read_content_text(node: &Value) -> Result<(), Error> {
+    let content = node.get("content");
+    if js::truthy(content) && js::to_number(value::length(content)?.as_deref())? > 0.0 {
+        for child in value::array_method(content, "node.content.filter")? {
+            value::get(Some(child), "type")?;
+        }
+    }
+    Ok(())
 }
 
 /// `attrs ? ` {${attrs}}` : ''`.
@@ -243,23 +325,30 @@ fn block_tokens(raw_content: &Units, lexer: &mut Lexer) -> Result<Vec<Token>, Er
     Ok(tokens)
 }
 
-/// `filterAttributes(attrs)`: the allowed attributes `attrs` has, in the order they're allowed.
-fn filter_attributes(attrs: &Value, allowed: &[&str]) -> Result<Map, Error> {
+/// `filterAttributes(attrs)`: the allowed attributes `attrs` has, in the order they're allowed,
+/// but those at their `skipIfDefault`.
+fn filter_attributes(attrs: &Value, allowed: &[AllowedAttribute]) -> Result<Map, Error> {
     let mut filtered = Map::new();
-    for key in allowed {
-        // `key in attrs`, which only an object can be asked.
+    for AllowedAttribute {
+        name,
+        skip_if_default,
+    } in allowed
+    {
+        // `name in attrs`, which only an object can be asked.
         let value = match attrs {
-            Value::Object(map) => map.get(key),
+            Value::Object(map) => map.get(name),
             Value::Array(_) => None,
             other => {
                 return Err(Error::Type(format!(
-                    "Cannot use 'in' operator to search for '{key}' in {}",
+                    "Cannot use 'in' operator to search for '{name}' in {}",
                     js::to_string(other)?
                 )));
             }
         };
-        if let Some(value) = value {
-            filtered.insert((*key).into(), value.clone());
+        if let Some(value) = value
+            && !value::strict_equals(Some(value), skip_if_default.as_ref())
+        {
+            filtered.insert((*name).into(), value.clone());
         }
     }
     Ok(filtered)

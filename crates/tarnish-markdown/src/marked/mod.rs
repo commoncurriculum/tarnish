@@ -16,6 +16,7 @@ pub use tokens::{
     Align, Cell, ChildTokens, Def, Destination, List, Table, Token, TokenData, Tokens,
 };
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use tarnish_js::units::Units;
@@ -29,7 +30,7 @@ pub type ListTokenizer = fn(&mut Lexer, &Units) -> Result<Option<Token>, Error>;
 /// is `src.indexOf(start)`, the only kind Tiptap registers for an extension, and its
 /// tokenizer matches only where `src` starts with `start`, so the lexer tries it only there.
 pub struct InlineExtension {
-    pub start: &'static str,
+    pub start: Cow<'static, str>,
     pub tokenizer: ExtensionTokenizer,
 }
 
@@ -115,7 +116,7 @@ impl Marked {
                     let mut lexer = Lexer::new(self);
                     if let Ok(Some(_)) = (extension.tokenizer)(&mut lexer, &rest, &[]) {
                         assert!(
-                            utf16::starts_with(&rest, extension.start),
+                            utf16::starts_with(&rest, &extension.start),
                             "{:?} matched {:?}",
                             extension.start,
                             utf16::to_string(&rest)

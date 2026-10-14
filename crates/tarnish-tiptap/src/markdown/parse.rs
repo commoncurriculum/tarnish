@@ -40,7 +40,9 @@ static CLOSING_TAG: LazyLock<RegExp> = LazyLock::new(|| RegExp::new(r"^<\/[\s]*[
 static OPENING_TAG: LazyLock<RegExp> =
     LazyLock::new(|| RegExp::new(r"^<[\s]*([\w-]+)(\s|>|\/|$)", "i"));
 static SELF_CLOSING: LazyLock<RegExp> = LazyLock::new(|| RegExp::new(r"\/>$", ""));
-static REGEX_SPECIAL: LazyLock<RegExp> = LazyLock::new(|| RegExp::new(r"[.*+?^${}()|[\]\\]", "g"));
+/// What a string escapes, with `\\$&`, to stand for itself in a regex.
+pub(super) static REGEX_SPECIAL: LazyLock<RegExp> =
+    LazyLock::new(|| RegExp::new(r"[.*+?^${}()|[\]\\]", "g"));
 static TASK_ITEM: LazyLock<RegExp> =
     LazyLock::new(|| RegExp::new(r"^(\s*)[-+*]\s+\[([ xX])\]\s+", ""));
 static FIRST_LINE: LazyLock<RegExp> =

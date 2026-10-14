@@ -9,11 +9,9 @@ use tarnish::Node;
 use tarnish::chunk::ValueRef;
 use tarnish_js::json::{Map, Value, json};
 use tarnish_js::regexp::RegExp;
-use tarnish_js::units::Units;
-use tarnish_js::{self as js, Error, utf16, value};
-use tarnish_markdown::marked::{Lexer, Token};
+use tarnish_js::{self as js, Error, utf16};
 
-use crate::markdown::{ParseHelpers, Parsed, RenderContext, RenderHelpers};
+use crate::markdown::specs::AllowedAttribute;
 use crate::{
     DomSpec, ExtensionAttribute, NodeExtension, ParseHtml, SpecAttrs, merge_attributes, node_attr,
 };
@@ -134,34 +132,28 @@ pub fn mention(options: MentionOptions) -> NodeExtension {
             })
         })
         .render_text(move |props| texts.text(props.node))
-        .markdown_tokenizer("[@", tokenize)
-        .parse_markdown(parse_markdown)
-        .render_markdown(render_markdown)
+        .self_closing_inline_markdown_spec(
+            "mention",
+            "@",
+            vec![
+                "id".into(),
+                "label".into(),
+                AllowedAttribute {
+                    name: "mentionSuggestionChar",
+                    skip_if_default: Some(json!("@")),
+                },
+            ],
+            parse_attributes,
+            serialize_attributes,
+        )
 }
 
 fn text<'a>(text: String) -> DomSpec<'a> {
     DomSpec::Text(Cow::Owned(text))
 }
 
-static TOKEN: LazyLock<RegExp> = LazyLock::new(|| RegExp::new(r"^\[@\s*([^\]]*)\]", ""));
 static ATTRIBUTE: LazyLock<RegExp> =
     LazyLock::new(|| RegExp::new(r#"(\w+)=(?:"([^"]*)"|'([^']*)')"#, "g"));
-
-/// The self-closing shortcode's `tokenize`. Its `start` is where a shortcode that closes starts,
-/// but the text before an `[@` that doesn't close stops at the `[` anyway.
-fn tokenize(src: &Units, _: &[Token], _: &mut Lexer) -> Result<Option<Token>, Error> {
-    let Some(found) = TOKEN.exec(src) else {
-        return Ok(None);
-    };
-    let attributes = parse_attributes(utf16::trim(found.get(1).unwrap_or_default()));
-    let mut extra = Map::with_capacity(2);
-    extra.push("content".into(), json!(""));
-    extra.push("attributes".into(), Value::Object(attributes));
-    Ok(Some(Token {
-        extra: Some(Box::new(extra)),
-        ..Token::new("mention", src.slice_of(found.all()))
-    }))
-}
 
 /// Mention's `parseAttributes`: each `key="value"` or `key='value'`, `char` being
 /// `mentionSuggestionChar`. Setting `__proto__` to a string sets nothing.
@@ -184,71 +176,16 @@ fn parse_attributes(attributes: &[u16]) -> Map {
     parsed
 }
 
-fn parse_markdown(token: &Token, helpers: &ParseHelpers) -> Result<Parsed, Error> {
-    let attrs = match token.extra("attributes") {
-        Some(Value::Object(attributes)) => attributes.clone(),
-        _ => Map::new(),
-    };
-    Ok(Parsed::Node(helpers.create_node(
-        "mention",
-        Some(attrs),
-        None,
-    )))
-}
-
-/// The attributes the Markdown keeps, and the default each is left out at.
-const ALLOWED_ATTRIBUTES: [(&str, Option<&str>); 3] = [
-    ("id", None),
-    ("label", None),
-    ("mentionSuggestionChar", Some("@")),
-];
-
-fn render_markdown(
-    node: &Value,
-    _: &dyn RenderHelpers,
-    _: &RenderContext,
-) -> Result<String, Error> {
-    content_text(node)?;
-    let attrs = js::or(node.get("attrs"), &js::EMPTY_OBJECT);
+/// Mention's `serializeAttributes`: each attribute but a `null` one as `key="value"`, `char`
+/// being `mentionSuggestionChar`.
+fn serialize_attributes(attrs: &Map) -> Result<String, Error> {
     let mut serialized = Vec::new();
-    for (name, skip_if_default) in ALLOWED_ATTRIBUTES {
-        let value = match attrs {
-            Value::Object(attrs) => attrs.get(name),
-            Value::Array(_) => None,
-            other => {
-                return Err(Error::Type(format!(
-                    "Cannot use 'in' operator to search for '{name}' in {}",
-                    js::to_string(other)?
-                )));
-            }
-        };
-        let Some(value) = value else { continue };
-        if skip_if_default.is_some_and(|default| value.as_str() == Some(default)) || value.is_null()
-        {
-            continue;
-        }
-        let key = if name == "mentionSuggestionChar" {
-            "char"
-        } else {
-            name
+    for (key, value) in attrs.iter().filter(|(_, value)| !value.is_null()) {
+        let key = match key.as_str() {
+            "mentionSuggestionChar" => "char",
+            key => key,
         };
         serialized.push(format!("{key}=\"{}\"", js::to_string(value)?));
     }
-    Ok(if serialized.is_empty() {
-        "[@]".to_owned()
-    } else {
-        format!("[@ {}]", serialized.join(" "))
-    })
-}
-
-/// The text of the node's text children, which a self-closing shortcode reads and leaves out,
-/// as far as reading it fails where the JS does.
-fn content_text(node: &Value) -> Result<(), Error> {
-    let content = node.get("content");
-    if js::truthy(content) && js::to_number(value::length(content)?.as_deref())? > 0.0 {
-        for child in value::array_method(content, "node.content.filter")? {
-            value::get(Some(child), "type")?;
-        }
-    }
-    Ok(())
+    Ok(serialized.join(" "))
 }
