@@ -11,7 +11,7 @@ use tarnish_fixtures::{read, records, same, version};
 /// extensions the record names.
 fn check(section: &str) {
     let fixtures = read("tiptap");
-    let names = [None, Some("colors"), Some("code")];
+    let names = [None, Some("colors"), Some("code"), Some("renderedValues")];
     let names = names.into_iter().chain(OPTIONED.map(Some));
     let converters: Vec<_> = names.map(|name| (name, Converter::new(name))).collect();
     let mut failures = Vec::new();

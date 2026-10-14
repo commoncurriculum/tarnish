@@ -28,8 +28,8 @@ pub fn merge_objects<'m>(objects: impl IntoIterator<Item = &'m Map>) -> Result<M
         for (key, value) in object.iter() {
             let joined = match merged.get(key) {
                 Some(existing) if js::truthy(Some(existing)) => match key.as_ref() {
-                    "class" => joined_classes(existing, value)?,
-                    "style" => joined_styles(existing, value),
+                    "class" => Value::String(joined_classes(existing, value)?),
+                    "style" => Value::String(joined_styles(existing, value)?),
                     _ => value.clone(),
                 },
                 _ => value.clone(),
@@ -58,13 +58,15 @@ pub(crate) fn merge_configured<'a, const N: usize>(
     ])?)
 }
 
-fn joined_classes(existing: &Value, value: &Value) -> Result<Value, Error> {
-    let Value::String(existing) = existing else {
-        return Err(value::not_a_function("mergedAttributes[key].split"));
-    };
+/// The classes of a truthy `existing` with those of `value` it doesn't hold after them. `value`'s
+/// string is made first, and an `existing` that isn't a string has no `split` to call.
+fn joined_classes(existing: &Value, value: &Value) -> Result<String, Error> {
     let value = match js::truthy(Some(value)) {
         true => Some(js::to_string(value)?),
         false => None,
+    };
+    let Value::String(existing) = existing else {
+        return Err(value::not_a_function("mergedAttributes[key].split"));
     };
     let mut classes: Vec<&str> = existing.split(' ').collect();
     let inserted: Vec<&str> = value
@@ -73,40 +75,36 @@ fn joined_classes(existing: &Value, value: &Value) -> Result<Value, Error> {
         .filter(|class| !classes.contains(class))
         .collect();
     classes.extend(inserted);
-    Ok(Value::String(classes.join(" ")))
+    Ok(classes.join(" "))
 }
 
-/// The styles of `parseStyleEntries`, which reads only a string's.
-fn joined_styles(existing: &Value, value: &Value) -> Value {
-    let declarations = |value: &Value| match value {
-        Value::String(styles) => parse_style_entries(styles).collect(),
-        _ => Vec::new(),
-    };
+/// Each property of `existing`'s styles and then `value`'s, where it first comes, with the value
+/// it last has.
+fn joined_styles(existing: &Value, value: &Value) -> Result<String, Error> {
     let mut styles = IndexMap::new();
-    for (property, style) in declarations(existing)
-        .into_iter()
-        .chain(declarations(value))
-    {
+    let existing = parse_style_entries(existing)?;
+    for (property, style) in existing.into_iter().chain(parse_style_entries(value)?) {
         styles.insert(property, style);
     }
     let joined: Vec<String> = styles
         .iter()
         .map(|(property, style)| format!("{property}: {style}"))
         .collect();
-    Value::String(joined.join("; "))
+    Ok(joined.join("; "))
 }
 
 /// The attributes rendered for a node or mark, as an object of their values.
 pub fn rendered_object(html: &SpecAttrs) -> Map {
     html.iter()
-        .map(|(key, value)| {
-            let value = match value {
-                AttrValue::Json(value) => value.to_value(),
-                AttrValue::Text(text) => Value::String(text.to_string()),
-            };
-            (key.into(), value)
-        })
+        .map(|(key, value)| (key.into(), attr_value(value)))
         .collect()
+}
+
+fn attr_value(value: &AttrValue) -> Value {
+    match value {
+        AttrValue::Json(value) => value.to_value(),
+        AttrValue::Text(text) => Value::String(text.to_string()),
+    }
 }
 
 /// An object of attributes as an element's, which leaves out those `null` or `undefined`.
@@ -144,69 +142,136 @@ fn joined<'a>(
     value: AttrValue<'a>,
 ) -> Result<AttrValue<'a>, Error> {
     Ok(match key {
-        "class" => {
-            let existing = existing.to_js_string()?;
-            let value_classes = value.truthy().then(|| value.to_js_string()).transpose()?;
-            let mut classes: Vec<&str> = existing.split(' ').collect();
-            let inserted: Vec<&str> = value_classes
-                .iter()
-                .flat_map(|value| value.split(' '))
-                .filter(|class| !classes.contains(class))
-                .collect();
-            classes.extend(inserted);
-            classes.join(" ").into()
-        }
-        "style" => {
-            let existing = existing.to_js_string()?;
-            let mut styles = IndexMap::new();
-            let value = value.as_str().unwrap_or_default();
-            for (property, style) in
-                parse_style_entries(&existing).chain(parse_style_entries(value))
-            {
-                styles.insert(property, style);
-            }
-            styles
-                .iter()
-                .map(|(property, style)| format!("{property}: {style}"))
-                .collect::<Vec<_>>()
-                .join("; ")
-                .into()
-        }
+        "class" => joined_classes(&attr_value(existing), &attr_value(&value))?.into(),
+        "style" => joined_styles(&attr_value(existing), &attr_value(&value))?.into(),
         _ => value,
     })
 }
 
-/// The `property: value` pairs of a style declaration list, split on the semicolons that are
-/// outside quotes and parentheses.
-fn parse_style_entries(styles: &str) -> impl Iterator<Item = (String, String)> + '_ {
-    split_style_declarations(styles)
-        .into_iter()
+/// `parseStyleEntries(styles)`: the `property: value` pairs of `styles || ''`'s declarations.
+fn parse_style_entries(styles: &Value) -> Result<Vec<(String, String)>, Error> {
+    let declarations = match js::truthy(Some(styles)) {
+        true => split_style_declarations(styles)?,
+        false => Vec::new(),
+    };
+    Ok(declarations
+        .iter()
         .filter_map(|declaration| {
             let (property, value) = declaration.split_once(':')?;
             let (property, value) = (js::trim(property), js::trim(value));
             (!property.is_empty() && !value.is_empty())
                 .then(|| (property.to_string(), value.to_string()))
         })
+        .collect())
 }
 
-fn split_style_declarations(styles: &str) -> Vec<&str> {
-    let mut declarations = Vec::new();
-    let (mut single, mut double, mut depth, mut start) = (false, false, 0, 0);
-    for (index, character) in styles.char_indices() {
+/// `splitStyleDeclarations(styles)`, which walks `styles[0]` to `styles[styles.length - 1]`: a
+/// string's characters, an array's items, an object's as an array-like's, and nothing of a
+/// number or boolean, which has no `length`.
+fn split_style_declarations(styles: &Value) -> Result<Vec<String>, Error> {
+    let mut split = Split::default();
+    match styles {
+        Value::String(styles) => styles
+            .chars()
+            .for_each(|character| split.character(character)),
+        Value::Array(items) => {
+            for item in items {
+                split.item(item)?;
+            }
+        }
+        Value::Object(object) => {
+            // `i < styles.length` holds for each integer from 0 below it.
+            let length = js::to_number(object.get("length"))?;
+            let count = if length > 0.0 { length.ceil() } else { 0.0 };
+            let mut indexed: Vec<(f64, &Value)> = object
+                .iter()
+                .filter_map(|(key, item)| Some((array_index(key)?, item)))
+                .filter(|(index, _)| *index < count)
+                .collect();
+            indexed.sort_by(|(one, _), (other, _)| one.total_cmp(other));
+            let mut next = 0.0;
+            for (index, item) in indexed {
+                split.undefined(index - next)?;
+                split.item(item)?;
+                next = index + 1.0;
+            }
+            split.undefined(count - next)?;
+        }
+        _ => {}
+    }
+    if !split.current.is_empty() {
+        split.declarations.push(split.current);
+    }
+    Ok(split.declarations)
+}
+
+/// The integer `i` whose `String(i)` is `key`.
+fn array_index(key: &str) -> Option<f64> {
+    let canonical = key == "0"
+        || (key.starts_with(['1', '2', '3', '4', '5', '6', '7', '8', '9'])
+            && key.bytes().all(|byte| byte.is_ascii_digit()));
+    if !canonical {
+        return None;
+    }
+    key.parse::<u64>().ok().map(|index| index as f64)
+}
+
+/// The declarations `splitStyleDeclarations` has split off, and the one it's in.
+#[derive(Default)]
+struct Split {
+    declarations: Vec<String>,
+    current: String,
+    single: bool,
+    double: bool,
+    depth: usize,
+}
+
+impl Split {
+    /// A character of a string, split on the semicolons outside quotes and parentheses.
+    fn character(&mut self, character: char) {
+        let quoted = self.single || self.double;
         match character {
-            '\'' if !double => single = !single,
-            '"' if !single => double = !double,
-            '(' if !single && !double => depth += 1,
-            ')' if !single && !double && depth > 0 => depth -= 1,
-            ';' if !single && !double && depth == 0 => {
-                declarations.push(&styles[start..index]);
-                start = index + 1;
+            '\'' if !self.double => self.single = !self.single,
+            '"' if !self.single => self.double = !self.double,
+            '(' if !quoted => self.depth += 1,
+            ')' if !quoted && self.depth > 0 => self.depth -= 1,
+            ';' if !quoted && self.depth == 0 => {
+                self.declarations.push(std::mem::take(&mut self.current));
+                return;
             }
             _ => {}
         }
+        self.current.push(character);
     }
-    if start < styles.len() {
-        declarations.push(&styles[start..]);
+
+    /// An item that is a quote, a parenthesis or a semicolon is read as that character is, and
+    /// any other joins the declaration as `current += item` makes it.
+    fn item(&mut self, item: &Value) -> Result<(), Error> {
+        match item {
+            Value::String(text) => match text.as_str() {
+                "'" | "\"" | "(" | ")" | ";" => self.character(text.chars().next().expect("one")),
+                text => self.current.push_str(text),
+            },
+            item => self.current.push_str(&js::to_string(item)?),
+        }
+        Ok(())
     }
-    declarations
+
+    /// `count` items of `undefined`, each `"undefined"` in the declaration, as long as memory
+    /// allows.
+    fn undefined(&mut self, count: f64) -> Result<(), Error> {
+        const UNDEFINED: &str = "undefined";
+        if count <= 0.0 {
+            return Ok(());
+        }
+        let additional = count * UNDEFINED.len() as f64;
+        if additional > isize::MAX as f64 {
+            return Err(js::invalid_string_length());
+        }
+        js::reserve(&mut self.current, additional as usize)?;
+        for _ in 0..count as u64 {
+            self.current.push_str(UNDEFINED);
+        }
+        Ok(())
+    }
 }

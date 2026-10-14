@@ -301,6 +301,36 @@ fn given() -> PlainExtension {
     }])
 }
 
+/// Tiptap's own extensions, Paragraph with a class and a style, and [`renders`].
+fn rendered_values() -> Vec<Extension> {
+    let mut extensions = extensions();
+    extensions[1] = paragraph(ParagraphOptions {
+        html_attributes: object!({"class": "option", "style": "color: blue"}),
+    })
+    .into();
+    extensions.push(renders().into());
+    extensions
+}
+
+/// An application's two attributes on paragraphs and bold, each rendering the object a document
+/// gives it.
+fn renders() -> PlainExtension {
+    let attribute = |name: &'static str| {
+        ExtensionAttribute::new(name, Value::Null).render_html(move |attributes, rendered| {
+            if let Some(object) = attributes.get(name).filter(|object| object.is_object()) {
+                for (key, value) in object.entries() {
+                    rendered.merge(key, value)?;
+                }
+            }
+            Ok(())
+        })
+    };
+    PlainExtension::create("renders").add_global_attributes(vec![GlobalAttributes {
+        types: GlobalTypes::Named(&["paragraph", "bold"]),
+        attributes: vec![attribute("first"), attribute("second")],
+    }])
+}
+
 /// An application's code mark and code block, whose text stays as it is, and a figure whose
 /// attribute renders under a name it makes.
 fn code() -> Vec<Extension> {
@@ -355,6 +385,7 @@ impl Converter {
             None => (self::extensions(), None),
             Some("colors") => (colors(), None),
             Some("code") => (code(), None),
+            Some("renderedValues") => (rendered_values(), None),
             Some(other) => match optioned(other) {
                 Some(extensions) => (extensions, None),
                 None => {

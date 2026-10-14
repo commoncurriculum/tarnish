@@ -16,6 +16,8 @@
 // changes: `htmlAttributes` and `htmlAttributeValues`, each with HTMLAttributes and an
 // application's attribute that renders some of the same ones; `levels` and `noLevels`, with
 // Heading's levels; `multicolor`, with Highlight's; and `inline` and `base64`, with Image's.
+// `renderedValues`, with an application's attributes that render classes and styles of any value,
+// records its schema and the HTML its documents serialize to.
 import { readFileSync } from "node:fs"
 import { Extension, Mark, Node as TiptapNode, getSchema } from "@tiptap/core"
 import { Bold } from "@tiptap/extension-bold"
@@ -145,6 +147,20 @@ const configured = (attributes, extra) => {
     Given,
   ]
 }
+// An application's two attributes on paragraphs and bold, each rendering the object a document
+// gives it, so that the second's class and style join the first's whatever they hold.
+const Renders = Extension.create({
+  name: "renders",
+  addGlobalAttributes: () => [
+    {
+      types: ["paragraph", "bold"],
+      attributes: {
+        first: { default: null, renderHTML: ({ first }) => first },
+        second: { default: null, renderHTML: ({ second }) => second },
+      },
+    },
+  ],
+})
 // Tiptap's own extensions, with `extension` configured.
 const replaced = (extension, configured) => own.map(each => (each === extension ? configured : each))
 const configurations = {
@@ -161,6 +177,10 @@ const configurations = {
   multicolor: replaced(Highlight, Highlight.configure({ multicolor: true })),
   inline: replaced(Image, Image.configure({ inline: true })),
   base64: replaced(Image, Image.configure({ allowBase64: true })),
+  renderedValues: [
+    ...replaced(Paragraph, Paragraph.configure({ HTMLAttributes: { class: "option", style: "color: blue" } })),
+    Renders,
+  ],
 }
 const converters = Object.fromEntries(
   Object.entries(configurations).map(([name, extensions]) => {
@@ -456,6 +476,47 @@ const serializesMarkdown = [
   ...documents("code", codeDocs),
 ].map(([name, doc]) => ({ ...named(name), doc, ...outcome(() => ({ markdown: converters[name].manager.serialize(doc) })) }))
 
+// What Renders' two attributes render: classes and styles that aren't strings, which only HTML
+// reads, joined onto strings and joined onto. Each pair renders on a paragraph, whose
+// HTMLAttributes they join after, and on bold text. The styles are custom properties, which an
+// element's style keeps whatever their values.
+const rendered = [
+  [{ class: 5 }, { class: "x" }],
+  [{ class: [1, "a"] }, { class: "x" }],
+  [{ class: [] }, { class: "x" }],
+  [{ class: {} }, { class: "x" }],
+  [{ class: true }, { class: "x" }],
+  [{ class: 5 }, { class: { toString: 1 } }],
+  [{ class: "a" }, { class: 5 }],
+  [{ class: "a" }, { class: [1, "b", null] }],
+  [{ class: "a" }, { class: {} }],
+  [{ class: "a" }, { class: { toString: 1 } }],
+  [{ class: "a" }, { class: 0 }],
+  [{ class: 0 }, { class: "x" }],
+  [{ class: 5 }, null],
+  [{ style: ["--a: red"] }, { style: "--b: 1px" }],
+  [{ style: "--a: red" }, { style: ["--b: 1px", 5] }],
+  [{ style: ["--a: red", ";", "--b: 1px"] }, { style: "--c: 0" }],
+  [{ style: ["--a: red; --b: 1px"] }, { style: ["--c: ", null, [1, [2, null]], { d: 1 }, true, 5] }],
+  [{ style: ["--a: x'", ";", "--b: y"] }, { style: "--c: z" }],
+  [{ style: ["--a: ", "'", ";", "'", ";", "--b: y"] }, { style: "--c: z" }],
+  [{ style: ["--a: f", "(", ";", ")", ";", "--b: y"] }, { style: "--c: z" }],
+  [{ style: 5 }, { style: "--b: 1px" }],
+  [{ style: true }, { style: [] }],
+  [{ style: {} }, { style: "--b: 1px" }],
+  [{ style: { length: 2, 0: "--a: red" } }, { style: "--b: 1px" }],
+  [{ style: { length: "1.5", 1: ";", 0: "--a: red" } }, { style: "--b: 1px" }],
+  [{ style: "--a: red" }, { style: [{ toString: 1 }] }],
+  [{ style: ["--a: red"] }, null],
+]
+const renderedDocs = rendered.flatMap(([first, second]) => {
+  const attrs = { first, second }
+  return [
+    { type: "doc", content: [{ type: "paragraph", attrs, content: [{ type: "text", text: "p" }] }] },
+    paragraph({ type: "text", text: "b", marks: [{ type: "bold", attrs }] }),
+  ]
+})
+
 const paragraphs = depths.map(depth => nested("paragraph", depth))
 // The documents of a configuration with an option set that hold its type.
 const optionedDocs = ([name, { type }]) =>
@@ -469,6 +530,7 @@ const serializesHTML = [
   ...documents("colors", colorDocs),
   ...documents("code", codeDocs),
   ...Object.entries(optioned).flatMap(optionedDocs),
+  ...renderedDocs.map(doc => ["renderedValues", doc]),
 ].map(([name, doc]) => ({
   ...named(name),
   doc,
