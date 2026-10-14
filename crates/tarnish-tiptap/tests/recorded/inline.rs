@@ -398,7 +398,7 @@ fn bold_in_link(depth: usize) -> Vec<Value> {
     opening.chain([middle]).chain(closing).collect()
 }
 
-const NESTED: [Nested; 8] = [
+const NESTED: [Nested; 7] = [
     Nested {
         what: "spans with a font size in a link",
         configuration: "deep",
@@ -517,19 +517,6 @@ const NESTED: [Nested; 8] = [
         },
         output: |depth| {
             let paragraph = json!({"type": "paragraph", "content": bold_in_link(depth)});
-            json!({"doc": {"type": "doc", "content": [paragraph]}})
-        },
-    },
-    // Without an extension for blockquotes, the manager parses a blockquote's content.
-    Nested {
-        what: "a mention in blockquotes",
-        configuration: "deep",
-        section: "parsesMarkdown",
-        depth: PARSES,
-        input: |depth| json!(">".repeat(depth) + " [@ id=\"x\"]"),
-        output: |_| {
-            let mention = json!({"type": "mention", "attrs": {"id": "x"}});
-            let paragraph = json!({"type": "paragraph", "content": [mention]});
             json!({"doc": {"type": "doc", "content": [paragraph]}})
         },
     },

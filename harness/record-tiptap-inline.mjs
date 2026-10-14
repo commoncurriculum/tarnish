@@ -18,7 +18,7 @@ import { TextAlign } from "@tiptap/extension-text-align"
 import * as textStyles from "@tiptap/extension-text-style"
 import { BackgroundColor, FontSize, LineHeight, TextStyle, TextStyleKit } from "@tiptap/extension-text-style"
 import { UniqueID } from "@tiptap/extension-unique-id"
-import { doc, domInputs, fixture, markedInputs, own, paragraph, record, text, unique, withParsed } from "./tiptap.mjs"
+import { doc, fixture, own, paragraph, record, text, unique, withParsed } from "./tiptap.mjs"
 
 // Global attributes for each kind of `types`: `'*'`, `'nodes'`, `'marks'`, an array that names a
 // type twice and one there isn't, and an array an extension makes of the node extensions it's given.
@@ -328,10 +328,7 @@ const linkedDeep = depth => {
   return doc(node)
 }
 const delimited = (open, close, depth) => open.repeat(depth) + "x" + close.repeat(depth)
-const deepMarkdown = depths.flatMap(depth => [
-  "[" + delimited("**a ", " a**", depth) + "](u)",
-  ">".repeat(depth) + ' [@ id="x"]',
-])
+const deepMarkdown = depths.map(depth => "[" + delimited("**a ", " a**", depth) + "](u)")
 const deepDocs = depths.flatMap(depth => [
   boxed(depth, level => ({ id: `b${level}`, textAlign: alignment(level) })),
   linkedDeep(depth),
@@ -397,7 +394,7 @@ record("tiptap-inline", {
   specs: { extensions: [Document, Paragraph, Text, Chip, Rule, Tag, Free], generatesText: withTextOptions(specsTextDocs) },
   styles: {
     extensions: [...own, ...styles],
-    parsesHTML: [...styleHTML, ...domInputs(/style|<span/i)],
+    parsesHTML: styleHTML,
     serializesHTML: withParsed(styleDocs),
   },
   // The kit's extensions are those of `styles`.
@@ -426,7 +423,7 @@ record("tiptap-inline", {
   textAlignNone: { extensions: [...own, TextAlign], parsesHTML: alignHTML, serializesHTML: withParsed(alignDocs) },
   textAlign: {
     extensions: [...own, TextAlign.configure({ types: ["heading", "paragraph"] })],
-    parsesHTML: [...alignHTML, ...domInputs(/style|align/i)],
+    parsesHTML: alignHTML,
     serializesHTML: withParsed(alignDocs),
   },
   // An alignment's style joins a font size's, which goes first.
@@ -441,8 +438,8 @@ record("tiptap-inline", {
   },
   link: {
     extensions: [...own, Link],
-    parsesMarkdown: [...linkMarkdown, ...markedInputs(/\[|<|https?:|www\.|@|ftp:/)],
-    parsesHTML: [...linkHTML, ...domInputs(/<a\b/i)],
+    parsesMarkdown: linkMarkdown,
+    parsesHTML: linkHTML,
     serializesMarkdown: withParsed(linkDocs),
     serializesHTML: withParsed(linkDocs),
   },
@@ -482,8 +479,8 @@ record("tiptap-inline", {
   },
   mention: {
     extensions: [...own, Mention],
-    parsesMarkdown: [...mentionMarkdown, ...markedInputs(/\[|@/)],
-    parsesHTML: [...mentionHTML, ...domInputs(/data-|<span/i)],
+    parsesMarkdown: mentionMarkdown,
+    parsesHTML: mentionHTML,
     serializesMarkdown: withParsed(mentionDocs),
     serializesHTML: withParsed(mentionDocs),
     generatesText: withTextOptions(mentioned),

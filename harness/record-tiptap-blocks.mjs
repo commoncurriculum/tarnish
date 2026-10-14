@@ -29,7 +29,7 @@ import { Twitch } from "@tiptap/extension-twitch"
 import { Youtube } from "@tiptap/extension-youtube"
 import { common, createLowlight } from "lowlight"
 import { outcome } from "./fixture.mjs"
-import { doc, domInputs, markedInputs, otherAttributes, paragraph as p, record, text, withParsed } from "./tiptap.mjs"
+import { doc, otherAttributes, paragraph as p, record, text, withParsed } from "./tiptap.mjs"
 
 const base = [Document, Paragraph, Text, Heading, HardBreak, Bold, Italic]
 const details = [Details, DetailsSummary, DetailsContent]
@@ -606,8 +606,8 @@ record(
         TableOfContents,
         RubyText,
       ],
-      parsesMarkdown: [...Object.values(markdown).flat(), ...markedInputs(), ...deepMarkdown],
-      parsesHTML: [...Object.values(htmlInputs).flat(), ...domInputs(), ...deepHTML],
+      parsesMarkdown: [...Object.values(markdown).flat(), ...deepMarkdown],
+      parsesHTML: [...Object.values(htmlInputs).flat(), ...deepHTML],
       serializesMarkdown: withParsed([...Object.values(docs).flat(), ...deepDocs]),
       serializesHTML: withParsed([...Object.values(docs).flat(), ...deepDocs]),
       generatesText: emojiTexts.map(doc => ({ doc })),

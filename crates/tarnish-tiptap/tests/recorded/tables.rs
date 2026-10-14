@@ -210,8 +210,6 @@ fn converts_tables_nested_as_deeply_as_memory_allows() {
 
 const DOCUMENTS: usize = 20_000;
 const PARSES: usize = 2_000;
-/// Blockquotes nest tables less deeply, as each level lexes the rest of its source again.
-const QUOTES: usize = 500;
 /// Each level's Markdown holds the next's twice, once as its cell and once as the dashes under
 /// its header, which are as wide, so the Markdown doubles with each level.
 const MARKDOWNS: usize = 16;
@@ -237,14 +235,6 @@ fn parsed_table(depth: usize) -> Value {
     json!({"doc": {"type": "doc", "content": [nested]}})
 }
 
-/// A table of one header cell holding `content`, as Markdown parses to it.
-fn header_table(content: Value) -> Value {
-    let header =
-        json!({"type": "tableHeader", "content": [{"type": "paragraph", "content": [content]}]});
-    let table = json!({"type": "table", "content": [{"type": "tableRow", "content": [header]}]});
-    json!({"doc": {"type": "doc", "content": [table]}})
-}
-
 /// The Markdown of a table of one cell, which has no header, holding `cell`'s text.
 fn table_markdown(cell: &str) -> String {
     let width = cell.len().max(3);
@@ -253,7 +243,7 @@ fn table_markdown(cell: &str) -> String {
     format!("\n| {spaces} |\n| {dashes} |\n| {cell}{pad} |\n")
 }
 
-const NESTED: [Nested; 5] = [
+const NESTED: [Nested; 3] = [
     Nested {
         what: "HTML of tables in cells",
         configuration: "tables",
@@ -296,30 +286,5 @@ const NESTED: [Nested; 5] = [
             Value::String(html)
         },
         output: parsed_table,
-    },
-    // Without an extension for blockquotes, the manager parses a blockquote's content.
-    Nested {
-        what: "tables in blockquotes",
-        configuration: "tables",
-        section: "parsesMarkdown",
-        depth: QUOTES,
-        input: |depth| {
-            Value::String("> ".repeat(depth) + "| a |\n" + &"> ".repeat(depth) + "| - |")
-        },
-        output: |_| header_table(json!({"type": "text", "text": "a"})),
-    },
-    // Table's tokenizer lexes the innermost table again, its code span's pipe escaped.
-    Nested {
-        what: "tables with code spans in blockquotes",
-        configuration: "tables",
-        section: "parsesMarkdown",
-        depth: QUOTES,
-        input: |depth| {
-            let quotes = "> ".repeat(depth);
-            Value::String(format!("{quotes}| `a|b` |\n{quotes}| - |"))
-        },
-        output: |_| {
-            header_table(json!({"type": "text", "text": "a|b", "marks": [{"type": "code"}]}))
-        },
     },
 ];

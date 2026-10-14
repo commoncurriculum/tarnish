@@ -6,22 +6,40 @@
 // `multicolor`, with Highlight's; `inline` and `base64`, with Image's; and `renderedValues`, with
 // an application's attributes that render classes and styles of any value. The options reach no
 // Markdown, since MarkdownManager reads the schema only for HTML, which it keeps as text without
-// a `window`.
+// a `window`. `all` has every group's extensions, as the other recorders record them: it records
+// fixtures/marked.json's and fixtures/dom.json's inputs, and what one group nests in another's.
 import { Extension, Mark, Node as TiptapNode } from "@tiptap/core"
+import { Audio } from "@tiptap/extension-audio"
+import { Blockquote } from "@tiptap/extension-blockquote"
 import { Bold } from "@tiptap/extension-bold"
+import { Code } from "@tiptap/extension-code"
+import { CodeBlock } from "@tiptap/extension-code-block"
+import { Details, DetailsContent, DetailsSummary } from "@tiptap/extension-details"
 import { Document } from "@tiptap/extension-document"
+import { Emoji } from "@tiptap/extension-emoji"
 import { HardBreak } from "@tiptap/extension-hard-break"
 import { Heading } from "@tiptap/extension-heading"
 import { Highlight } from "@tiptap/extension-highlight"
+import { HorizontalRule } from "@tiptap/extension-horizontal-rule"
 import { Image } from "@tiptap/extension-image"
 import { Italic } from "@tiptap/extension-italic"
+import { Link } from "@tiptap/extension-link"
+import { BulletList, ListItem, OrderedList, TaskItem, TaskList } from "@tiptap/extension-list"
+import { Mathematics } from "@tiptap/extension-mathematics"
+import { Mention } from "@tiptap/extension-mention"
 import { Paragraph } from "@tiptap/extension-paragraph"
+import { RubyText } from "@tiptap/extension-ruby-text"
 import { Strike } from "@tiptap/extension-strike"
 import { Subscript } from "@tiptap/extension-subscript"
 import { Superscript } from "@tiptap/extension-superscript"
+import { Table, TableCell, TableHeader, TableRow } from "@tiptap/extension-table"
+import { TableOfContents } from "@tiptap/extension-table-of-contents"
 import { Text } from "@tiptap/extension-text"
-import { Color, TextStyle } from "@tiptap/extension-text-style"
+import { TextAlign } from "@tiptap/extension-text-align"
+import { BackgroundColor, Color, FontFamily, FontSize, LineHeight, TextStyle } from "@tiptap/extension-text-style"
+import { Twitch } from "@tiptap/extension-twitch"
 import { Underline } from "@tiptap/extension-underline"
+import { Youtube } from "@tiptap/extension-youtube"
 import {
   doc,
   domInputs,
@@ -35,12 +53,12 @@ import {
   withParsed,
 } from "./tiptap.mjs"
 
-const Code = Mark.create({
+const ApplicationCode = Mark.create({
   name: "code",
   code: true,
   renderMarkdown: (node, helpers) => "`" + helpers.renderChildren(node) + "`",
 })
-const CodeBlock = TiptapNode.create({
+const ApplicationCodeBlock = TiptapNode.create({
   name: "codeBlock",
   code: true,
   group: "block",
@@ -154,6 +172,11 @@ const deepMarkdown = depths.flatMap(depth => [
 const deepHTML = depths.flatMap(depth => ["div", "p", "b", "span style=color:red"].map(tag => `<${tag}>`.repeat(depth) + "x"))
 const deepDocs = depths.flatMap(depth => ["doc", "paragraph", "bold", "italic", "strike"].map(type => nested(type, depth)))
 const paragraphs = depths.map(depth => nested("paragraph", depth))
+// Tables and mentions in blockquotes, which Table's tokenizer and Mention's lex again in each.
+const quotedMarkdown = depths.flatMap(depth => {
+  const quotes = "> ".repeat(depth)
+  return [`${quotes}| a |\n${quotes}| - |`, `${quotes}| \`a|b\` |\n${quotes}| - |`, ">".repeat(depth) + ' [@ id="x"]']
+})
 
 const ownMarkdown = [
   "",
@@ -195,7 +218,7 @@ const pickedHTML = [
   "<img src='a.png' alt='A' title='T' width='10' height='5'><img alt='no src'><img src='data:image/png;base64,AA'>",
   "loose text",
 ]
-const ownHTML = unique([...pickedHTML, ...domInputs(), ...deepHTML])
+const ownHTML = unique([...pickedHTML, ...deepHTML])
 // The HTML inputs the options change the parses of, which Tiptap's own don't record:
 // harness/record-tiptap-inline.mjs reads the documents of theirs.
 const optionHTML = [
@@ -338,10 +361,82 @@ const optioned = (extensions, element, type) => ({
 // HTMLAttributes reach only renderHTML.
 const attributed = extensions => ({ extensions, serializesHTML: [...docs, ...paragraphs, ...optionDocs] })
 
+// What one group nests in another's: lists in blockquotes, details and table cells, blocks in
+// list items, and links, mentions and styles in table cells.
+const combinedMarkdown = [
+  "> - a\n> - b\n>\n> 1. c",
+  "> - [ ] task\n>   - [x] done",
+  "- a\n\n  > quote\n\n  ```js\n  code\n  ```\n\n  ---",
+  "1. # heading\n\n   $x$ and :smile:",
+  '| [link](u) | [@ id="m"] |\n| - | - |\n| **b** `c` | $x$ |',
+  ":::details\n\n:::detailsSummary\n\nsummary\n\n:::\n\n:::detailsContent\n\n- a\n- [ ] b\n\n> q\n\n:::\n\n:::",
+  "> :::details\n> x\n> :::",
+  ...quotedMarkdown,
+]
+const combinedHTML = [
+  "<blockquote><ul><li>a</li></ul><ol><li><p>b</p></li></ol></blockquote>",
+  '<table><tr><td><ul><li>a</li></ul><ul data-type="taskList"><li data-type="taskItem" data-checked="true">t</li></ul></td><td><ol start="3"><li>b</li></ol></td></tr></table>',
+  '<table><tr><th><a href="https://x.test">link</a></th><td><span data-type="mention" data-id="m" data-label="M"></span> <span style="color: red; font-size: 2px">styled</span></td></tr></table>',
+  '<details open><summary>s <b>bold</b></summary><div data-type="detailsContent"><ul><li>a</li></ul><table><tr><td>cell</td></tr></table></div></details>',
+  "<ul><li><blockquote><p>q</p></blockquote><pre><code class='language-js'>c</code></pre><hr></li></ul>",
+  '<table><tr><td><blockquote><p>quoted</p></blockquote><p style="text-align: right">r</p></td></tr></table>',
+  '<blockquote><p style="text-align: center"><a href="u"><span style="font-size: 3px">x</span></a></p></blockquote>',
+  '<ul data-type="taskList"><li data-type="taskItem" data-checked="false"><label><input type="checkbox"><span></span></label><div><p>t <code>c</code></p></div></li></ul>',
+]
+const item = (...content) => ({ type: "listItem", content })
+const bullets = (...items) => ({ type: "bulletList", content: items.map(each => item(paragraph(text(each)))) })
+const cell = (...content) => ({ type: "tableCell", content })
+const table = (...cells) => ({ type: "table", content: [{ type: "tableRow", content: cells }] })
+const combinedDocs = [
+  doc({ type: "blockquote", content: [bullets("a", "b"), paragraph(text("after"))] }),
+  doc(
+    table(
+      cell(bullets("a", "b")),
+      cell({ type: "orderedList", attrs: { start: 3 }, content: [item(paragraph(text("c")))] }),
+    ),
+  ),
+  doc(
+    table(
+      cell(paragraph(text("link", { type: "link", attrs: { href: "u" } }), { type: "mention", attrs: { id: "m" } })),
+      cell(paragraph(text("styled", { type: "textStyle", attrs: { color: "red" } }))),
+    ),
+  ),
+  doc({
+    type: "details",
+    content: [
+      { type: "detailsSummary", content: [text("s")] },
+      {
+        type: "detailsContent",
+        content: [
+          bullets("a"),
+          { type: "taskList", content: [{ type: "taskItem", attrs: { checked: true }, content: [paragraph(text("t"))] }] },
+        ],
+      },
+    ],
+  }),
+  doc({
+    type: "bulletList",
+    content: [
+      item(
+        paragraph(text("a")),
+        { type: "blockquote", content: [paragraph(text("q"))] },
+        { type: "codeBlock", attrs: { language: "js" }, content: [text("c")] },
+      ),
+    ],
+  }),
+  doc({
+    type: "blockquote",
+    content: [
+      { type: "heading", attrs: { level: 2, textAlign: "center" }, content: [text("h")] },
+      table(cell(paragraph(text("in a quote")))),
+    ],
+  }),
+]
+
 record("tiptap", {
   own: {
     extensions: own,
-    parsesMarkdown: [...ownMarkdown, ...markedInputs(), ...deepMarkdown],
+    parsesMarkdown: [...ownMarkdown, ...deepMarkdown],
     parsesHTML: ownHTML,
     serializesMarkdown: withParsed([...docs, ...deepDocs, ...unreadable]),
     // `doc` has no toDOM, so the serializer has nothing to call for a doc inside the doc.
@@ -355,7 +450,7 @@ record("tiptap", {
     serializesHTML: withParsed(colorDocs),
   },
   code: {
-    extensions: [Document, Paragraph, Text, Code, CodeBlock, Figure],
+    extensions: [Document, Paragraph, Text, ApplicationCode, ApplicationCodeBlock, Figure],
     parsesMarkdown: ["`*a* <b>` \\*c\\*\n\n```\n*d* <e>\n```", "`code` *em*", "```\nblock\n```"],
     parsesHTML: [
       "<pre>a  \n b</pre>",
@@ -386,5 +481,45 @@ record("tiptap", {
   renderedValues: {
     extensions: [...replaced(Paragraph, Paragraph.configure({ HTMLAttributes: { class: "option", style: "color: blue" } })), Renders],
     serializesHTML: renderedDocs,
+  },
+  all: {
+    extensions: [
+      ...own,
+      BulletList,
+      OrderedList,
+      ListItem,
+      TaskList,
+      TaskItem,
+      Table,
+      TableRow,
+      TableCell,
+      TableHeader,
+      Blockquote,
+      Code,
+      CodeBlock,
+      HorizontalRule,
+      Details,
+      DetailsSummary,
+      DetailsContent,
+      Mathematics,
+      Emoji.configure({ emojis: [] }),
+      Youtube,
+      Twitch,
+      Audio,
+      TableOfContents,
+      RubyText,
+      Link,
+      Mention,
+      BackgroundColor,
+      Color,
+      FontFamily,
+      FontSize,
+      LineHeight,
+      TextAlign.configure({ types: ["heading", "paragraph"] }),
+    ],
+    parsesMarkdown: [...markedInputs, ...combinedMarkdown],
+    parsesHTML: [...domInputs, ...combinedHTML],
+    serializesMarkdown: withParsed(combinedDocs),
+    serializesHTML: withParsed(combinedDocs),
   },
 })

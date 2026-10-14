@@ -10,18 +10,7 @@ import { Document } from "@tiptap/extension-document"
 import { Paragraph } from "@tiptap/extension-paragraph"
 import { Text } from "@tiptap/extension-text"
 import { FlatListCore, FlatListOrdered, FlatListTask, FlatListUnordered } from "tiptap-extension-flat-list"
-import {
-  doc,
-  domInputs,
-  markedInputs,
-  otherAttributes,
-  own,
-  paragraph,
-  record,
-  rendered,
-  text,
-  withParsed,
-} from "./tiptap.mjs"
+import { doc, otherAttributes, own, paragraph, record, rendered, text, withParsed } from "./tiptap.mjs"
 
 const lists = [BulletList, OrderedList, ListItem, TaskList, TaskItem]
 const withoutParseRules = extension => extension.extend({ parseHTML: () => [] })
@@ -445,9 +434,9 @@ const some = extensions => ({
 record("tiptap-lists", {
   lists: {
     extensions: fiveLists,
-    parsesMarkdown: [...markedInputs(), ...listMarkdown, ...generatedMarkdown],
+    parsesMarkdown: [...listMarkdown, ...generatedMarkdown],
     // Tiptap's own HTML for each document is parsed back.
-    parsesHTML: [...domInputs(/<\/?(?:ul|ol|li|input|label)\b/i), ...listHTML, ...rendered(fiveLists, listsDocs)],
+    parsesHTML: [...listHTML, ...rendered(fiveLists, listsDocs)],
     serializesMarkdown: withParsed(listsDocs),
     serializesHTML: withParsed(listsDocs),
   },

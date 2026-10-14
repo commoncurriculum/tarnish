@@ -102,16 +102,12 @@ const otherTrees = new Set([
   "<svg><foreignObject><![CDATA[x]]></foreignObject></svg>",
   "<math><annotation-xml encoding=text/html><![CDATA[x]]></annotation-xml></math>",
 ])
-// fixtures/marked.json's Markdown inputs that `pattern` matches.
-export const markedInputs = (pattern = /^/) =>
-  fixture("marked")
-    .lexed.map(record => record.input)
-    .filter(markdown => pattern.test(markdown))
-// fixtures/dom.json's HTML inputs that `pattern` matches, but those `otherTrees` holds.
-export const domInputs = (pattern = /^/) =>
-  fixture("dom")
-    .parses.map(record => record.html)
-    .filter(html => !otherTrees.has(html) && pattern.test(html))
+// fixtures/marked.json's Markdown inputs, and fixtures/dom.json's HTML but those `otherTrees`
+// holds.
+export const markedInputs = fixture("marked").lexed.map(record => record.input)
+export const domInputs = fixture("dom")
+  .parses.map(record => record.html)
+  .filter(html => !otherTrees.has(html))
 
 // The documents given, then those the configuration's parses make.
 export const withParsed = docs => parsed => [...docs, ...parsed]

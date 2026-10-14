@@ -6,20 +6,44 @@
 use tarnish::js::stack::on_dirty_scheduler_stack;
 use tarnish::json::{Map, Value, json, object};
 use tarnish_fixtures::{read, same, version};
+use tarnish_tiptap::extensions::audio::audio;
+use tarnish_tiptap::extensions::blockquote::blockquote;
 use tarnish_tiptap::extensions::bold::{BoldOptions, bold};
+use tarnish_tiptap::extensions::bullet_list::bullet_list;
+use tarnish_tiptap::extensions::code::code;
+use tarnish_tiptap::extensions::code_block::code_block;
+use tarnish_tiptap::extensions::details::{details, details_content, details_summary};
 use tarnish_tiptap::extensions::document::document;
+use tarnish_tiptap::extensions::emoji::emoji;
 use tarnish_tiptap::extensions::hard_break::{HardBreakOptions, hard_break};
 use tarnish_tiptap::extensions::heading::{HeadingOptions, heading};
 use tarnish_tiptap::extensions::highlight::{HighlightOptions, highlight};
+use tarnish_tiptap::extensions::horizontal_rule::horizontal_rule;
 use tarnish_tiptap::extensions::image::{ImageOptions, image};
 use tarnish_tiptap::extensions::italic::{ItalicOptions, italic};
+use tarnish_tiptap::extensions::link::link;
+use tarnish_tiptap::extensions::list_item::list_item;
+use tarnish_tiptap::extensions::mathematics::mathematics;
+use tarnish_tiptap::extensions::mention::mention;
+use tarnish_tiptap::extensions::ordered_list::ordered_list;
 use tarnish_tiptap::extensions::paragraph::{ParagraphOptions, paragraph};
+use tarnish_tiptap::extensions::ruby_text::ruby_text;
 use tarnish_tiptap::extensions::strike::{StrikeOptions, strike};
 use tarnish_tiptap::extensions::subscript::{SubscriptOptions, subscript};
 use tarnish_tiptap::extensions::superscript::{SuperscriptOptions, superscript};
+use tarnish_tiptap::extensions::table::{table, table_cell, table_header, table_row};
+use tarnish_tiptap::extensions::table_of_contents::table_of_contents;
+use tarnish_tiptap::extensions::task_item::task_item;
+use tarnish_tiptap::extensions::task_list::task_list;
 use tarnish_tiptap::extensions::text::text;
-use tarnish_tiptap::extensions::text_style::{ColorOptions, TextStyleOptions, color, text_style};
+use tarnish_tiptap::extensions::text_align::{TextAlignOptions, text_align};
+use tarnish_tiptap::extensions::text_style::{
+    ColorOptions, TextStyleOptions, background_color, color, font_family, font_size, line_height,
+    text_style,
+};
+use tarnish_tiptap::extensions::twitch::twitch;
 use tarnish_tiptap::extensions::underline::{UnderlineOptions, underline};
+use tarnish_tiptap::extensions::youtube::youtube;
 use tarnish_tiptap::{
     DomSpec, Extension, ExtensionAttribute, GlobalAttributes, GlobalTypes, MarkExtension,
     NodeExtension, ParseHtml, PlainExtension, get_schema, html,
@@ -31,7 +55,7 @@ fn configuration(name: &str) -> Configuration {
     match name {
         "own" => own::extensions(),
         "colors" => colors(),
-        "code" => code(),
+        "code" => application_code(),
         "htmlAttributes" => configured(
             strings(),
             &[
@@ -76,9 +100,56 @@ fn configuration(name: &str) -> Configuration {
             extensions.push(renders().into());
             extensions
         }
+        "all" => all(),
         other => panic!("no configuration {other}"),
     }
     .into()
+}
+
+/// Every group's extensions, as the other modules give them: Tiptap's own, the lists, the
+/// tables, the blocks and embeds, and the inline extensions, TextAlign on headings and paragraphs.
+fn all() -> Vec<Extension> {
+    let mut all = own::extensions();
+    all.extend([
+        bullet_list(Default::default()).into(),
+        ordered_list(Default::default()).into(),
+        list_item(Default::default()).into(),
+        task_list(Default::default()).into(),
+        task_item(Default::default()).into(),
+        table(Default::default()).into(),
+        table_row(Default::default()).into(),
+        table_cell(Default::default()).into(),
+        table_header(Default::default()).into(),
+        blockquote(Default::default()).into(),
+        code(Default::default()).into(),
+        code_block(Default::default()).into(),
+        horizontal_rule(Default::default()).into(),
+        details(Default::default()).into(),
+        details_summary(Default::default()).into(),
+        details_content(Default::default()).into(),
+    ]);
+    all.extend(mathematics());
+    all.extend([
+        emoji(Default::default()).into(),
+        youtube(Default::default()).into(),
+        twitch(Default::default()).into(),
+        audio(Default::default()).into(),
+        table_of_contents(Default::default()).into(),
+        ruby_text(Default::default()).into(),
+        link(Default::default()).into(),
+        mention(Default::default()).into(),
+        background_color(Default::default()).into(),
+        color(Default::default()).into(),
+        font_family(Default::default()).into(),
+        font_size(Default::default()).into(),
+        line_height(Default::default()).into(),
+        text_align(TextAlignOptions {
+            types: &["heading", "paragraph"],
+            ..TextAlignOptions::default()
+        })
+        .into(),
+    ]);
+    all
 }
 
 /// Tiptap's own extensions, with `extension` in place of the one of its name.
@@ -237,7 +308,7 @@ fn renders() -> PlainExtension {
 
 /// An application's code mark and code block, whose text stays as it is, and a figure whose
 /// attribute renders under a name it makes.
-fn code() -> Vec<Extension> {
+fn application_code() -> Vec<Extension> {
     let code = MarkExtension::create("code")
         .code()
         .render_markdown(|node, helpers, _| {
@@ -305,6 +376,8 @@ const DOCUMENTS: usize = 20_000;
 const PARSES: usize = 2_000;
 const INLINES: usize = 500;
 const LAZY: usize = 500;
+/// Blockquotes nest tables less deeply, as each level lexes the rest of its source again.
+const QUOTES: usize = 500;
 /// How deep blocks nest in a style's CSS, which the CSS engine reads in time that grows with
 /// the depth.
 const CSSES: usize = 100_000;
@@ -356,7 +429,22 @@ fn paragraph_of(content: Vec<Value>) -> Value {
     json!({"type": "paragraph", "content": content})
 }
 
-const NESTED: [Nested; 17] = [
+/// `node` in blockquotes `depth` deep.
+fn quoted_doc(node: Value, depth: usize) -> Value {
+    let quoted = (0..depth).fold(
+        node,
+        |inner, _| json!({"type": "blockquote", "content": [inner]}),
+    );
+    doc(vec![quoted])
+}
+
+/// A table of one header cell holding `content`, as Markdown parses to it.
+fn header_table(content: Value) -> Value {
+    let header = json!({"type": "tableHeader", "content": [in_paragraph(content)]});
+    json!({"type": "table", "content": [{"type": "tableRow", "content": [header]}]})
+}
+
+const NESTED: [Nested; 20] = [
     Nested {
         what: "HTML of paragraphs",
         configuration: "own",
@@ -515,6 +603,42 @@ const NESTED: [Nested; 17] = [
                 heading,
                 in_paragraph(json!({"type": "text", "text": "y"})),
             ])
+        },
+    },
+    Nested {
+        what: "tables in blockquotes",
+        configuration: "all",
+        section: "parsesMarkdown",
+        depth: QUOTES,
+        input: |depth| {
+            Value::String("> ".repeat(depth) + "| a |\n" + &"> ".repeat(depth) + "| - |")
+        },
+        output: |depth| quoted_doc(header_table(json!({"type": "text", "text": "a"})), depth),
+    },
+    // Table's tokenizer lexes the innermost table again, its code span's pipe escaped.
+    Nested {
+        what: "tables with code spans in blockquotes",
+        configuration: "all",
+        section: "parsesMarkdown",
+        depth: QUOTES,
+        input: |depth| {
+            let quotes = "> ".repeat(depth);
+            Value::String(format!("{quotes}| `a|b` |\n{quotes}| - |"))
+        },
+        output: |depth| {
+            let code = json!({"type": "text", "text": "a|b", "marks": [{"type": "code"}]});
+            quoted_doc(header_table(code), depth)
+        },
+    },
+    Nested {
+        what: "a mention in blockquotes",
+        configuration: "all",
+        section: "parsesMarkdown",
+        depth: PARSES,
+        input: |depth| json!(">".repeat(depth) + " [@ id=\"x\"]"),
+        output: |depth| {
+            let mention = json!({"type": "mention", "attrs": {"id": "x"}});
+            quoted_doc(in_paragraph(mention), depth)
         },
     },
 ];

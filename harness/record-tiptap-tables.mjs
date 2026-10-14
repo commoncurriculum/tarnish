@@ -17,18 +17,7 @@ import { Italic } from "@tiptap/extension-italic"
 import { Paragraph } from "@tiptap/extension-paragraph"
 import { Table, TableCell, TableHeader, TableKit, TableRow } from "@tiptap/extension-table"
 import { Text } from "@tiptap/extension-text"
-import {
-  body,
-  doc,
-  domInputs,
-  markedInputs,
-  otherAttributes,
-  paragraph,
-  record,
-  text,
-  unique,
-  withParsed,
-} from "./tiptap.mjs"
+import { body, doc, otherAttributes, paragraph, record, text, unique, withParsed } from "./tiptap.mjs"
 
 const Code = Mark.create({
   name: "code",
@@ -74,10 +63,6 @@ const nestedTable = depth => {
 // Nesting one to three deep, which tests/recorded/tables.rs folds into the conversions of any
 // depth.
 const depths = [1, 2, 3]
-const deepMarkdown = depths.flatMap(depth => [
-  "> ".repeat(depth) + "| a |\n" + "> ".repeat(depth) + "| - |",
-  "> ".repeat(depth) + "| `a|b` |\n" + "> ".repeat(depth) + "| - |",
-])
 const deepHTML = depths.map(depth => "<table><tr><td>".repeat(depth) + "x" + "</td></tr></table>".repeat(depth))
 const deepDocs = depths.map(nestedTable)
 
@@ -362,8 +347,8 @@ record(
   {
     tables: {
       extensions: tables(),
-      parsesMarkdown: ["", "plain", ...markdownTables, ...markedInputs(), ...deepMarkdown],
-      parsesHTML: ["<p>plain</p>", ...htmlTables, ...domInputs(), ...deepHTML],
+      parsesMarkdown: ["", "plain", ...markdownTables],
+      parsesHTML: ["<p>plain</p>", ...htmlTables, ...deepHTML],
       serializesMarkdown: withParsed([...markdownDocs, ...malformedDocs, ...htmlDocs]),
       serializesHTML: withParsed([...htmlDocs, ...markdownDocs]),
     },
