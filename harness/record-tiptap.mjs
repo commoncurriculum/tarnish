@@ -172,7 +172,7 @@ const deepMarkdown = depths.flatMap(depth => [
 const deepHTML = depths.flatMap(depth => ["div", "p", "b", "span style=color:red"].map(tag => `<${tag}>`.repeat(depth) + "x"))
 const deepDocs = depths.flatMap(depth => ["doc", "paragraph", "bold", "italic", "strike"].map(type => nested(type, depth)))
 const paragraphs = depths.map(depth => nested("paragraph", depth))
-// Tables and mentions in blockquotes, which Table's tokenizer and Mention's lex again in each.
+// Tables and a mention in blockquotes one to three deep, which `all` parses.
 const quotedMarkdown = depths.flatMap(depth => {
   const quotes = "> ".repeat(depth)
   return [`${quotes}| a |\n${quotes}| - |`, `${quotes}| \`a|b\` |\n${quotes}| - |`, ">".repeat(depth) + ' [@ id="x"]']

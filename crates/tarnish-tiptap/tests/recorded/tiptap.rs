@@ -1,7 +1,8 @@
 //! `fixtures/tiptap.json`, of Tiptap's own extensions, alone, with an option set or beside an
-//! application's, and Tiptap's documents, HTML and Markdown nested far deeper than a small stack
-//! could recurse through. Parsing takes time that grows with the square of the depth (the cube,
-//! when a lazy continuation line re-lexes every nested blockquote), so parses nest less deeply.
+//! application's, and of every group's together, and documents, HTML and Markdown nested far
+//! deeper than a small stack could recurse through. Parsing takes time that grows with the square
+//! of the depth (the cube, when a lazy continuation line re-lexes every nested blockquote), so
+//! parses nest less deeply.
 
 use tarnish::js::stack::on_dirty_scheduler_stack;
 use tarnish::json::{Map, Value, json, object};

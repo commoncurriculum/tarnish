@@ -163,26 +163,25 @@ const sections = {
 
 export function record(name, configurations, others = {}) {
   const made = Object.fromEntries(Object.entries(configurations).map(([name, given]) => [name, converter(given)]))
-  const records = (section, inputs) =>
-    Object.entries(configurations).flatMap(([name, given]) =>
-      unique((inputs(given, name) ?? []).map(input => JSON.stringify(input))).map(input => ({
+  const records = (section, parsed) =>
+    Object.entries(configurations).flatMap(([name, given]) => {
+      const inputs = typeof given[section] === "function" ? given[section](parsed(name)) : (given[section] ?? [])
+      return unique(inputs.map(input => JSON.stringify(input))).map(input => ({
         extensions: name,
         ...sections[section](made[name], JSON.parse(input)),
-      })),
-    )
-  const parsesMarkdown = records("parsesMarkdown", given => given.parsesMarkdown)
-  const parsesHTML = records("parsesHTML", given => given.parsesHTML)
-  const parsed = name => [...parsesMarkdown, ...parsesHTML].filter(record => record.extensions === name && record.doc)
-  const documents = section => (given, name) =>
-    typeof given[section] === "function" ? given[section](parsed(name).map(record => record.doc)) : given[section]
+      }))
+    })
+  const [parsesMarkdown, parsesHTML] = [records("parsesMarkdown"), records("parsesHTML")]
+  const parsed = name =>
+    [...parsesMarkdown, ...parsesHTML].flatMap(record => (record.extensions === name && record.doc ? [record.doc] : []))
   const recorded = {
     schemas: Object.entries(made).map(([name, { schema }]) => ({ extensions: name, ...schemaRecord(schema) })),
     parsesMarkdown,
-    serializesMarkdown: records("serializesMarkdown", documents("serializesMarkdown")),
+    serializesMarkdown: records("serializesMarkdown", parsed),
     parsesHTML,
-    serializesHTML: records("serializesHTML", documents("serializesHTML")),
-    generatesText: records("generatesText", given => given.generatesText),
-    generatesUniqueIds: records("generatesUniqueIds", given => given.generatesUniqueIds),
+    serializesHTML: records("serializesHTML", parsed),
+    generatesText: records("generatesText"),
+    generatesUniqueIds: records("generatesUniqueIds"),
     ...others,
   }
   writeFixture(name, Object.fromEntries(Object.entries(recorded).filter(([, records]) => records.length > 0)))

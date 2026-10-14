@@ -250,10 +250,9 @@ struct Converters {
 
 impl Converters {
     fn new(configuration: fn(&str) -> Configuration) -> Converters {
-        let built = HashMap::new();
         Converters {
             configuration,
-            built,
+            built: HashMap::new(),
         }
     }
 
@@ -428,7 +427,9 @@ impl Replay {
 fn schema_failures(record: &Value, converters: &mut Converters) -> Vec<String> {
     let mut expected = record.clone();
     let fields = expected.as_object_mut().expect("a record");
-    let name = fields.shift_remove("extensions").expect("a configuration");
+    let name = fields
+        .shift_remove("extensions")
+        .expect("the configuration it's of");
     let actual = schema_record(&converters.of(string(&name)).schema.schema);
     if same(&expected, &actual) {
         return Vec::new();
