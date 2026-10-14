@@ -2,7 +2,6 @@
 //! `createInlineMarkdownSpec` makes, `[@ id="…" label="…" char="…"]`. Its suggestion popups,
 //! and the trigger Backspace leaves, are an editor's.
 
-use std::borrow::Cow;
 use std::sync::{Arc, LazyLock};
 
 use tarnish::Node;
@@ -114,22 +113,23 @@ pub fn mention(options: MentionOptions) -> NodeExtension {
             let configured = SpecAttrs::from(&options.html_attributes);
             let typed = SpecAttrs::from([("data-type", "mention".into())]);
             let merged = merge_attributes(merge_attributes(typed, configured.clone())?, html)?;
-            if let Some(render_label) = &options.render_label {
-                let label = render_label(node, char)?;
-                return Ok(DomSpec::element("span", merged, vec![text(label)]));
-            }
-            let html = match &options.render_html {
-                Some(render_html) => render_html(node, char, merged.clone())?,
-                None => {
-                    let attrs = merge_attributes(configured, merged)?;
-                    let label = label_text(node, char)?;
-                    return Ok(DomSpec::element("span", attrs, vec![text(label)]));
-                }
+            let (attrs, text) = match (&options.render_label, &options.render_html) {
+                (Some(render_label), _) => (merged, render_label(node, char)?),
+                (None, Some(render_html)) => match render_html(node, char, merged.clone())? {
+                    MentionHtml::Spec(spec) => return Ok(spec),
+                    MentionHtml::Text(text) => (merged, text),
+                },
+                // Tiptap's own `renderHTML` merges the option's attributes into them again.
+                (None, None) => (
+                    merge_attributes(configured, merged)?,
+                    label_text(node, char)?,
+                ),
             };
-            Ok(match html {
-                MentionHtml::Spec(spec) => spec,
-                MentionHtml::Text(html) => DomSpec::element("span", merged, vec![text(html)]),
-            })
+            Ok(DomSpec::element(
+                "span",
+                attrs,
+                vec![DomSpec::Text(text.into())],
+            ))
         })
         .render_text(move |props| texts.text(props.node))
         .self_closing_inline_markdown_spec(
@@ -146,10 +146,6 @@ pub fn mention(options: MentionOptions) -> NodeExtension {
             parse_attributes,
             serialize_attributes,
         )
-}
-
-fn text<'a>(text: String) -> DomSpec<'a> {
-    DomSpec::Text(Cow::Owned(text))
 }
 
 static ATTRIBUTE: LazyLock<RegExp> =
