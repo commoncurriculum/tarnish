@@ -115,6 +115,21 @@ fn configuration(name: &str) -> Vec<Extension> {
                 html_attributes: object!({"class": "h", "data-x": "y"}),
             },
         ),
+        "attributeValues" => tables(
+            TableOptions {
+                html_attributes: own::other_attributes(),
+                ..TableOptions::default()
+            },
+            TableRowOptions {
+                html_attributes: own::other_attributes(),
+            },
+            TableCellOptions {
+                html_attributes: own::other_attributes(),
+            },
+            TableHeaderOptions {
+                html_attributes: own::other_attributes(),
+            },
+        ),
         "wrapper" => with_table(TableOptions {
             render_wrapper: true,
             ..TableOptions::default()
@@ -163,9 +178,10 @@ fn configuration(name: &str) -> Vec<Extension> {
     }
 }
 
-const CONFIGURATIONS: [&str; 10] = [
+const CONFIGURATIONS: [&str; 11] = [
     "tables",
     "attributes",
+    "attributeValues",
     "wrapper",
     "minWidth",
     "zero",

@@ -12,10 +12,11 @@ use tarnish::js::stack::on_dirty_scheduler_stack;
 use tarnish::json::{Value, json};
 use tarnish_fixtures::{expect, read, records, same};
 
-const CONFIGURATIONS: [&str; 9] = [
+const CONFIGURATIONS: [&str; 10] = [
     "lists",
     "nested",
     "attributes",
+    "attributeValues",
     "bullets",
     "ordered",
     "tasks",

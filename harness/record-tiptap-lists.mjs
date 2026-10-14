@@ -12,7 +12,9 @@
 // - Each document records the innerHTML of an element DOMSerializer fills in linkedom.
 // Each record names its configuration in `extensions`: `lists`, Tiptap's own extensions with the
 // five lists; `nested`, with TaskItem's `nested`; `attributes`, with each list's HTMLAttributes;
-// `bullets`, `ordered` and `tasks`, with only those lists; `paragraphs`, lists of paragraphs;
+// `attributeValues`, with HTMLAttributes that aren't strings, which only render, so it records
+// no Markdown; `bullets`, `ordered` and `tasks`, with only those lists; `paragraphs`, lists of
+// paragraphs;
 // `flat`, the lists beside tiptap-extension-flat-list's items, without the items' parse rules,
 // which tarnish leaves to the application; and `tabs`, the lists with a manager that indents with
 // tabs.
@@ -39,7 +41,7 @@ import { parseHTML } from "linkedom"
 import { Marked } from "marked"
 import moreLists from "marked-more-lists"
 import { FlatListCore, FlatListOrdered, FlatListTask, FlatListUnordered } from "tiptap-extension-flat-list"
-import { outcome, schemaRecord, writeFixture } from "./fixture.mjs"
+import { otherAttributes, outcome, schemaRecord, writeFixture } from "./fixture.mjs"
 
 const own = [
   Document,
@@ -71,6 +73,9 @@ const configurations = {
       TaskList.configure({ HTMLAttributes: { class: "tasks", "data-type": "mine" } }),
       TaskItem.configure({ HTMLAttributes: { class: "task", "data-checked": "maybe", style: "color: blue" } }),
     ],
+  },
+  attributeValues: {
+    extensions: [...own, ...lists.map(extension => extension.configure({ HTMLAttributes: otherAttributes }))],
   },
   bullets: { extensions: [...own, BulletList, ListItem] },
   ordered: { extensions: [...own, OrderedList, ListItem] },
@@ -580,6 +585,7 @@ const parsesHTML = unique([...htmlInputs, ...roundTrips].map(entry => JSON.strin
 // and its HTML, and the others those of their HTML, whose Markdown makes much what `lists`' does.
 const serialized = name => (name === "lists" ? [...parsesMarkdown, ...parsesHTML] : parsesHTML)
 const serializesMarkdown = names
+  .filter(name => name !== "attributeValues")
   .flatMap(name => documents(name, docsFor(name), serialized(name)))
   .map(([name, doc]) => ({ extensions: name, doc, ...outcome(() => ({ markdown: converters[name].manager.serialize(doc) })) }))
 

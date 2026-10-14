@@ -188,6 +188,21 @@ fn others() -> Map {
     })
 }
 
+/// `otherAttributes` of harness/fixture.mjs, which the group recorders give each extension's
+/// HTMLAttributes, `undefined` as `null`.
+pub fn other_attributes() -> Map {
+    object!({
+        "class": 5,
+        "data-null": null,
+        "data-undefined": null,
+        "data-zero": 0,
+        "data-false": false,
+        "data-number": 1.5,
+        "data-object": {},
+        "data-array": [1, "a", null],
+    })
+}
+
 /// Tiptap's own extensions, each with `attributes` and what `extra` adds for it, Highlight with
 /// its colors, and [`given`].
 fn configured(attributes: Map, extra: &[(&str, Map)]) -> Vec<Extension> {

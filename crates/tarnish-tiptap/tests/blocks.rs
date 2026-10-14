@@ -286,6 +286,61 @@ fn added(name: &str) -> Vec<Extension> {
             })
             .into(),
         ],
+        "attributeValues" => {
+            let other = own::other_attributes;
+            let mut configured = vec![
+                blockquote(BlockquoteOptions {
+                    html_attributes: other(),
+                })
+                .into(),
+                code(CodeOptions {
+                    html_attributes: other(),
+                })
+                .into(),
+                code_block(CodeBlockOptions {
+                    html_attributes: other(),
+                    ..CodeBlockOptions::default()
+                })
+                .into(),
+                horizontal_rule(HorizontalRuleOptions {
+                    html_attributes: other(),
+                })
+                .into(),
+            ];
+            let details_options = DetailsOptions {
+                html_attributes: other(),
+                ..DetailsOptions::default()
+            };
+            configured.extend(details_trio(details_options, other(), other()));
+            configured.extend([
+                youtube(YoutubeOptions {
+                    html_attributes: other(),
+                    ..YoutubeOptions::default()
+                })
+                .into(),
+                twitch(TwitchOptions {
+                    html_attributes: other(),
+                    ..TwitchOptions::default()
+                })
+                .into(),
+                audio(AudioOptions {
+                    html_attributes: other(),
+                    ..AudioOptions::default()
+                })
+                .into(),
+                ruby_text(RubyTextOptions {
+                    html_attributes: other(),
+                })
+                .into(),
+                emoji(EmojiOptions {
+                    emojis: emojis(),
+                    html_attributes: other(),
+                    ..EmojiOptions::default()
+                })
+                .into(),
+            ]);
+            configured
+        }
         other => panic!("no configuration {other}"),
     }
 }

@@ -2,7 +2,9 @@
 // with Tiptap's block and embed extensions, to fixtures/tiptap-blocks.json, for tarnish-tiptap's
 // tests/blocks.rs to expect. Each record names the configuration it's of in `extensions`: the
 // extension with its default options, or with the options that change what it makes, beside
-// Document, Paragraph, Text, Heading, HardBreak, Bold and Italic; `all` has every extension here.
+// Document, Paragraph, Text, Heading, HardBreak, Bold and Italic; `all` has every extension here,
+// and `attributeValues` every one with HTMLAttributes, given values that aren't strings, which
+// only render, so it records no Markdown.
 // - schemas: each configuration's schema, as harness/fixture.mjs's schemaRecord writes it.
 // - parsesMarkdown: the document the manager parses each Markdown input to.
 // - serializesMarkdown: the Markdown the manager serializes each document to, the parses' among
@@ -43,7 +45,7 @@ import { parseHTML } from "linkedom"
 import { common, createLowlight } from "lowlight"
 import { Marked } from "marked"
 import moreLists from "marked-more-lists"
-import { outcome, schemaRecord, writeFixture } from "./fixture.mjs"
+import { otherAttributes, outcome, schemaRecord, writeFixture } from "./fixture.mjs"
 
 const base = [Document, Paragraph, Text, Heading, HardBreak, Bold, Italic]
 const details = [Details, DetailsSummary, DetailsContent]
@@ -159,6 +161,13 @@ const configurations = {
   tableOfContentsAnchors: [...base, TableOfContents.configure({ anchorTypes: ["paragraph", "heading"] })],
   rubyText: [...base, RubyText],
   rubyTextOptions: [...base, RubyText.configure({ HTMLAttributes: html })],
+  attributeValues: [
+    ...base,
+    ...[Blockquote, Code, CodeBlock, HorizontalRule, ...details, Youtube, Twitch, Audio, RubyText].map(extension =>
+      extension.configure({ HTMLAttributes: otherAttributes }),
+    ),
+    Emoji.configure({ emojis, HTMLAttributes: otherAttributes }),
+  ],
 }
 const converters = Object.fromEntries(
   Object.entries(configurations).map(([name, extensions]) => {
@@ -536,6 +545,17 @@ const inputs = [
       ...deepHTML,
     ]),
   ),
+  ...parsedHere("attributeValues", [], [
+    ...htmlInputs.blockquote,
+    ...htmlInputs.code,
+    ...htmlInputs.horizontalRule,
+    ...htmlInputs.details,
+    ...htmlInputs.emoji,
+    ...htmlInputs.youtube.slice(-6),
+    ...htmlInputs.twitch.slice(-6),
+    ...htmlInputs.audio,
+    ...htmlInputs.rubyText,
+  ]),
 ]
 
 const parsesMarkdown = inputs
@@ -747,10 +767,21 @@ const docsOf = {
   tableOfContentsAnchors: docs.tableOfContents,
   rubyText: docs.rubyText,
   rubyTextOptions: docs.rubyText,
+  attributeValues: [
+    ...docs.blockquote,
+    ...docs.code,
+    ...docs.horizontalRule,
+    ...docs.details,
+    ...docs.emoji,
+    ...docs.youtube,
+    ...docs.twitch,
+    ...docs.audio,
+    ...docs.rubyText,
+  ],
 }
 const allDocuments = Object.keys(configurations).flatMap(name => documents(name, docsOf[name]))
 
-const serializesMarkdown = allDocuments.map(([name, doc]) => ({
+const serializesMarkdown = allDocuments.filter(([name]) => name !== "attributeValues").map(([name, doc]) => ({
   extensions: name,
   doc,
   ...outcome(() => ({ markdown: converters[name].manager.serialize(doc) })),

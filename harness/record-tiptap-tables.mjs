@@ -4,7 +4,8 @@
 // record-tiptap.mjs's, each naming in `extensions` the configuration it's of:
 // - `tables`: Document, Paragraph, Text, HardBreak, Bold, Italic, Heading, an application's code
 //   mark that parses marked's code spans, and the four table extensions as they come;
-// - `attributes`, `wrapper`, `minWidth`, `zero` and `resizable`: the same with options set;
+// - `attributes`, `attributeValues`, `wrapper`, `minWidth`, `zero` and `resizable`: the same with
+//   options set, `attributeValues` with HTMLAttributes that aren't strings;
 // - `global`: with an application's global `style` attribute on tables and cells, and `both`
 //   with Table's `HTMLAttributes` too;
 // - `kit`: TableKit, with a minimum cell width;
@@ -27,7 +28,7 @@ import { DOMParser, DOMSerializer, Node } from "@tiptap/pm/model"
 import { parseHTML } from "linkedom"
 import { Marked } from "marked"
 import moreLists from "marked-more-lists"
-import { outcome, schemaRecord, writeFixture } from "./fixture.mjs"
+import { otherAttributes, outcome, schemaRecord, writeFixture } from "./fixture.mjs"
 
 const Code = Mark.create({
   name: "code",
@@ -68,6 +69,12 @@ const configurations = {
     TableRow.configure({ HTMLAttributes: { class: "r" } }),
     TableCell.configure({ HTMLAttributes: { class: "c", style: "padding: 1px" } }),
     TableHeader.configure({ HTMLAttributes: { class: "h", "data-x": "y" } }),
+  ),
+  attributeValues: tables(
+    Table.configure({ HTMLAttributes: otherAttributes }),
+    TableRow.configure({ HTMLAttributes: otherAttributes }),
+    TableCell.configure({ HTMLAttributes: otherAttributes }),
+    TableHeader.configure({ HTMLAttributes: otherAttributes }),
   ),
   wrapper: tables(Table.configure({ renderWrapper: true })),
   minWidth: tables(Table.configure({ cellMinWidth: 12.5 })),
@@ -443,7 +450,9 @@ const serializesMarkdown = [
 
 const serializesHTML = [
   ...documents("tables", [...htmlDocs, ...markdownDocs]),
-  ...["attributes", "wrapper", "minWidth", "zero", "resizable", "global"].flatMap(name => documents(name, htmlDocs)),
+  ...["attributes", "attributeValues", "wrapper", "minWidth", "zero", "resizable", "global"].flatMap(name =>
+    documents(name, htmlDocs),
+  ),
   ...["global", "both"].flatMap(name =>
     documents(name, [
       firstRow(cell({ style: "color: red" }), cell({ style: "text-align: left", align: "right" })),

@@ -85,6 +85,7 @@ pub fn configuration(name: &str) -> Option<(Vec<Extension>, Option<Indentation>)
             object!({"class": "tasks", "data-type": "mine"}),
             object!({"class": "task", "data-checked": "maybe", "style": "color: blue"}),
         ]),
+        "attributeValues" => with_attributes(std::array::from_fn(|_| super::other_attributes())),
         "bullets" => with_own(vec![
             bullet_list(BulletListOptions::default()).into(),
             list_item(ListItemOptions::default()).into(),
