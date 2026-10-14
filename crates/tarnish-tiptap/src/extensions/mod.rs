@@ -2,6 +2,7 @@
 //! each as far as the conversions read it: its schema, its HTML rules and its Markdown hooks,
 //! save the flat list items' parse rules. An application extends one with the rest it needs.
 
+pub mod audio;
 pub mod blockquote;
 pub mod bold;
 pub mod bullet_list;
@@ -31,7 +32,9 @@ pub mod task_item;
 pub mod task_list;
 pub mod text;
 pub mod text_style;
+pub mod twitch;
 pub mod underline;
+pub mod youtube;
 
 #[cfg(test)]
 mod tests {

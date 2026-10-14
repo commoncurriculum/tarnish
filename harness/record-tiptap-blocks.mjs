@@ -1,12 +1,13 @@
 // Records what @tiptap/markdown's MarkdownManager and ProseMirror's DOMParser and DOMSerializer do
-// with Tiptap's block extensions, to fixtures/tiptap-blocks.json, for tarnish-tiptap's
+// with Tiptap's block and embed extensions, to fixtures/tiptap-blocks.json, for tarnish-tiptap's
 // tests/blocks.rs to expect. Each record names the configuration it's of in `extensions`: the
 // extension with its default options, or with the options that change what it makes, beside
 // Document, Paragraph, Text, Heading, HardBreak, Bold and Italic; `all` has every extension here.
 // - parsesMarkdown: the document the manager parses each Markdown input to.
 // - serializesMarkdown: the Markdown the manager serializes each document to, the parses' among
 //   them, and documents whose attributes or content are of types the JS reads otherwise.
-// - parsesHTML: the document DOMParser parses the body of a linkedom document holding each input to.
+// - parsesHTML: the document DOMParser parses the body of a linkedom document holding each input
+//   to: the embeds' sources run `new URL` through their edge inputs.
 // - serializesHTML: the innerHTML of an element DOMSerializer fills in linkedom.
 // - attributes: what `parseAttributes` makes of each string, and `serializeAttributes` of each
 //   object.
@@ -14,6 +15,7 @@
 // linkedom's here, as a browser's would be its own.
 import { readFileSync } from "node:fs"
 import { getSchema, parseAttributes, serializeAttributes } from "@tiptap/core"
+import { Audio } from "@tiptap/extension-audio"
 import { Blockquote } from "@tiptap/extension-blockquote"
 import { Bold } from "@tiptap/extension-bold"
 import { Code } from "@tiptap/extension-code"
@@ -31,6 +33,8 @@ import { Paragraph } from "@tiptap/extension-paragraph"
 import { RubyText } from "@tiptap/extension-ruby-text"
 import { TableOfContents } from "@tiptap/extension-table-of-contents"
 import { Text } from "@tiptap/extension-text"
+import { Twitch } from "@tiptap/extension-twitch"
+import { Youtube } from "@tiptap/extension-youtube"
 import { MarkdownManager } from "@tiptap/markdown"
 import { DOMParser, DOMSerializer, Node } from "@tiptap/pm/model"
 import { parseHTML } from "linkedom"
@@ -61,6 +65,9 @@ const configurations = {
     ...details,
     Mathematics,
     Emoji.configure({ emojis }),
+    Youtube,
+    Twitch,
+    Audio,
     TableOfContents,
     RubyText,
   ],
@@ -87,6 +94,65 @@ const configurations = {
   mathematics: [...base, Mathematics],
   emoji: [...base, Emoji.configure({ emojis })],
   emojiOptions: [...base, Emoji.configure({ emojis, forceFallbackImages: true, HTMLAttributes: html })],
+  youtube: [...base, Youtube],
+  youtubeOptions: [
+    ...base,
+    Youtube.configure({
+      allowFullscreen: false,
+      autoplay: true,
+      ccLanguage: "es",
+      ccLoadPolicy: true,
+      controls: false,
+      disableKBcontrols: true,
+      enableIFrameApi: true,
+      endTime: 90,
+      height: "50%",
+      interfaceLanguage: "fr",
+      ivLoadPolicy: 3,
+      loop: true,
+      modestBranding: true,
+      HTMLAttributes: html,
+      nocookie: true,
+      origin: "https://o.test",
+      playlist: "a,b",
+      progressBarColor: "white",
+      width: 320.5,
+      rel: 0,
+    }),
+  ],
+  youtubeInline: [...base, Youtube.configure({ inline: true, rel: undefined })],
+  twitch: [...base, Twitch],
+  twitchOptions: [
+    ...base,
+    Twitch.configure({
+      allowFullscreen: false,
+      autoplay: true,
+      muted: true,
+      time: "1h2m3s",
+      parent: "a b&c=d.test",
+      height: "50%",
+      width: 320,
+      HTMLAttributes: html,
+    }),
+  ],
+  twitchInline: [...base, Twitch.configure({ inline: true, parent: "" })],
+  audio: [...base, Audio],
+  audioOptions: [
+    ...base,
+    Audio.configure({
+      allowBase64: true,
+      autoplay: true,
+      controls: false,
+      loop: true,
+      muted: true,
+      preload: null,
+      controlslist: "nodownload",
+      crossorigin: "anonymous",
+      disableRemotePlayback: true,
+      HTMLAttributes: html,
+    }),
+  ],
+  audioInline: [...base, Audio.configure({ inline: true, preload: "auto" })],
   tableOfContents: [...base, TableOfContents],
   tableOfContentsAnchors: [...base, TableOfContents.configure({ anchorTypes: ["paragraph", "heading"] })],
   rubyText: [...base, RubyText],
@@ -220,6 +286,19 @@ const markdown = {
     "$  padded  $",
     "$$x$$ after",
   ],
+  embeds: [
+    ':::youtube {src="https://youtu.be/x" width="320"} :::',
+    ":::youtube :::",
+    ':::youtube{src="x"} :::',
+    ":::youtube {src='x'}:::",
+    ':::youtube {src="x"} :::\nafter',
+    'text\n:::youtube {src="x"} :::',
+    ":::youtube {.cls #id flag} :::",
+    ":::youtube\n:::",
+    ':::twitch {src="https://twitch.tv/x" autoplay muted="true"} :::',
+    ':::audio {src="a.mp3" controls} :::',
+    ":::youtubex :::",
+  ],
   emoji: [":smile: and :star:", ":unknown:"],
 }
 
@@ -302,6 +381,108 @@ const htmlInputs = {
   ],
 }
 
+// The sources an embed's iframe or audio element may have, through `new URL`'s edge cases.
+const youtubeSources = [
+  "https://www.youtube.com/embed/abc123",
+  "https://www.youtube.com/embed/abc123?start=42",
+  "https://www.youtube-nocookie.com/embed/abc?start=7",
+  "https://www.youtube.com/embed/videoseries?list=PL123",
+  "https://www.youtube.com/embed/videoseries",
+  "https://www.youtube.com/embed/videoseries?list=",
+  "https://www.youtube.com/embed/videoseries?list=a%26b",
+  "https://www.youtube.com/embed/videoseries?list=a+b",
+  "https://www.youtube.com/embed/videoseries?list=a%20b",
+  "https://youtube.com/watch?v=abc",
+  "https://YOUTUBE.COM/embed/abc",
+  "https://www.youtube.com/embed/abc/extra",
+  "https://www.youtube.com/embed/a b",
+  "https://www.youtube.com/embed/abc?start=10s",
+  "https://www.youtube.com/embed/abc?start=abc",
+  "https://www.youtube.com/embed/abc?start=",
+  "https://www.youtube.com/embed/abc?start=1&start=2",
+  "https://www.youtube.com/embed/abc?start=%2B5",
+  "https://www.youtube.com/embed/abc?start=+5",
+  "https://www.youtube.com/embed/abc?start=-0",
+  "https://www.youtube.com/embed/abc?start=1e3",
+  "https://www.youtube.com/embed/abc?START=5",
+  "https://www.youtube.com/embed/abc#t=5",
+  "  https://www.youtube.com/embed/abc  ",
+  "https://www.you&#9;tube.com/embed/ab&#10;c",
+  "https:\\\\www.youtube.com\\embed\\abc",
+  "https://www.youtube.com/embed/../embed/abc",
+  "https://www.youtube.com/x/../embed/abc",
+  "https://www.youtube.com/embed/%61bc",
+  "https://www.%79outube.com/embed/abc",
+  "https://www.ｙｏｕｔｕｂｅ.com/embed/abc",
+  "https://user:pw@www.youtube.com/embed/abc",
+  "https://www.youtube.com:443/embed/abc",
+  "https://www.youtube.com:8080/embed/abc",
+  "https://www.youtube.com./embed/abc",
+  "ftp://youtube.com/embed/abc",
+  "foo://youtube.com/embed/abc",
+  "//www.youtube.com/embed/abc",
+  "not a url",
+  "https://[::1]/embed/x",
+  "https://m.youtube.com/embed/abc",
+  "https://www.www.youtube.com/embed/abc",
+  "https://exa mple.com/embed/abc",
+  "javascript:alert(1)",
+]
+const twitchSources = [
+  "https://player.twitch.tv/?video=123&parent=x",
+  "https://player.twitch.tv/?channel=foo&autoplay=true&muted=true",
+  "https://player.twitch.tv/?video=123&time=1h2m3s&autoplay=false",
+  "https://player.twitch.tv/?video=1&video=2",
+  "https://player.twitch.tv/?video=1&muted=TRUE",
+  "https://player.twitch.tv/?video=&channel=chan",
+  "https://player.twitch.tv/?video=a%20b",
+  "https://player.twitch.tv/?channel=a+b",
+  "https://player.twitch.tv/?channel=a%2Fb",
+  "https://player.twitch.tv/",
+  "https://www.player.twitch.tv/?video=1",
+  "https://PLAYER.TWITCH.TV/?video=1",
+  "https://clips.twitch.tv/embed?clip=Abc-1&parent=x",
+  "https://clips.twitch.tv/embed?clip=",
+  "https://clips.twitch.tv/embed",
+  "https://clips.twitch.tv/embed/?clip=x",
+  "https://clips.twitch.tv/other?clip=x",
+  "https://www.twitch.tv/videos/123",
+  "https://player.twitch.tv/?video=1&time=",
+  "not a url",
+]
+const audioSources = [
+  "a.mp3",
+  "https://a.test/a.mp3",
+  "data:audio/mp3;base64,AA",
+  "javascript:alert(1)",
+  "",
+]
+const frame = (wrapper, src, rest = "") => `<div ${wrapper}><iframe src="${src}"${rest}></iframe></div>`
+htmlInputs.youtube = [
+  ...youtubeSources.map(src => frame("data-youtube-video", src)),
+  ...['width="320" height="240"', 'width=" 12 "', 'width=""', 'width="abc"', 'width="12px"', 'width="0x10"', 'width="1e2"', 'width="-5"', 'width="Infinity"', 'height="  "'].map(
+    rest => frame("data-youtube-video", "https://www.youtube.com/embed/abc", " " + rest),
+  ),
+  '<div data-youtube-video><iframe src=""></iframe></div>',
+  "<div data-youtube-video><iframe></iframe></div>",
+  '<iframe src="https://www.youtube.com/embed/abc"></iframe>',
+  '<p>a<div data-youtube-video><iframe src="https://www.youtube.com/embed/abc"></iframe></div>b</p>',
+]
+htmlInputs.twitch = [
+  ...twitchSources.map(src => frame("data-twitch-video", src)),
+  ...['width="100px" height="50"', 'width="abc"', 'width=""', 'width=" 7"'].map(rest =>
+    frame("data-twitch-video", "https://player.twitch.tv/?video=1", " " + rest),
+  ),
+  "<div data-twitch-video><iframe></iframe></div>",
+]
+htmlInputs.audio = [
+  ...audioSources.map(src => `<audio src="${src}"></audio>`),
+  "<audio src='a.mp3' controls autoplay loop muted preload='none' controlslist='nodownload' crossorigin='anonymous' disableremoteplayback></audio>",
+  "<audio src='a.mp3' controls='false' loop='true' preload='5' muted='1.5'></audio>",
+  "<audio>no src</audio>",
+  "<p>a<audio src='a.mp3'></audio>b</p>",
+]
+
 // The inputs html5ever builds another tree from than the fork's parse5 does, which tarnish-html's
 // tests/recorded.rs holds to html5ever's tree.
 const otherTrees = new Set([
@@ -329,6 +510,13 @@ const inputs = [
   ...["details", "detailsOptions"].flatMap(name => parsedHere(name, markdown.details, htmlInputs.details)),
   ...parsedHere("mathematics", markdown.mathematics, htmlInputs.mathematics),
   ...["emoji", "emojiOptions"].flatMap(name => parsedHere(name, markdown.emoji, htmlInputs.emoji)),
+  ...["youtube", "youtubeOptions", "youtubeInline"].flatMap(name =>
+    parsedHere(name, name === "youtube" ? markdown.embeds : [], name === "youtube" ? htmlInputs.youtube : htmlInputs.youtube.slice(-6)),
+  ),
+  ...["twitch", "twitchOptions", "twitchInline"].flatMap(name =>
+    parsedHere(name, name === "twitch" ? markdown.embeds : [], name === "twitch" ? htmlInputs.twitch : htmlInputs.twitch.slice(-6)),
+  ),
+  ...["audio", "audioOptions", "audioInline"].flatMap(name => parsedHere(name, name === "audio" ? markdown.embeds : [], htmlInputs.audio)),
   ...["tableOfContents", "tableOfContentsAnchors"].flatMap(name =>
     parsedHere(name, ["# Intro\n\npara"], htmlInputs.tableOfContents),
   ),
@@ -446,6 +634,72 @@ const docs = {
     doc(p(node("emoji"))),
     doc(p(node("emoji", null))),
   ],
+  youtube: [
+    ...[
+      "https://www.youtube.com/watch?v=abc",
+      "https://youtu.be/abc",
+      "https://youtu.be/",
+      "https://www.youtube.com/watch?list=PL1",
+      "https://www.youtube.com/watch?v=abc&list=PL1",
+      "https://www.youtube.com/shorts/abc",
+      "https://www.youtube.com/embed/abc",
+      "https://music.youtube.com/watch?v=x",
+      "https://www.youtube.com/watch?feature=share",
+      "youtube.com/v/abc",
+      "https://example.com",
+      "",
+    ].map(src => doc(node("youtube", { src }))),
+    ...values.map(src => doc(node("youtube", { src }))),
+    ...[30, "30", 0, null, "x", 1.5].map(start => doc(node("youtube", { src: "https://www.youtube.com/watch?v=abc", start }))),
+    doc(node("youtube", { src: "https://www.youtube.com/watch?list=PL1", start: 5 })),
+    doc(node("youtube", { src: "https://youtu.be/abc", width: "100%", height: 10 })),
+    doc(node("youtube", { src: "x", width: 1, height: 2, start: 3, extra: "no" })),
+    doc(node("youtube", { src: "x", start: true, width: false, height: null })),
+    ...["x", 5, true, ["a"]].map(attrs => doc(node("youtube", attrs))),
+  ],
+  twitch: [
+    ...[
+      "https://www.twitch.tv/videos/123",
+      "https://twitch.tv/chan",
+      "https://www.twitch.tv/chan/",
+      "https://www.twitch.tv/chan/clip/Clip-1",
+      "https://clips.twitch.tv/Clip-1",
+      "https://clips.twitch.tv/",
+      "https://twitch.tv/videos/123?t=1",
+      "twitch.tv/chan",
+      "https://example.com",
+      "",
+    ].map(src => doc(node("twitch", { src }))),
+    ...values.map(src => doc(node("twitch", { src }))),
+    ...[true, "x", null, 0, "false"].map(autoplay => doc(node("twitch", { src: "https://twitch.tv/videos/1", autoplay, muted: autoplay }))),
+    ...["1h", 5, null, "", "a b"].map(time => doc(node("twitch", { src: "https://twitch.tv/videos/1", time }))),
+    ...["1h", null].map(time => doc(node("twitch", { src: "https://twitch.tv/chan", time }))),
+    doc(node("twitch", { src: "https://twitch.tv/chan/clip/C", autoplay: true, muted: true, time: "1h" })),
+    ...["x", 5, ["a"]].map(attrs => doc(node("twitch", attrs))),
+  ],
+  audio: [
+    ...[
+      "https://x.test/a.mp3",
+      "http://x.test/a.mp3",
+      "/a.mp3",
+      "./a.mp3",
+      "../a.mp3",
+      "//cdn.test/a.mp3",
+      "a.mp3",
+      "javascript:alert(1)",
+      "ftp://x.test/a.mp3",
+      "HTTPS://X.TEST/a.mp3",
+      "data:audio/mp3;base64,AA",
+      "DATA:AUDIO/MP3;BASE64,AA",
+      "data:audio/;base64,AA",
+      " https://x.test/a.mp3",
+      "",
+    ].map(src => doc(node("audio", { src }))),
+    ...values.map(src => doc(node("audio", { src }))),
+    doc(node("audio", { src: "/a.mp3", controls: false, autoplay: true, loop: "", muted: 0, preload: null, controlslist: "x", crossorigin: "", disableremoteplayback: true })),
+    doc(node("audio", { src: "/a.mp3", controlslist: null })),
+    ...["x", 5, ["a"]].map(attrs => doc(node("audio", attrs))),
+  ],
   tableOfContents: [
     doc(node("heading", { level: 1, id: "intro", "data-toc-id": "t1" }, [text("Intro")])),
     doc(node("heading", { level: 2, id: null, "data-toc-id": null }, [text("none")])),
@@ -476,6 +730,15 @@ const docsOf = {
   mathematics: docs.mathematics,
   emoji: docs.emoji,
   emojiOptions: docs.emoji,
+  youtube: docs.youtube,
+  youtubeOptions: docs.youtube,
+  youtubeInline: docs.youtube,
+  twitch: docs.twitch,
+  twitchOptions: docs.twitch,
+  twitchInline: docs.twitch,
+  audio: docs.audio,
+  audioOptions: docs.audio,
+  audioInline: docs.audio,
   tableOfContents: docs.tableOfContents,
   tableOfContentsAnchors: docs.tableOfContents,
   rubyText: docs.rubyText,

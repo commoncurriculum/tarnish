@@ -1929,6 +1929,7 @@ dependencies = [
  "tarnish-html",
  "tarnish-js",
  "tarnish-markdown",
+ "url",
 ]
 
 [[package]]

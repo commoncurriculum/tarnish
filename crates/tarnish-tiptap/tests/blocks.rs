@@ -12,6 +12,7 @@ use tarnish::json::{Value, json};
 use tarnish_fixtures::{expect, outcome, read, records, same};
 use tarnish_js::utf16;
 use tarnish_tiptap::Extension;
+use tarnish_tiptap::extensions::audio::{AudioOptions, audio};
 use tarnish_tiptap::extensions::blockquote::{BlockquoteOptions, blockquote};
 use tarnish_tiptap::extensions::bold::bold;
 use tarnish_tiptap::extensions::code::{CodeOptions, code};
@@ -31,6 +32,8 @@ use tarnish_tiptap::extensions::paragraph::paragraph;
 use tarnish_tiptap::extensions::ruby_text::{RubyTextOptions, ruby_text};
 use tarnish_tiptap::extensions::table_of_contents::{TableOfContentsOptions, table_of_contents};
 use tarnish_tiptap::extensions::text::text;
+use tarnish_tiptap::extensions::twitch::{TwitchOptions, twitch};
+use tarnish_tiptap::extensions::youtube::{YoutubeOptions, youtube};
 use tarnish_tiptap::markdown::specs::{parse_attributes, serialize_attributes};
 
 /// Document, Paragraph, Text, Heading, HardBreak, Bold and Italic.
@@ -129,6 +132,9 @@ fn added(name: &str) -> Vec<Extension> {
                     ..EmojiOptions::default()
                 })
                 .into(),
+                youtube(YoutubeOptions::default()).into(),
+                twitch(TwitchOptions::default()).into(),
+                audio(AudioOptions::default()).into(),
                 table_of_contents(TableOfContentsOptions::default()).into(),
                 ruby_text(RubyTextOptions::default()).into(),
             ]);
@@ -194,6 +200,89 @@ fn added(name: &str) -> Vec<Extension> {
                     "emojiOptions" => given(),
                     _ => Vec::new(),
                 },
+            })
+            .into(),
+        ],
+        "youtube" => vec![youtube(YoutubeOptions::default()).into()],
+        "youtubeOptions" => vec![
+            youtube(YoutubeOptions {
+                allow_fullscreen: false,
+                autoplay: true,
+                cc_language: Some("es".into()),
+                cc_load_policy: Some(true),
+                controls: false,
+                disable_kb_controls: true,
+                enable_iframe_api: true,
+                end_time: 90.0,
+                height: json!("50%"),
+                interface_language: Some("fr".into()),
+                iv_load_policy: 3.0,
+                r#loop: true,
+                modest_branding: true,
+                html_attributes: given(),
+                inline: false,
+                nocookie: true,
+                origin: "https://o.test".into(),
+                playlist: "a,b".into(),
+                progress_bar_color: Some("white".into()),
+                width: json!(320.5),
+                rel: Some(0.0),
+            })
+            .into(),
+        ],
+        "youtubeInline" => vec![
+            youtube(YoutubeOptions {
+                inline: true,
+                rel: None,
+                ..YoutubeOptions::default()
+            })
+            .into(),
+        ],
+        "twitch" => vec![twitch(TwitchOptions::default()).into()],
+        "twitchOptions" => vec![
+            twitch(TwitchOptions {
+                allow_fullscreen: false,
+                autoplay: true,
+                muted: true,
+                time: Some("1h2m3s".into()),
+                parent: "a b&c=d.test".into(),
+                height: json!("50%"),
+                width: json!(320),
+                html_attributes: given(),
+                inline: false,
+            })
+            .into(),
+        ],
+        "twitchInline" => vec![
+            twitch(TwitchOptions {
+                inline: true,
+                parent: String::new(),
+                ..TwitchOptions::default()
+            })
+            .into(),
+        ],
+        "audio" => vec![audio(AudioOptions::default()).into()],
+        "audioOptions" => vec![
+            audio(AudioOptions {
+                allow_base64: true,
+                autoplay: true,
+                controls: false,
+                r#loop: true,
+                muted: true,
+                preload: Value::Null,
+                controlslist: Some("nodownload".into()),
+                crossorigin: Some("anonymous".into()),
+                disable_remote_playback: true,
+                html_attributes: given(),
+                inline: false,
+            })
+            .into(),
+        ],
+        "audioInline" => vec![
+            audio(AudioOptions {
+                inline: true,
+                preload: json!("auto"),
+                ..AudioOptions::default()
             })
             .into(),
         ],

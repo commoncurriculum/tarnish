@@ -39,6 +39,7 @@ mod merge_attributes;
 mod parse_html;
 mod schema;
 mod utilities;
+mod web_url;
 
 pub use attributes::{
     ExtensionAttribute, GlobalAttributes, ParseAttribute, RenderAttribute, Rendered,
