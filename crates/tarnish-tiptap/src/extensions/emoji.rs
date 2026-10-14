@@ -3,6 +3,8 @@
 //! server can't draw an emoji to see whether it shows, so every emoji with an image renders
 //! as its image, as `isEmojiSupported` has it outside a browser.
 
+use std::sync::Arc;
+
 use crate::markdown::{RenderContext, RenderHelpers};
 use crate::{
     AttrValue, DomSpec, ExtensionAttribute, NodeExtension, ParseHtml, SpecAttrs, merge_attributes,
@@ -29,7 +31,8 @@ pub struct EmojiOptions {
 }
 
 pub fn emoji(options: EmojiOptions) -> NodeExtension {
-    let emojis = options.emojis.clone();
+    let options = Arc::new(options);
+    let texts = Arc::clone(&options);
     NodeExtension::create("emoji")
         .inline(true)
         .group("inline")
@@ -50,7 +53,8 @@ pub fn emoji(options: EmojiOptions) -> NodeExtension {
         })
         .render_text(move |props| {
             let name = node_attr(props.node, "name");
-            let emoji = shortcode_to_emoji(name, &emojis).and_then(|item| item.emoji.as_deref());
+            let emoji = shortcode_to_emoji(name, &texts.emojis);
+            let emoji = emoji.and_then(|item| item.emoji.as_deref());
             match emoji.filter(|emoji| !emoji.is_empty()) {
                 Some(emoji) => Ok(emoji.to_owned()),
                 None => Ok(format!(":{}:", name.to_js_string()?)),
