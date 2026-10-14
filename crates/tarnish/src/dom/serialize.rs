@@ -36,12 +36,15 @@ pub enum DomSpec<'a, N> {
     Value(Value),
     /// `[tag, attrs, ...children]`, setting its attributes in order.
     Element {
-        tag: &'a str,
+        tag: Cow<'a, str>,
         attrs: SpecAttrs<'a>,
         children: Vec<DomSpec<'a, N>>,
     },
     /// `[tag, attrs, 0]`: an element the content goes in.
-    Wrapping { tag: &'a str, attrs: SpecAttrs<'a> },
+    Wrapping {
+        tag: Cow<'a, str>,
+        attrs: SpecAttrs<'a>,
+    },
     /// A string. As a spec's child, or to `DOMSerializer.renderSpec`, it renders as text; as
     /// a node's or mark's whole spec, `renderSpec` reads it by index, as it reads an array: an
     /// element named by its first UTF-16 unit, with each unit after it as a text node.
@@ -83,17 +86,24 @@ impl<N> Drop for DomSpec<'_, N> {
 
 impl<'a, N> DomSpec<'a, N> {
     /// `[tag, attrs, ...children]`.
-    pub fn element(tag: &'a str, attrs: SpecAttrs<'a>, children: Vec<DomSpec<'a, N>>) -> Self {
+    pub fn element(
+        tag: impl Into<Cow<'a, str>>,
+        attrs: SpecAttrs<'a>,
+        children: Vec<DomSpec<'a, N>>,
+    ) -> Self {
         DomSpec::Element {
-            tag,
+            tag: tag.into(),
             attrs,
             children,
         }
     }
 
     /// `[tag, attrs, 0]`.
-    pub fn wrapping(tag: &'a str, attrs: SpecAttrs<'a>) -> Self {
-        DomSpec::Wrapping { tag, attrs }
+    pub fn wrapping(tag: impl Into<Cow<'a, str>>, attrs: SpecAttrs<'a>) -> Self {
+        DomSpec::Wrapping {
+            tag: tag.into(),
+            attrs,
+        }
     }
 
     /// `value ?? fallback`, `None` being `undefined`.

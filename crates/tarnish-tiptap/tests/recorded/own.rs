@@ -10,6 +10,7 @@ use tarnish::json::{Map, Value, json, object};
 use tarnish::model::{AttributeDefault, AttributeSpec, Whitespace};
 use tarnish::{Node, Schema};
 use tarnish_fixtures::{expect, outcome, read, same};
+use tarnish_html::HtmlWriter;
 use tarnish_js::Error;
 use tarnish_markdown::marked::Marked;
 use tarnish_markdown::marked_more_lists::more_lists;
@@ -125,8 +126,7 @@ impl Converter {
             ),
             "serializesHTML" => record(
                 "html",
-                Node::from_json(&self.schema.schema, doc())
-                    .and_then(|doc| html::serialize(&self.schema, &doc)),
+                Node::from_json(&self.schema.schema, doc()).and_then(|doc| self.write_html(&doc)),
             ),
             "generatesText" => {
                 let mut options = TextOptions::default();
@@ -145,6 +145,26 @@ impl Converter {
             }
             _ => panic!("no section {section}"),
         }
+    }
+
+    /// The document's HTML, as `html::serialize` writes it, which has to be without a DOM: only
+    /// YouTube's iframe, whose attributes have names the DOM lower-cases, goes through one.
+    fn write_html(&self, doc: &Node<'static>) -> Result<String, Error> {
+        let mut writer = HtmlWriter::new();
+        self.schema
+            .serializer
+            .write_fragment(doc.content(), &mut writer)?;
+        let mut youtube = false;
+        doc.descendants(&mut |node, _, _, _| {
+            youtube |= node.node_type().name() == "youtube";
+            Ok(true)
+        })?;
+        assert!(
+            youtube || !writer.rendered_in_dom(),
+            "{} went through the DOM",
+            doc.to_json()
+        );
+        Ok(writer.finish())
     }
 }
 

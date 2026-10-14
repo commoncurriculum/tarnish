@@ -78,6 +78,11 @@ impl HtmlWriter {
         self.out
     }
 
+    /// Whether a spec has gone through the writer's DOM rather than been written directly.
+    pub fn rendered_in_dom(&self) -> bool {
+        self.dom.is_some()
+    }
+
     fn sink(&mut self) -> &mut String {
         match self.content {
             Content::Dropped => &mut self.dropped,
@@ -293,7 +298,7 @@ fn write_spec(
             tag,
             attrs,
             children,
-        } => (*tag, attrs, children),
+        } => (tag.as_ref(), attrs, children),
         DomSpec::Hole
         | DomSpec::Node(_)
         | DomSpec::Rendered(_)

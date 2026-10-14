@@ -1,10 +1,9 @@
 //! `@tiptap/extension-heading`.
 
-use std::borrow::Cow;
-
 use crate::DomSpec;
 use crate::markdown::{ParseHelpers, Parsed, RenderContext, RenderHelpers};
-use crate::{ExtensionAttribute, NodeExtension, ParseHtml, merge_objects, rendered_object};
+use crate::merge_attributes::merge_configured;
+use crate::{ExtensionAttribute, NodeExtension, ParseHtml};
 use tarnish_js::json::{Map, Value, json, object};
 use tarnish_js::{self as js, Error, value};
 use tarnish_markdown::marked::Token;
@@ -52,15 +51,8 @@ pub fn heading(options: HeadingOptions) -> NodeExtension {
                 .or_else(|| levels.first().copied());
             // `h${level}`, where `this.options.levels[0]` is `undefined` without levels.
             let tag = level.map_or_else(|| "hundefined".to_owned(), |level| format!("h{level}"));
-            let attrs = merge_objects([&html_attributes, &rendered_object(&html)])?;
-            Ok(DomSpec::Array {
-                items: vec![
-                    DomSpec::Text(Cow::Owned(tag)),
-                    DomSpec::Value(Value::Object(attrs)),
-                    DomSpec::Hole,
-                ],
-                origin: None,
-            })
+            let html = merge_configured(&html_attributes, html, [])?;
+            Ok(DomSpec::wrapping(tag, html))
         })
         .parse_markdown(parse_markdown)
         .render_markdown(render_markdown)
