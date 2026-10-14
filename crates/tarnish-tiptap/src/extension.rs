@@ -13,6 +13,7 @@ use super::markdown::{
 };
 use super::parse_html::ParseHtml;
 use crate::{DomSpec, SpecAttrs};
+use tarnish::model::Whitespace;
 use tarnish::{Mark, Node};
 use tarnish_js::Error;
 use tarnish_js::json::{Map, Value};
@@ -74,8 +75,13 @@ pub struct NodeConfig {
     pub linebreak_replacement: bool,
     /// `code`: the node holds code, whose text Markdown keeps as it is.
     pub code: bool,
+    pub atom: bool,
+    /// `selectable`, which only a `false` turns off.
+    pub selectable: Option<bool>,
+    pub draggable: bool,
     pub isolating: bool,
     pub defining: bool,
+    pub whitespace: Option<Whitespace>,
     pub render_html: Option<RenderNode>,
 }
 
@@ -83,6 +89,10 @@ pub struct NodeConfig {
 pub struct MarkConfig {
     /// `code`: the mark's text is code, which Markdown keeps as it is.
     pub code: bool,
+    /// `inclusive`, which only a `false` turns off.
+    pub inclusive: Option<bool>,
+    /// `excludes`: the marks that can't be beside this one, `_` for all of them.
+    pub excludes: Option<&'static str>,
     pub render_html: Option<RenderMark>,
 }
 
@@ -311,6 +321,21 @@ impl NodeExtension {
         self
     }
 
+    pub fn atom(mut self) -> Self {
+        self.kind.atom = true;
+        self
+    }
+
+    pub fn selectable(mut self, selectable: bool) -> Self {
+        self.kind.selectable = Some(selectable);
+        self
+    }
+
+    pub fn draggable(mut self) -> Self {
+        self.kind.draggable = true;
+        self
+    }
+
     pub fn isolating(mut self) -> Self {
         self.kind.isolating = true;
         self
@@ -318,6 +343,11 @@ impl NodeExtension {
 
     pub fn defining(mut self) -> Self {
         self.kind.defining = true;
+        self
+    }
+
+    pub fn whitespace(mut self, whitespace: Whitespace) -> Self {
+        self.kind.whitespace = Some(whitespace);
         self
     }
 
@@ -336,6 +366,16 @@ impl NodeExtension {
 impl MarkExtension {
     pub fn code(mut self) -> Self {
         self.kind.code = true;
+        self
+    }
+
+    pub fn inclusive(mut self, inclusive: bool) -> Self {
+        self.kind.inclusive = Some(inclusive);
+        self
+    }
+
+    pub fn excludes(mut self, excludes: &'static str) -> Self {
+        self.kind.excludes = Some(excludes);
         self
     }
 

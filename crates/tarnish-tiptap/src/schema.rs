@@ -64,8 +64,12 @@ pub fn get_schema(extensions: &[Extension]) -> Result<TiptapSchema> {
                         marks: node.marks.map(str::to_owned),
                         linebreak_replacement: node.linebreak_replacement,
                         code: node.code,
+                        atom: node.atom,
+                        selectable: node.selectable,
+                        draggable: node.draggable,
                         isolating: node.isolating,
                         defining: node.defining,
+                        whitespace: node.whitespace,
                         attrs,
                         extra: extra_node_fields(&extensions, extension),
                         ..NodeSpec::default()
@@ -89,6 +93,8 @@ pub fn get_schema(extensions: &[Extension]) -> Result<TiptapSchema> {
                     MarkSpec {
                         attrs,
                         code: mark.code,
+                        inclusive: mark.inclusive,
+                        excludes: mark.excludes.map(str::to_owned),
                         ..MarkSpec::default()
                     },
                 ));
@@ -149,11 +155,13 @@ pub fn sort_extensions(extensions: &[Extension]) -> Vec<&Extension> {
 fn attribute_specs(attributes: &[ExtensionAttribute]) -> Vec<(String, AttributeSpec)> {
     let mut specs: Vec<(String, AttributeSpec)> = Vec::with_capacity(attributes.len());
     for attribute in attributes {
+        let default = match &attribute.default {
+            _ if attribute.undefined => AttributeDefault::Undefined,
+            Some(value) => AttributeDefault::Value(value.clone()),
+            None => AttributeDefault::Required,
+        };
         let spec = AttributeSpec {
-            default: attribute
-                .default
-                .clone()
-                .map_or(AttributeDefault::Required, AttributeDefault::Value),
+            default,
             ..AttributeSpec::default()
         };
         match specs.iter_mut().find(|(name, _)| name == attribute.name) {

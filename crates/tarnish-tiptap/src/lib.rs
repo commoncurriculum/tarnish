@@ -47,14 +47,18 @@ pub use extension::{
     ExtendNodeSchema, Extension, Kind, MarkConfig, MarkExtension, NodeConfig, NodeExtension,
     PlainExtension, RenderMark, RenderNode,
 };
-pub use merge_attributes::{merge_attributes, merge_html_attributes};
+pub use merge_attributes::{
+    element_attrs, html_attributes_object, merge_attributes, merge_html_attributes, merge_objects,
+    rendered_object,
+};
 pub use parse_html::{ParseHtml, StyleRule, TagRule};
 pub use schema::{TiptapSchema, get_schema, sort_extensions};
 pub use utilities::{
     attrs_equal, decode_html_entities, get_style_property, mark_attr, marks_equal, node_attr,
 };
 
-pub use tarnish::dom::{AttrValue, GetAttrsResult, SpecAttrs};
+pub use tarnish::Whitespace;
+pub use tarnish::dom::{AttrValue, GetAttrsResult, PreserveWhitespace, SpecAttrs};
 pub use tarnish_html::HtmlNode;
 
 /// A `DOMOutputSpec` that a `renderHTML` returns, borrowing from its node or mark.

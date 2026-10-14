@@ -39,6 +39,8 @@ pub struct ExtensionAttribute {
     pub name: &'static str,
     /// `None` for a required attribute.
     pub default: Option<Value>,
+    /// `default: undefined`, which leaves the attribute out of a node or mark not given it.
+    pub undefined: bool,
     pub rendered: bool,
     pub render_html: Option<RenderAttribute>,
     pub parse_html: Option<ParseAttribute>,
@@ -50,14 +52,24 @@ impl ExtensionAttribute {
         ExtensionAttribute {
             name,
             default: default.into(),
+            undefined: false,
             rendered: true,
             render_html: None,
             parse_html: None,
         }
     }
 
+    /// `{ default: undefined }`.
+    pub fn undefined(name: &'static str) -> Self {
+        ExtensionAttribute {
+            undefined: true,
+            ..ExtensionAttribute::new(name, None)
+        }
+    }
+
     pub fn default(mut self, default: impl Into<Option<Value>>) -> Self {
         self.default = default.into();
+        self.undefined = false;
         self
     }
 
@@ -93,7 +105,7 @@ pub struct GlobalAttributes {
 }
 
 /// `getRenderedAttributes(nodeOrMark, extensionAttributes)`, given the attributes of a node or
-/// mark, which hold every one of its type's.
+/// mark, which hold every one of its type's but those left `undefined`.
 pub fn get_rendered_attributes<'a>(
     attrs: ValueRef<'a>,
     attributes: &[ExtensionAttribute],
@@ -102,10 +114,11 @@ pub fn get_rendered_attributes<'a>(
     for attribute in attributes.iter().filter(|attribute| attribute.rendered) {
         match &attribute.render_html {
             Some(render) => render(attrs, &mut rendered)?,
-            None => rendered.merge(
-                attribute.name,
-                attrs.get(attribute.name).expect("its type's attribute"),
-            )?,
+            // An attribute left `undefined` gives the element nothing.
+            None => match attrs.get(attribute.name) {
+                Some(value) => rendered.merge(attribute.name, value)?,
+                None => debug_assert!(attribute.undefined, "{} is left out", attribute.name),
+            },
         }
     }
     Ok(rendered.0)

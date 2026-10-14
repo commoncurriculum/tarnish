@@ -5,7 +5,8 @@ use std::borrow::Cow;
 use indexmap::IndexMap;
 
 use crate::{AttrValue, SpecAttrs};
-use tarnish_js::{self as js, Error};
+use tarnish_js::json::{Map, Value};
+use tarnish_js::{self as js, Error, value};
 
 /// `mergeAttributes(html, extra)`.
 pub fn merge_attributes<'a, const N: usize>(
@@ -37,6 +38,97 @@ pub fn merge_html_attributes<'a>(
         merge_entry(&mut merged, Cow::Owned(key.to_owned()), value.clone())?;
     }
     Ok(merged)
+}
+
+/// `mergeAttributes(...objects)` of objects whose values are any JSON, such as the options an
+/// embed gives its iframe ahead of what its node renders. `null` stands for `undefined` too,
+/// which an element is given no more than `null`.
+pub fn merge_objects<'m>(objects: impl IntoIterator<Item = &'m Map>) -> Result<Map, Error> {
+    let mut merged = Map::new();
+    for object in objects {
+        for (key, value) in object.iter() {
+            let joined = match merged.get(key) {
+                Some(existing) if js::truthy(Some(existing)) => match key.as_ref() {
+                    "class" => joined_classes(existing, value)?,
+                    "style" => joined_styles(existing, value),
+                    _ => value.clone(),
+                },
+                _ => value.clone(),
+            };
+            merged.insert(key.clone(), joined);
+        }
+    }
+    Ok(merged)
+}
+
+/// An extension's `HTMLAttributes` option as an object.
+pub fn html_attributes_object(options: &[(String, String)]) -> Map {
+    options
+        .iter()
+        .map(|(key, value)| (key.as_str().into(), Value::String(value.clone())))
+        .collect()
+}
+
+fn joined_classes(existing: &Value, value: &Value) -> Result<Value, Error> {
+    let Value::String(existing) = existing else {
+        return Err(value::not_a_function("mergedAttributes[key].split"));
+    };
+    let value = match js::truthy(Some(value)) {
+        true => Some(js::to_string(value)?),
+        false => None,
+    };
+    let mut classes: Vec<&str> = existing.split(' ').collect();
+    let inserted: Vec<&str> = value
+        .iter()
+        .flat_map(|value| value.split(' '))
+        .filter(|class| !classes.contains(class))
+        .collect();
+    classes.extend(inserted);
+    Ok(Value::String(classes.join(" ")))
+}
+
+/// The styles of `parseStyleEntries`, which reads only a string's.
+fn joined_styles(existing: &Value, value: &Value) -> Value {
+    let declarations = |value: &Value| match value {
+        Value::String(styles) => parse_style_entries(styles).collect(),
+        _ => Vec::new(),
+    };
+    let mut styles = IndexMap::new();
+    for (property, style) in declarations(existing)
+        .into_iter()
+        .chain(declarations(value))
+    {
+        styles.insert(property, style);
+    }
+    let joined: Vec<String> = styles
+        .iter()
+        .map(|(property, style)| format!("{property}: {style}"))
+        .collect();
+    Value::String(joined.join("; "))
+}
+
+/// The attributes rendered for a node or mark, as an object of their values.
+pub fn rendered_object(html: &SpecAttrs) -> Map {
+    html.iter()
+        .map(|(key, value)| {
+            let value = match value {
+                AttrValue::Json(value) => value.to_value(),
+                AttrValue::Text(text) => Value::String(text.to_string()),
+            };
+            (key.into(), value)
+        })
+        .collect()
+}
+
+/// An object of attributes as an element's, which leaves out those `null` or `undefined`.
+pub fn element_attrs(object: Map) -> Result<SpecAttrs<'static>, Error> {
+    let mut attrs = SpecAttrs::new();
+    for (key, value) in object.iter() {
+        if !value.is_null() {
+            attrs.push(key.to_string(), AttrValue::from(js::to_string(value)?));
+        }
+    }
+    Ok(attrs)
 }
 
 /// Merges an entry of an object into `merged` as `mergeAttributes` does: its value replaces a

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use tarnish::dom::{
     Content, ContentElement, ElementRule, GetAttrsResult, GetContentHook, Namespace, ParseRule,
-    Rule, StyleAttrsHook, StyleRule as DomStyleRule, TagRule as DomTagRule,
+    PreserveWhitespace, Rule, StyleAttrsHook, StyleRule as DomStyleRule, TagRule as DomTagRule,
 };
 use tarnish::{Fragment, Schema};
 use tarnish_html::HtmlNode;
@@ -37,6 +37,7 @@ pub struct TagRule {
     get_attrs: Option<TagAttrs>,
     content_element: Option<ContentHook>,
     get_content: Option<GetContentHook<HtmlNode>>,
+    preserve_whitespace: Option<PreserveWhitespace>,
 }
 
 /// `{ style, ... }`.
@@ -59,6 +60,7 @@ impl ParseHtml {
             get_attrs: None,
             content_element: None,
             get_content: None,
+            preserve_whitespace: None,
         }
     }
 
@@ -110,6 +112,11 @@ impl TagRule {
         get_content: impl Fn(&HtmlNode, &Schema) -> Result<Fragment<'static>> + Send + Sync + 'static,
     ) -> Self {
         self.get_content = Some(Arc::new(get_content));
+        self
+    }
+
+    pub fn preserve_whitespace(mut self, preserve_whitespace: PreserveWhitespace) -> Self {
+        self.preserve_whitespace = Some(preserve_whitespace);
         self
     }
 }
@@ -166,6 +173,7 @@ pub(crate) fn parse_rules(
                 get_attrs,
                 content_element,
                 get_content,
+                preserve_whitespace,
             }) => {
                 let attributes = Arc::clone(attributes);
                 let injected = move |element: &HtmlNode| {
@@ -201,6 +209,7 @@ pub(crate) fn parse_rules(
                         get_attrs: Some(Arc::new(injected)),
                         element: ElementRule {
                             content,
+                            preserve_whitespace,
                             ..ElementRule::default()
                         },
                     })
