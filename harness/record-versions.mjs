@@ -79,7 +79,6 @@ const packages = [
   "marked",
   "@tiptap/markdown > marked",
   "marked-more-lists",
-  "zod",
   "linkedom",
   "linkedom > parse5",
   "linkedom > parse5 > entities",

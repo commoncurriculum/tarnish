@@ -151,8 +151,7 @@ This example is `tarnish-html`'s doctest.
 `getSchema`, `@tiptap/html`'s conversions on `tarnish-html`, and `@tiptap/markdown`'s
 `MarkdownManager` on `tarnish-markdown`, which is marked 17 and marked-more-lists. Tiptap's own
 extensions are in `tarnish_tiptap::extensions`; an application writes its own, or extends
-these, as it would in JavaScript. `tarnish-zod` checks attributes as the zod schemas an
-extension declares them with do, with zod's errors.
+these, as it would in JavaScript.
 
 ```toml
 [dependencies]
@@ -185,9 +184,7 @@ This example is `tarnish-tiptap`'s doctest.
 `fixtures/marked.json`, the tokens marked, with marked-more-lists, makes of 206 Markdown
 inputs; `fixtures/tiptap.json`, the documents, Markdown and HTML that `MarkdownManager`,
 `DOMParser` and `DOMSerializer` make with Tiptap's own extensions, among them V8's errors for
-documents holding what the manager can't read; `fixtures/zod.json`, what zod's `safeParse`
-makes of every kind of JSON with each schema `tarnish-zod` ports, the data or the `ZodError`'s
-message, issues and paths in zod's order; and `fixtures/js.json`, what V8's built-ins that
+documents holding what the manager can't read; and `fixtures/js.json`, what V8's built-ins that
 `tarnish-js` ports give: `JSON.parse`, `Number`, `parseInt`, the `TypeError`s of reading JSON
 values, `repeat`, `replaceAll`, each comparison a sort asks for, and `localeCompare`.
 
@@ -195,7 +192,7 @@ values, `repeat`, `replaceAll`, each comparison a sort asks for, and `localeComp
 to, each as its dependent resolves it (`"@tiptap/pm > prosemirror-model"`), and the linkedom
 fork as the SHA-256 of its files. The crates' tests check the versions they name against it
 (`tarnish::PROSEMIRROR_MODEL`, `tarnish_markdown::MARKED`, `tarnish_tiptap::TIPTAP`,
-`tarnish_zod::ZOD`, `tarnish_css::ENGINE` and the rest), and an application checks that its
+`tarnish_css::ENGINE` and the rest), and an application checks that its
 JavaScript runs the same packages by comparing what it has installed with the same file.
 
 ### Elixir
@@ -592,7 +589,6 @@ hold:
 | `elixir/`, `crates/tarnish_elixir` | The Elixir package and the Rustler NIF behind it. `elixir/test/support` is the application its tests make: conversions in JavaScript, and a NIF on `tarnish-nif` |
 | `crates/tarnish-nif` | The base of a NIF on tarnish: terms as JSON, budgets, a batch pool, the allocator, tarnish's functions, and `Tarnish.Bridge`'s conversions, with the tools that hold them to the Node worker's |
 | `crates/tarnish-tiptap` | Tiptap on the server: extensions, `getSchema`, `@tiptap/html`'s conversions and `@tiptap/markdown`'s `MarkdownManager`, with Tiptap's own extensions |
-| `crates/tarnish-zod` | The parts of zod 4 that attribute schemas use, with zod's output and errors |
 | `crates/tarnish-c` | The C library and its generated header |
 | `crates/tarnish-js` | JavaScript's values and built-ins as V8 runs them, which every crate here builds on: JSON values and `JSON`, strings as UTF-16, numbers, conversions, errors and `sort`, and as features `RegExp` on regress and `localeCompare` on ICU |
 | `crates/tarnish-markdown` | marked 17.0.6's lexer and marked-more-lists 1.0.1's list tokenizer, on `tarnish-js`. `tools/marked_rules.ts` writes marked's rules into `src/marked/rules.rs` |

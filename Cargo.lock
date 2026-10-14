@@ -1932,14 +1932,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tarnish-zod"
-version = "0.1.0"
-dependencies = [
- "tarnish-fixtures",
- "tarnish-js",
-]
-
-[[package]]
 name = "tarnish_elixir"
 version = "0.1.0"
 dependencies = [
