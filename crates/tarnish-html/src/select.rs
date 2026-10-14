@@ -126,35 +126,18 @@ pub(crate) fn matches(tree: &Tree, element: NodeId, selectors: &Selectors, scope
 /// `querySelector`: the first element inside `root`, in tree order, that matches.
 pub(crate) fn query(tree: &Tree, root: NodeId, selectors: &Selectors) -> Option<NodeId> {
     selectors.room(tree, || {
-        let mut stack: Vec<NodeId> = tree.children(root).collect();
-        stack.reverse();
-        while let Some(node) = stack.pop() {
-            if matches_here(tree, node, selectors, root) {
-                return Some(node);
-            }
-            let start = stack.len();
-            stack.extend(tree.children(node));
-            stack[start..].reverse();
-        }
-        None
+        let mut descendants = tree.descendants(root);
+        descendants.find(|&node| matches_here(tree, node, selectors, root))
     })
 }
 
 /// `querySelectorAll`: the elements inside `root` that match, in tree order.
 pub(crate) fn query_all(tree: &Tree, root: NodeId, selectors: &Selectors) -> Vec<NodeId> {
     selectors.room(tree, || {
-        let mut found = Vec::new();
-        let mut stack: Vec<NodeId> = tree.children(root).collect();
-        stack.reverse();
-        while let Some(node) = stack.pop() {
-            if matches_here(tree, node, selectors, root) {
-                found.push(node);
-            }
-            let start = stack.len();
-            stack.extend(tree.children(node));
-            stack[start..].reverse();
-        }
-        found
+        let descendants = tree.descendants(root);
+        descendants
+            .filter(|&node| matches_here(tree, node, selectors, root))
+            .collect()
     })
 }
 

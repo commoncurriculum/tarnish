@@ -197,6 +197,23 @@ impl Tree {
         std::iter::successors(self.nodes[id].parent, |&node| self.nodes[node].parent)
     }
 
+    /// The nodes inside `id`, in tree order.
+    pub(crate) fn descendants(&self, id: NodeId) -> impl Iterator<Item = NodeId> + '_ {
+        std::iter::successors(self.nodes[id].first, move |&node| {
+            if let Some(first) = self.nodes[node].first {
+                return Some(first);
+            }
+            let mut at = node;
+            while at != id {
+                if let Some(next) = self.nodes[at].next {
+                    return Some(next);
+                }
+                at = self.nodes[at].parent?;
+            }
+            None
+        })
+    }
+
     pub(crate) fn root(&self, id: NodeId) -> NodeId {
         self.ancestors(id).last().unwrap_or(id)
     }
