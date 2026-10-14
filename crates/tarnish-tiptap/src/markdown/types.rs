@@ -8,7 +8,7 @@ use super::ParseHelpers;
 use tarnish_js::Error;
 use tarnish_js::json::{Map, Value};
 use tarnish_js::units::Units;
-use tarnish_markdown::marked::{Lexer, Token};
+use tarnish_markdown::marked::{BlockStart, Lexer, Token};
 
 /// An extension's `renderMarkdown(node, helpers, context)`.
 pub type RenderMarkdown =
@@ -73,9 +73,6 @@ pub(crate) enum Start {
     /// Block, starting where `start(src)` says.
     Block(BlockStart),
 }
-
-/// A block tokenizer's `start(src)`: where in `src` a token may start.
-pub(crate) type BlockStart = Arc<dyn Fn(&Units) -> Option<usize> + Send + Sync>;
 
 /// `tokenize(src, tokens, lexer)`.
 pub(crate) type Tokenize =

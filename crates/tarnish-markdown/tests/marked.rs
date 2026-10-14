@@ -2,7 +2,7 @@
 //! `harness/record-marked.mjs` records: tarnish-markdown's lexer must make the same tokens, or
 //! fail with the same error.
 
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use tarnish_fixtures::{outcome, read, records, same, version};
 use tarnish_js::json::{Value, json};
@@ -52,7 +52,7 @@ static FENCED: LazyLock<RegExp> =
 fn block_extensions_lex_as_in_marked() {
     let mut marked = Marked::new(more_lists());
     marked.use_block_extension(BlockExtension {
-        start: Some(Box::new(|src| utf16::index_of_str(src, ":::", 0))),
+        start: Some(Arc::new(|src| utf16::index_of_str(src, ":::", 0))),
         tokenizer: Box::new(|lexer, src, _| {
             let Some(cap) = CONTAINER.exec(src) else {
                 return Ok(None);
@@ -79,7 +79,7 @@ fn block_extensions_lex_as_in_marked() {
         }),
     });
     marked.use_block_extension(BlockExtension {
-        start: Some(Box::new(|src| {
+        start: Some(Arc::new(|src| {
             FENCED_START.exec(src).map(|found| found.index())
         })),
         tokenizer: Box::new(|lexer, src, _| {

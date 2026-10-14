@@ -16,6 +16,8 @@ pub use tokens::{
     Align, Cell, ChildTokens, Def, Destination, List, Table, Token, TokenData, Tokens,
 };
 
+use std::sync::Arc;
+
 use tarnish_js::units::Units;
 use tarnish_js::{Error, random, utf16};
 
@@ -26,14 +28,14 @@ pub type ListTokenizer = fn(&mut Lexer, &Units) -> Result<Option<Token>, Error>;
 /// An inline tokenizer extension, as `marked.use({ extensions })` takes one. Its `start(src)`
 /// is `src.indexOf(start)`, the only kind Tiptap registers for an extension, and its
 /// tokenizer matches only where `src` starts with `start`, so the lexer tries it only there.
-pub struct TokenizerExtension {
+pub struct InlineExtension {
     pub start: &'static str,
     pub tokenizer: ExtensionTokenizer,
 }
 
 /// A block extension's `start(src)`: where in `src` its tokens may start, `None` for a result
 /// that is negative or not a number.
-pub type BlockStart = Box<dyn Fn(&Units) -> Option<usize> + Send + Sync>;
+pub type BlockStart = Arc<dyn Fn(&Units) -> Option<usize> + Send + Sync>;
 
 /// A block tokenizer extension, as `marked.use({ extensions })` takes one with `level: 'block'`.
 /// The lexer tries its tokenizer at the start of each block, before its own, and a top-level
@@ -48,7 +50,7 @@ pub struct BlockExtension {
 pub struct Marked {
     list: ListTokenizer,
     /// `defaults.extensions.inline`, the last added first, as marked tries them.
-    inline: Vec<TokenizerExtension>,
+    inline: Vec<InlineExtension>,
     /// Which ASCII units the extensions' start strings begin with.
     first_units: [bool; 128],
     /// `defaults.extensions.block`, the last added first, as marked tries them.
@@ -87,8 +89,9 @@ impl Marked {
             .unwrap_or(false)
     }
 
-    /// `marked.use({ extensions })`: each tokenizer runs before those added earlier.
-    pub fn use_extension(&mut self, extension: TokenizerExtension) {
+    /// `marked.use({ extensions })` of an inline extension: its tokenizer runs before those added
+    /// earlier.
+    pub fn use_inline_extension(&mut self, extension: InlineExtension) {
         let first = extension
             .start
             .bytes()
