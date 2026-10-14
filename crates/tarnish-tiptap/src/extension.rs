@@ -316,6 +316,12 @@ impl NodeExtension {
         self
     }
 
+    /// `inline: this.options.inline` and `group: this.options.inline ? 'inline' : 'block'`.
+    pub fn inline_or_block(self, inline: bool) -> Self {
+        self.inline(inline)
+            .group(if inline { "inline" } else { "block" })
+    }
+
     pub fn marks(mut self, marks: &'static str) -> Self {
         self.kind.marks = Some(marks);
         self

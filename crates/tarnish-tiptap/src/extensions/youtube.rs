@@ -3,14 +3,12 @@
 
 use std::sync::LazyLock;
 
+use super::embed;
 use crate::web_url::WebUrl;
-use crate::{
-    AttrValue, DomSpec, ExtensionAttribute, HtmlNode, NodeExtension, ParseHtml, SpecAttrs,
-    merge_attributes,
-};
+use crate::{AttrValue, ExtensionAttribute, NodeExtension, ParseHtml, SpecAttrs};
 use tarnish_js::json::{Map, Value, json};
 use tarnish_js::regexp::RegExp;
-use tarnish_js::{self as js, Error, utf16, value};
+use tarnish_js::{self as js, Error, utf16};
 
 pub struct YoutubeOptions {
     pub allow_fullscreen: bool,
@@ -65,20 +63,17 @@ impl Default for YoutubeOptions {
 }
 
 pub fn youtube(options: YoutubeOptions) -> NodeExtension {
+    let parsed = |key| embed::parsed(attributes_from_youtube_embed_url, key);
     let attributes = vec![
-        ExtensionAttribute::new("src", Value::Null)
-            .parse_html(|element| parsed_attributes(element)?.get("src").cloned()),
-        ExtensionAttribute::new("start", json!(0))
-            .parse_html(|element| parsed_attributes(element)?.get("start").cloned()),
+        ExtensionAttribute::new("src", Value::Null).parse_html(parsed("src")),
+        ExtensionAttribute::new("start", json!(0)).parse_html(parsed("start")),
         ExtensionAttribute::new("width", options.width.clone())
             .parse_html(|element| parsed_dimension(element.attribute("width"))),
         ExtensionAttribute::new("height", options.height.clone())
             .parse_html(|element| parsed_dimension(element.attribute("height"))),
     ];
-    let inline = options.inline;
     NodeExtension::create("youtube")
-        .inline(inline)
-        .group(if inline { "inline" } else { "block" })
+        .inline_or_block(options.inline)
         .draggable()
         .add_attributes(attributes)
         .parse_html([ParseHtml::tag("div[data-youtube-video] iframe")])
@@ -88,17 +83,8 @@ pub fn youtube(options: YoutubeOptions) -> NodeExtension {
             let src = html.get("src").map(AttrValue::to_value);
             let embed_url = embed_url_from_youtube_url(src.as_ref(), &options, &start)?;
             html.set("src", Value::from(embed_url));
-            let configured = SpecAttrs::from(&options.html_attributes);
-            let iframe = merge_attributes(configured, iframe_options(&options))?;
-            Ok(DomSpec::element(
-                "div",
-                SpecAttrs::from([("data-youtube-video", "".into())]),
-                vec![DomSpec::element(
-                    "iframe",
-                    merge_attributes(iframe, html)?,
-                    Vec::new(),
-                )],
-            ))
+            let frame = iframe_options(&options);
+            embed::iframe("data-youtube-video", &options.html_attributes, frame, html)
         })
         .atom_block_markdown_spec("youtube", &["src", "width", "height", "start"])
 }
@@ -163,17 +149,12 @@ fn embed_url_from_youtube_url(
     options: &YoutubeOptions,
     start_at: &Value,
 ) -> Result<Option<String>, Error> {
-    let url = match url {
-        Some(Value::String(url)) => url,
-        Some(Value::Null) => return Err(value::cannot_read(value::Nullish::Null, "match")),
-        None => return Err(value::cannot_read(value::Nullish::Undefined, "match")),
-        Some(_) => return Err(value::not_a_function("url.match")),
-    };
+    let url = embed::url_to_match(url)?;
     if !is_valid_youtube_url(url) {
         return Ok(None);
     }
     if url.contains("/embed/") {
-        return Ok(Some(url.clone()));
+        return Ok(Some(url.to_owned()));
     }
     if url.contains("youtu.be") {
         let id = url.rsplit('/').next().unwrap_or_default();
@@ -270,8 +251,7 @@ fn embed_url_from_youtube_url(
 /// where it starts.
 pub fn attributes_from_youtube_embed_url(url: &str) -> Option<Map> {
     let parsed = WebUrl::parse(url)?;
-    let hostname = parsed.hostname();
-    let hostname = hostname.strip_prefix("www.").unwrap_or(hostname);
+    let hostname = embed::hostname(&parsed);
     if hostname != "youtube.com" && hostname != "youtube-nocookie.com" {
         return None;
     }
@@ -305,13 +285,6 @@ pub fn attributes_from_youtube_embed_url(url: &str) -> Option<Map> {
         }
     }
     Some(attributes)
-}
-
-/// `getParsedYoutubeAttributes(element)`.
-fn parsed_attributes(element: &HtmlNode) -> Option<Map> {
-    let src = element.attribute("src").filter(|src| !src.is_empty())?;
-    attributes_from_youtube_embed_url(&src)
-        .or_else(|| Some(Map::from_iter([("src".into(), json!(src))])))
 }
 
 /// `getParsedDimension(value)`: the number the value spells, or else the value trimmed.

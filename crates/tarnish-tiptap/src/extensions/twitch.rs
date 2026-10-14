@@ -3,15 +3,13 @@
 
 use std::sync::LazyLock;
 
+use super::embed;
 use crate::attributes::option_default;
 use crate::web_url::{WebUrl, with_search_params};
-use crate::{
-    AttrValue, DomSpec, ExtensionAttribute, HtmlNode, NodeExtension, ParseHtml, SpecAttrs,
-    merge_attributes,
-};
+use crate::{AttrValue, DomSpec, ExtensionAttribute, NodeExtension, ParseHtml, SpecAttrs};
 use tarnish_js::json::{Map, Value, json};
 use tarnish_js::regexp::RegExp;
-use tarnish_js::{self as js, Error, utf16, value};
+use tarnish_js::{self as js, Error, utf16};
 
 pub struct TwitchOptions {
     pub allow_fullscreen: bool,
@@ -43,8 +41,7 @@ impl Default for TwitchOptions {
 }
 
 pub fn twitch(options: TwitchOptions) -> NodeExtension {
-    let parsed =
-        |key: &'static str| move |element: &HtmlNode| parsed_attributes(element)?.get(key).cloned();
+    let parsed = |key| embed::parsed(attributes_from_twitch_embed_url, key);
     let time = ExtensionAttribute::new("time", option_default(&options.time));
     let attributes = vec![
         ExtensionAttribute::new("src", Value::Null).parse_html(parsed("src")),
@@ -56,10 +53,8 @@ pub fn twitch(options: TwitchOptions) -> NodeExtension {
         ExtensionAttribute::new("muted", json!(options.muted)).parse_html(parsed("muted")),
         time.parse_html(parsed("time")),
     ];
-    let inline = options.inline;
     NodeExtension::create("twitch")
-        .inline(inline)
-        .group(if inline { "inline" } else { "block" })
+        .inline_or_block(options.inline)
         .draggable()
         .add_attributes(attributes)
         .parse_html([ParseHtml::tag("div[data-twitch-video] iframe")])
@@ -86,16 +81,7 @@ pub fn twitch(options: TwitchOptions) -> NodeExtension {
                 ("scrolling", "no".into()),
                 ("frameborder", "0".into()),
             ]);
-            let iframe = merge_attributes(SpecAttrs::from(&options.html_attributes), frame)?;
-            Ok(DomSpec::element(
-                "div",
-                SpecAttrs::from([("data-twitch-video", "".into())]),
-                vec![DomSpec::element(
-                    "iframe",
-                    merge_attributes(iframe, html)?,
-                    Vec::new(),
-                )],
-            ))
+            embed::iframe("data-twitch-video", &options.html_attributes, frame, html)
         })
         .atom_block_markdown_spec(
             "twitch",
@@ -170,13 +156,7 @@ struct Embed<'o> {
 
 /// `getEmbedUrlFromTwitchUrl({ url, ...embed })`, of the node's `src`.
 fn embed_url_from_twitch_url(url: Option<&Value>, embed: &Embed) -> Result<Option<String>, Error> {
-    let url = match url {
-        Some(Value::String(url)) => url,
-        Some(Value::Null) => return Err(value::cannot_read(value::Nullish::Null, "match")),
-        None => return Err(value::cannot_read(value::Nullish::Undefined, "match")),
-        Some(_) => return Err(value::not_a_function("url.match")),
-    };
-    let Some((kind, id)) = twitch_identifier(url) else {
+    let Some((kind, id)) = twitch_identifier(embed::url_to_match(url)?) else {
         return Ok(None);
     };
     let parent = match embed.parent.is_empty() {
@@ -214,8 +194,7 @@ fn embed_url_from_twitch_url(url: Option<&Value>, embed: &Embed) -> Result<Optio
 /// how it plays.
 pub fn attributes_from_twitch_embed_url(url: &str) -> Option<Map> {
     let parsed = WebUrl::parse(url)?;
-    let hostname = parsed.hostname();
-    let hostname = hostname.strip_prefix("www.").unwrap_or(hostname);
+    let hostname = embed::hostname(&parsed);
     let filled = |name: &str| parsed.search_param(name).filter(|value| !value.is_empty());
     let src = if hostname == "player.twitch.tv" {
         match (filled("video"), filled("channel")) {
@@ -239,13 +218,6 @@ pub fn attributes_from_twitch_embed_url(url: &str) -> Option<Map> {
         result.push("time".into(), Value::String(time));
     }
     is_valid_twitch_url(&src).then_some(result)
-}
-
-/// `getParsedTwitchAttributes(element)`.
-fn parsed_attributes(element: &HtmlNode) -> Option<Map> {
-    let src = element.attribute("src").filter(|src| !src.is_empty())?;
-    attributes_from_twitch_embed_url(&src)
-        .or_else(|| Some(Map::from_iter([("src".into(), json!(src))])))
 }
 
 /// `getParsedDimension(value)`: the integer the value starts with.

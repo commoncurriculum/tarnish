@@ -11,6 +11,7 @@ pub mod code;
 pub mod code_block;
 pub mod details;
 pub mod document;
+mod embed;
 pub mod emoji;
 pub mod flat_list;
 pub mod hard_break;

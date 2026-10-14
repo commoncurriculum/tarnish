@@ -62,14 +62,12 @@ pub fn audio(options: AudioOptions) -> NodeExtension {
             json!(options.disable_remote_playback),
         ),
     ];
-    let inline = options.inline;
     let tag = match options.allow_base64 {
         true => "audio[src]",
         false => r#"audio[src]:not([src^="data:"])"#,
     };
     NodeExtension::create("audio")
-        .inline(inline)
-        .group(if inline { "inline" } else { "block" })
+        .inline_or_block(options.inline)
         .atom()
         .draggable()
         .add_attributes(attributes)

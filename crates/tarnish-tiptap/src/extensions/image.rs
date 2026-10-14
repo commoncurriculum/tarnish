@@ -20,8 +20,7 @@ pub fn image(options: ImageOptions) -> NodeExtension {
     let attributes = ["src", "alt", "title", "width", "height"]
         .map(|name| ExtensionAttribute::new(name, Value::Null));
     NodeExtension::create("image")
-        .inline(options.inline)
-        .group(if options.inline { "inline" } else { "block" })
+        .inline_or_block(options.inline)
         .draggable()
         .add_attributes(attributes.into())
         .parse_html([ParseHtml::tag(if options.allow_base64 {
