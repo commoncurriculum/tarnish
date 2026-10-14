@@ -1,8 +1,8 @@
 // Records Tiptap's inline extensions, and the extensions that give other types attributes, to
 // fixtures/tiptap-inline.json, as harness/tiptap.mjs records them. TextStyle's attributes,
-// TextAlign, UniqueID and Global attributes have no Markdown hooks, and Mention's Markdown reads
-// none of its options.
-import { Extension, Mark, Node as TiptapNode, splitExtensions } from "@tiptap/core"
+// TextAlign, TextDirection, UniqueID and Global attributes have no Markdown hooks, and Mention's
+// Markdown reads none of its options.
+import { Extension, Mark, Node as TiptapNode, extensions, splitExtensions } from "@tiptap/core"
 import { Bold } from "@tiptap/extension-bold"
 import { Color } from "@tiptap/extension-color"
 import { Document } from "@tiptap/extension-document"
@@ -123,6 +123,26 @@ const alignDocs = [
     { type: "paragraph" },
   ),
 ]
+// The `dir` TextDirection reads and renders, of each kind, on each kind of node type it gives one.
+const directionHTML = [
+  '<p dir="rtl">r</p><p dir="ltr">l</p><h2 dir="auto">a</h2>',
+  '<p dir="RTL">upper</p><p dir="bogus">b</p><p dir="">e</p><p>none</p>',
+  '<p>a<br dir="rtl">b<img src="i.png" dir="ltr"><b dir="rtl">c</b></p>',
+]
+const directionDocs = [
+  doc(...["rtl", "ltr", "auto", "", null, 0, 1, "bogus"].map(dir => ({ type: "paragraph", attrs: { dir }, content: [text("x")] }))),
+  doc(
+    { type: "heading", attrs: { level: 2, dir: "rtl" }, content: [text("h"), { type: "hardBreak", attrs: { dir: "ltr" } }] },
+    { type: "image", attrs: { src: "i.png", dir: "auto" } },
+    paragraph(text("none")),
+  ),
+  { type: "doc", attrs: { dir: "rtl" }, content: [paragraph(text("doc"))] },
+]
+const directed = direction => ({
+  extensions: [...own, extensions.TextDirection.configure({ direction })],
+  parsesHTML: directionHTML,
+  serializesHTML: withParsed(directionDocs),
+})
 
 // Each href in a link of its own.
 const hrefs = [
@@ -436,6 +456,11 @@ record("tiptap-inline", {
     parsesHTML: alignHTML,
     serializesHTML: withParsed(alignDocs),
   },
+  // No direction gives no type a `dir`.
+  textDirection: directed(undefined),
+  textDirectionLtr: directed("ltr"),
+  textDirectionRtl: directed("rtl"),
+  textDirectionAuto: directed("auto"),
   link: {
     extensions: [...own, Link],
     parsesMarkdown: linkMarkdown,

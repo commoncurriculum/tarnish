@@ -163,7 +163,9 @@ making what its JavaScript makes:
   Audio, and tiptap-extension-flat-list's flat list.
 - **Marks:** Bold, Italic, Strike, Underline, Code, Highlight, Subscript, Superscript, Link,
   RubyText and TextStyle, with Color, BackgroundColor, FontFamily, FontSize and LineHeight.
-- **Attributes on other types:** TextAlign, UniqueID and TableOfContents' ids.
+- **Attributes on other types:** TextAlign, UniqueID, TableOfContents' ids, and `@tiptap/core`'s
+  TextDirection, which Tiptap's `Editor` adds from its `textDirection` option and an application
+  adds here.
 
 What only an editor uses isn't here: commands, keyboard shortcuts, input and paste rules, node
 views, and plugins that decorate, suggest or react to typing. Nor are the plugins that change a

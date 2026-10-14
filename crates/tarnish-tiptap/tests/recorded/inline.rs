@@ -8,6 +8,7 @@ use tarnish::json::{Value, json, object};
 use tarnish_tiptap::extensions::link::{LinkOptions, link};
 use tarnish_tiptap::extensions::mention::{MentionHtml, MentionOptions, mention};
 use tarnish_tiptap::extensions::text_align::{TextAlignOptions, text_align};
+use tarnish_tiptap::extensions::text_direction::{Direction, TextDirectionOptions, text_direction};
 use tarnish_tiptap::extensions::text_style::{
     StyleOptions, TextStyleKitOptions, TextStyleOptions, background_color, color, font_family,
     font_size, line_height, text_style, text_style_kit,
@@ -139,6 +140,11 @@ fn kit(options: TextStyleKitOptions) -> Vec<Extension> {
     base.into_iter().chain(text_style_kit(options)).collect()
 }
 
+/// Tiptap's own extensions and TextDirection with the direction given.
+fn directed(direction: Option<Direction>) -> Vec<Extension> {
+    own_with([text_direction(TextDirectionOptions { direction }).into()])
+}
+
 fn configuration(name: &str) -> Configuration {
     match name {
         "own" => own::extensions(),
@@ -165,6 +171,10 @@ fn configuration(name: &str) -> Configuration {
             })
             .into(),
         ]),
+        "textDirection" => directed(None),
+        "textDirectionLtr" => directed(Some(Direction::Ltr)),
+        "textDirectionRtl" => directed(Some(Direction::Rtl)),
+        "textDirectionAuto" => directed(Some(Direction::Auto)),
         "link" => own_with([link(LinkOptions::default()).into()]),
         "linkOptions" => own_with([link(LinkOptions {
             autolink: false,
