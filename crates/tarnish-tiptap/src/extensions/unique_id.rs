@@ -3,7 +3,6 @@
 //! extension's `appendTransaction` does in an editor.
 
 use std::hash::{BuildHasher, RandomState};
-use std::iter::Peekable;
 use std::sync::Arc;
 
 use tarnish::Node;
@@ -93,9 +92,9 @@ fn resolve_types(types: UniqueIdTypes, extensions: &[&Extension]) -> Vec<&'stati
 
 /// `generateUniqueIds(doc, [...extensions, UniqueID.configure(options)])`: the document, read
 /// with the schema the extensions make with UniqueID's in place of any of theirs, with an id for
-/// each node of the types whose id is falsy. Tiptap sets each with an attribute step, which
-/// moves nothing and fails only where the node's content or its parent's is invalid, so the
-/// ids go straight into the document's JSON, each in the place its node's type gives it.
+/// each node of the types whose id is falsy. The ids go into the document's JSON rather than
+/// through Tiptap's `setNodeAttribute`, whose step per node takes time quadratic in the depth,
+/// and fail where it fails: on a node whose content or whose parent's is invalid.
 pub fn generate_unique_ids(
     doc: &Value,
     extensions: &[Extension],
@@ -115,67 +114,47 @@ pub fn generate_unique_ids(
             .filter(|name| !matches!(*name, "doc" | "text"))
             .collect(),
     };
-    let name = options.attribute_name;
     let content = Node::from_json(&schema.schema, doc)?;
-    let mut without_id = Vec::new();
-    let mut index = 0;
-    content.descendants(&mut |node, pos, parent, _| {
-        let id = node.attrs_view().get(name);
-        if !id.is_some_and(|id| id.truthy()) && types.contains(&node.node_type().name()) {
-            let parent = parent.expect("a descendant's parent").clone();
-            without_id.push((index, node.clone(), pos, parent));
-        }
-        index += 1;
-        Ok(true)
-    })?;
-    let mut ids = Vec::with_capacity(without_id.len());
-    for (index, node, pos, parent) in without_id {
-        ids.push((index, (options.generate_id)(&node, pos)?));
-        let own = (!node.is_leaf()).then_some(&node);
-        for checked in own.into_iter().chain([&parent]) {
-            if !checked.node_type().valid_content(checked.content()) {
-                let name = checked.node_type().name();
-                let message = format!("Invalid content for node {name}");
-                return Err(Error::Of(&TRANSFORM_ERROR, message));
-            }
-        }
-    }
     let mut json = content.to_json();
-    let mut ids = ids.into_iter().peekable();
-    let mut index = 0;
-    for child in children(&mut json) {
-        set_ids(child, &mut index, &mut ids, name);
-    }
+    set_ids(&content, &mut json, 0, &types, options)?;
     Ok(json)
 }
 
-/// Sets the ids of a node and its descendants, those whose index in the order `descendants`
-/// visits them `ids` gives, counting from `index`.
+/// Gives each descendant of `parent` that needs an id one, in the order `descendants` visits
+/// them, in `json`, the parent's JSON, `start` being where the parent's content starts.
 fn set_ids(
-    node: &mut Value,
-    index: &mut usize,
-    ids: &mut Peekable<impl Iterator<Item = (usize, Value)>>,
-    name: &str,
-) {
-    if let Some((_, id)) = ids.next_if(|(at, _)| at == index)
-        && let Some(Value::Object(attrs)) = node.get_mut("attrs")
-        && let Some(attr) = attrs.get_mut(name)
-    {
-        *attr = id;
-    }
-    *index += 1;
-    for child in children(node) {
-        stack::grow(|| set_ids(child, index, ids, name));
-    }
-}
-
-/// The nodes of a node's `content`.
-fn children(node: &mut Value) -> impl Iterator<Item = &mut Value> {
-    let content = match node.get_mut("content") {
-        Some(Value::Array(content)) => Some(content),
-        _ => None,
+    parent: &Node<'static>,
+    json: &mut Value,
+    start: usize,
+    types: &[&str],
+    options: &UniqueIdOptions,
+) -> Result<()> {
+    let Some(Value::Array(content)) = json.get_mut("content") else {
+        return Ok(());
     };
-    content.into_iter().flatten()
+    let name = options.attribute_name;
+    for ((offset, node), json) in parent.content().children_with_offsets().zip(content) {
+        let pos = start + offset;
+        let id = node.attrs_view().get(name);
+        if !id.is_some_and(|id| id.truthy()) && types.contains(&node.node_type().name()) {
+            let id = (options.generate_id)(&node, pos)?;
+            let own = (!node.is_leaf()).then_some(&node);
+            for checked in own.into_iter().chain([parent]) {
+                if !checked.node_type().valid_content(checked.content()) {
+                    let name = checked.node_type().name();
+                    let message = format!("Invalid content for node {name}");
+                    return Err(Error::Of(&TRANSFORM_ERROR, message));
+                }
+            }
+            if let Some(Value::Object(attrs)) = json.get_mut("attrs")
+                && let Some(attr) = attrs.get_mut(name)
+            {
+                *attr = id;
+            }
+        }
+        stack::grow(|| set_ids(&node, json, pos + 1, types, options))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
