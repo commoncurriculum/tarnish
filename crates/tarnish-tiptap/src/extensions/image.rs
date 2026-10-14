@@ -41,7 +41,7 @@ fn parse_markdown(token: &Token, helpers: &ParseHelpers) -> Result<Parsed, Error
     if let Some(href) = token.href() {
         attrs.push("src".into(), string(href));
     }
-    attrs.push("title".into(), token.title().map_or(Value::Null, string));
+    attrs.push("title".into(), Value::from(token.title().map(string)));
     if let Some(text) = &token.text {
         attrs.push("alt".into(), string(text));
     }

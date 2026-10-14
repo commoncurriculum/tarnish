@@ -11,7 +11,7 @@ impl Token {
     /// The token's fields, its children's among them, as `JSON.stringify` writes marked's.
     pub fn to_json(&self) -> Value {
         let string = |units: &[u16]| Value::String(utf16::to_string(units));
-        let optional = |units: &Option<Vec<u16>>| units.as_deref().map_or(Value::Null, string);
+        let optional = |units: &Option<Vec<u16>>| Value::from(units.as_deref().map(string));
         let tokens = |tokens: &[Token]| {
             Value::Array(
                 tokens
@@ -78,8 +78,7 @@ impl Token {
                     Value::Array(cells.iter().map(cell).collect())
                 };
                 set("header", cells(&table.header));
-                let align =
-                    |align: &Option<Align>| align.map_or(Value::Null, |a| json!(a.as_str()));
+                let align = |align: &Option<Align>| Value::from(align.map(Align::as_str));
                 set(
                     "align",
                     Value::Array(table.align.iter().map(align).collect()),

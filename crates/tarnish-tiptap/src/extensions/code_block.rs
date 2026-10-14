@@ -101,10 +101,8 @@ fn parse_markdown(token: &Token, helpers: &ParseHelpers) -> Result<Parsed, Error
     if !fenced && token.code_block_style() != Some("indented") {
         return Ok(Parsed::Nodes(Vec::new()));
     }
-    let language = match token.lang().filter(|lang| !lang.is_empty()) {
-        Some(lang) => json!(utf16::to_string(lang)),
-        None => Value::Null,
-    };
+    let language = token.lang().filter(|lang| !lang.is_empty());
+    let language = Value::from(language.map(utf16::to_string));
     let content = match token.text().is_empty() {
         true => Vec::new(),
         false => vec![json!({ "type": "text", "text": utf16::to_string(token.text()) })],

@@ -30,7 +30,7 @@ pub fn text_align(options: TextAlignOptions) -> PlainExtension {
     } = options;
     let default = default_alignment.map(|alignment| Value::String(alignment.into()));
     let parsed_default = default.clone();
-    let attribute = ExtensionAttribute::new("textAlign", default.unwrap_or(Value::Null))
+    let attribute = ExtensionAttribute::new("textAlign", Value::from(default))
         .parse_html(move |element| {
             let alignment = element.style_value("text-align");
             if alignments.contains(&alignment.as_str()) {

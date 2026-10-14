@@ -21,7 +21,7 @@ pub(super) fn parse_list_items(
         let alone = std::slice::from_ref(item);
         if item.kind != "list_item" {
             let first = helpers.parse_children(alone)?.into_iter().next();
-            parsed.push(first.unwrap_or(Value::Null));
+            parsed.push(Value::from(first));
             continue;
         }
         let mut content = Vec::new();

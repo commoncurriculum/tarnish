@@ -144,13 +144,13 @@ impl Configured {
 }
 
 pub fn link(options: LinkOptions) -> MarkExtension {
-    let default_of = |name: &str| options.html_attributes.get(name).cloned();
+    let default_of = |name: &str| Value::from(options.html_attributes.get(name).cloned());
     let attributes = vec![
         ExtensionAttribute::new("href", Value::Null)
             .parse_html(|element| element.attribute("href").map(Value::String)),
-        ExtensionAttribute::new("target", default_of("target").unwrap_or(Value::Null)),
-        ExtensionAttribute::new("rel", default_of("rel").unwrap_or(Value::Null)),
-        ExtensionAttribute::new("class", default_of("class").unwrap_or(Value::Null)),
+        ExtensionAttribute::new("target", default_of("target")),
+        ExtensionAttribute::new("rel", default_of("rel")),
+        ExtensionAttribute::new("class", default_of("class")),
         ExtensionAttribute::new("title", Value::Null),
     ];
     let autolink = options.autolink;
@@ -192,8 +192,7 @@ fn parse_markdown(token: &Token, helpers: &ParseHelpers) -> Result<Parsed, Error
         attrs.push("href".into(), json!(utf16::to_string(href)));
     }
     let title = token.title().filter(|title| !title.is_empty());
-    let title = title.map_or(Value::Null, |title| json!(utf16::to_string(title)));
-    attrs.push("title".into(), title);
+    attrs.push("title".into(), Value::from(title.map(utf16::to_string)));
     Ok(helpers.apply_mark("link", content, Some(attrs)))
 }
 

@@ -187,9 +187,7 @@ fn queries(inputs: &Map) -> Value {
             let cols = table
                 .query_selector_all("colgroup > col")
                 .expect("a selector");
-            let width = |col: &tarnish_html::HtmlNode| {
-                col.attribute("width").map_or(Value::Null, Value::String)
-            };
+            let width = |col: &tarnish_html::HtmlNode| Value::from(col.attribute("width"));
             Value::Array(cols.iter().map(width).collect())
         })
         .collect();
