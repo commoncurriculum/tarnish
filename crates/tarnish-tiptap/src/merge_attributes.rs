@@ -18,6 +18,27 @@ pub fn merge_attributes<'a, const N: usize>(
     Ok(html)
 }
 
+/// `mergeAttributes(this.options.HTMLAttributes, HTMLAttributes)`: an extension's
+/// `HTMLAttributes` option, each a string as `setAttribute` makes of a value, with the
+/// attributes its node or mark renders merged over them.
+pub fn merge_html_attributes<'a>(
+    options: &[(String, String)],
+    html: SpecAttrs<'a>,
+) -> Result<SpecAttrs<'a>, Error> {
+    if options.is_empty() {
+        return Ok(html);
+    }
+    let mut merged = SpecAttrs::new();
+    for (key, value) in options {
+        let value = AttrValue::Text(Cow::Owned(value.clone()));
+        merge_entry(&mut merged, Cow::Owned(key.clone()), value)?;
+    }
+    for (key, value) in html.iter() {
+        merge_entry(&mut merged, Cow::Owned(key.to_owned()), value.clone())?;
+    }
+    Ok(merged)
+}
+
 /// Merges an entry of an object into `merged` as `mergeAttributes` does: its value replaces a
 /// falsy one, and a `class` or `style` joins the one there.
 pub(super) fn merge_entry<'a>(

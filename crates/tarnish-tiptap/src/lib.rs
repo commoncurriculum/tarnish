@@ -44,10 +44,10 @@ pub use attributes::{
     ExtensionAttribute, GlobalAttributes, ParseAttribute, RenderAttribute, Rendered,
 };
 pub use extension::{
-    Extension, Kind, MarkConfig, MarkExtension, NodeConfig, NodeExtension, PlainExtension,
-    RenderMark, RenderNode,
+    ExtendNodeSchema, Extension, Kind, MarkConfig, MarkExtension, NodeConfig, NodeExtension,
+    PlainExtension, RenderMark, RenderNode,
 };
-pub use merge_attributes::merge_attributes;
+pub use merge_attributes::{merge_attributes, merge_html_attributes};
 pub use parse_html::{ParseHtml, StyleRule, TagRule};
 pub use schema::{TiptapSchema, get_schema, sort_extensions};
 pub use utilities::{

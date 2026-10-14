@@ -16,7 +16,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{Extension, Kind, sort_extensions};
 use tarnish_js::units::Units;
-use tarnish_markdown::marked::{Lexer, Marked, Token, TokenizerExtension, Tokens};
+use tarnish_markdown::marked::{BlockExtension, Lexer, Marked, Token, TokenizerExtension, Tokens};
 
 /// What `registerExtension` keeps of an extension.
 #[derive(Clone)]
@@ -103,8 +103,18 @@ impl MarkdownManager {
                 token
             }))
         });
-        self.marked
-            .use_extension(TokenizerExtension { start, tokenizer });
+        match start {
+            Start::Inline(start) => self
+                .marked
+                .use_extension(TokenizerExtension { start, tokenizer }),
+            Start::Block(start) => {
+                let start = Arc::clone(start);
+                self.marked.use_block_extension(BlockExtension {
+                    start: Some(Box::new(move |src: &Units| start(src))),
+                    tokenizer,
+                });
+            }
+        }
     }
 
     /// The marked the manager parses with, which holds the extensions' tokenizers.

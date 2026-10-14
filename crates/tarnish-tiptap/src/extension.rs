@@ -9,13 +9,13 @@ use std::sync::Arc;
 use super::attributes::{ExtensionAttribute, GlobalAttributes};
 use super::markdown::{
     MarkdownTokenizer, ParseHelpers, ParseMarkdown, Parsed, RenderContext, RenderHelpers,
-    RenderMarkdown,
+    RenderMarkdown, Start,
 };
 use super::parse_html::ParseHtml;
 use crate::{DomSpec, SpecAttrs};
 use tarnish::{Mark, Node};
 use tarnish_js::Error;
-use tarnish_js::json::Value;
+use tarnish_js::json::{Map, Value};
 use tarnish_js::units::Units;
 use tarnish_markdown::marked::{Lexer, Token};
 
@@ -40,8 +40,17 @@ pub struct Extension<K = Kind> {
     pub global_attributes: Vec<GlobalAttributes>,
     /// `parseHTML`.
     pub parse_html: Vec<ParseHtml>,
+    /// The config's fields that a package declares for itself, such as Table's `tableRole`,
+    /// which only an `extendNodeSchema` reads.
+    pub fields: Map,
+    /// `extendNodeSchema`.
+    pub extend_node_schema: Option<ExtendNodeSchema>,
     pub(crate) markdown: Markdown,
 }
+
+/// An extension's `extendNodeSchema(extension)`: the fields it gives the spec of a node type,
+/// given the type's extension. A field whose value is `null` is left out.
+pub type ExtendNodeSchema = Arc<dyn Fn(&Extension) -> Map + Send + Sync>;
 
 /// `Node.create(config)`.
 pub type NodeExtension = Extension<NodeConfig>;
@@ -65,6 +74,7 @@ pub struct NodeConfig {
     pub linebreak_replacement: bool,
     /// `code`: the node holds code, whose text Markdown keeps as it is.
     pub code: bool,
+    pub isolating: bool,
     pub render_html: Option<RenderNode>,
 }
 
@@ -99,6 +109,8 @@ impl<K: Default> Extension<K> {
             attributes: Vec::new(),
             global_attributes: Vec::new(),
             parse_html: Vec::new(),
+            fields: Map::new(),
+            extend_node_schema: None,
             markdown: Markdown::default(),
         }
     }
@@ -113,8 +125,24 @@ impl<K> Extension<K> {
             attributes: self.attributes,
             global_attributes: self.global_attributes,
             parse_html: self.parse_html,
+            fields: self.fields,
+            extend_node_schema: self.extend_node_schema,
             markdown: self.markdown,
         }
+    }
+
+    /// Sets a field of the config that a package declares for itself.
+    pub fn field(mut self, name: &str, value: impl Into<Value>) -> Self {
+        self.fields.insert(name.into(), value.into());
+        self
+    }
+
+    pub fn extend_node_schema(
+        mut self,
+        extend: impl Fn(&Extension) -> Map + Send + Sync + 'static,
+    ) -> Self {
+        self.extend_node_schema = Some(Arc::new(extend));
+        self
     }
 
     pub fn priority(mut self, priority: i32) -> Self {
@@ -194,7 +222,24 @@ impl<K> Extension<K> {
         + 'static,
     ) -> Self {
         self.markdown.tokenizer = Some(MarkdownTokenizer {
-            start,
+            start: Start::Inline(start),
+            tokenize: Arc::new(tokenize),
+        });
+        self
+    }
+
+    /// `markdownTokenizer: { level: 'block', start, tokenize }`: `start(src)` is where in `src`
+    /// a token may start, `None` for `-1`.
+    pub fn markdown_block_tokenizer(
+        mut self,
+        start: impl Fn(&Units) -> Option<usize> + Send + Sync + 'static,
+        tokenize: impl Fn(&Units, &[Token], &mut Lexer) -> Result<Option<Token>, Error>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        self.markdown.tokenizer = Some(MarkdownTokenizer {
+            start: Start::Block(Arc::new(start)),
             tokenize: Arc::new(tokenize),
         });
         self
@@ -254,6 +299,11 @@ impl NodeExtension {
 
     pub fn code(mut self) -> Self {
         self.kind.code = true;
+        self
+    }
+
+    pub fn isolating(mut self) -> Self {
+        self.kind.isolating = true;
         self
     }
 

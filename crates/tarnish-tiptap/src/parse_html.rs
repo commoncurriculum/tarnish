@@ -4,9 +4,10 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use tarnish::dom::{
-    Content, ContentElement, ElementRule, GetAttrsResult, Namespace, ParseRule, Rule,
-    StyleAttrsHook, StyleRule as DomStyleRule, TagRule as DomTagRule,
+    Content, ContentElement, ElementRule, GetAttrsResult, GetContentHook, Namespace, ParseRule,
+    Rule, StyleAttrsHook, StyleRule as DomStyleRule, TagRule as DomTagRule,
 };
+use tarnish::{Fragment, Schema};
 use tarnish_html::HtmlNode;
 use tarnish_js::json::{Map, Value};
 use tarnish_js::{self as js, Result};
@@ -35,6 +36,7 @@ pub struct TagRule {
     /// over it make of it.
     get_attrs: Option<TagAttrs>,
     content_element: Option<ContentHook>,
+    get_content: Option<GetContentHook<HtmlNode>>,
 }
 
 /// `{ style, ... }`.
@@ -56,6 +58,7 @@ impl ParseHtml {
             attrs: Map::new(),
             get_attrs: None,
             content_element: None,
+            get_content: None,
         }
     }
 
@@ -98,6 +101,15 @@ impl TagRule {
         content_element: impl Fn(&HtmlNode) -> Result<HtmlNode> + Send + Sync + 'static,
     ) -> Self {
         self.content_element = Some(Arc::new(content_element));
+        self
+    }
+
+    /// `getContent(node, schema)`: the node's content, made instead of parsed.
+    pub fn get_content(
+        mut self,
+        get_content: impl Fn(&HtmlNode, &Schema) -> Result<Fragment<'static>> + Send + Sync + 'static,
+    ) -> Self {
+        self.get_content = Some(Arc::new(get_content));
         self
     }
 }
@@ -153,6 +165,7 @@ pub(crate) fn parse_rules(
                 attrs,
                 get_attrs,
                 content_element,
+                get_content,
             }) => {
                 let attributes = Arc::clone(attributes);
                 let injected = move |element: &HtmlNode| {
@@ -174,9 +187,10 @@ pub(crate) fn parse_rules(
                     }
                     Ok(GetAttrsResult::Attrs(result))
                 };
-                let content = match content_element {
-                    Some(hook) => Content::Element(ContentElement::Hook(hook)),
-                    None => Content::Children,
+                let content = match (get_content, content_element) {
+                    (Some(hook), _) => Content::Get(hook),
+                    (None, Some(hook)) => Content::Element(ContentElement::Hook(hook)),
+                    (None, None) => Content::Children,
                 };
                 ParseRule::Tag(Rule {
                     priority: Some(f64::from(priority)),

@@ -44,13 +44,24 @@ pub enum Parsed {
     },
 }
 
-/// An extension's `markdownTokenizer`. It is inline, the `level` Tiptap defaults to, and its
-/// `start` is where the string starts in `src`.
+/// An extension's `markdownTokenizer`.
 #[derive(Clone)]
 pub(crate) struct MarkdownTokenizer {
-    pub start: &'static str,
+    pub start: Start,
     pub tokenize: Tokenize,
 }
+
+/// A tokenizer's `level` and `start`.
+#[derive(Clone)]
+pub(crate) enum Start {
+    /// Inline, the level Tiptap defaults to, starting where the string starts in `src`.
+    Inline(&'static str),
+    /// Block, starting where `start(src)` says.
+    Block(BlockStart),
+}
+
+/// A block tokenizer's `start(src)`: where in `src` a token may start.
+pub(crate) type BlockStart = Arc<dyn Fn(&Units) -> Option<usize> + Send + Sync>;
 
 /// `tokenize(src, tokens, lexer)`.
 pub(crate) type Tokenize =

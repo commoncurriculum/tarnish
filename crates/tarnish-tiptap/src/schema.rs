@@ -8,6 +8,7 @@ use tarnish::dom::{DomParser, DomSerializer, MarkToDom, NodeToDom, ParseRule};
 use tarnish::model::{AttributeDefault, AttributeSpec, MarkSpec, NodeSpec, Schema, SchemaSpec};
 use tarnish_html::HtmlNode;
 use tarnish_js::Result;
+use tarnish_js::json::Map;
 
 use super::attributes::{ExtensionAttribute, get_rendered_attributes};
 use super::extension::{Extension, Kind};
@@ -40,7 +41,7 @@ pub fn get_schema(extensions: &[Extension]) -> Result<TiptapSchema> {
     let mut spec = SchemaSpec::default();
     let (mut node_rules, mut mark_rules) = (Vec::new(), Vec::new());
     let (mut to_doms, mut mark_to_doms) = (HashMap::new(), HashMap::new());
-    for extension in extensions {
+    for &extension in &extensions {
         let attributes: Vec<ExtensionAttribute> = globals
             .iter()
             .filter(|(name, _)| *name == extension.name)
@@ -63,7 +64,9 @@ pub fn get_schema(extensions: &[Extension]) -> Result<TiptapSchema> {
                         marks: node.marks.map(str::to_owned),
                         linebreak_replacement: node.linebreak_replacement,
                         code: node.code,
+                        isolating: node.isolating,
                         attrs,
+                        extra: extra_node_fields(&extensions, extension),
                         ..NodeSpec::default()
                     },
                 ));
@@ -114,6 +117,23 @@ pub fn get_schema(extensions: &[Extension]) -> Result<TiptapSchema> {
 
 fn non_empty(text: &str) -> Option<String> {
     (!text.is_empty()).then(|| text.to_owned())
+}
+
+/// The fields each extension's `extendNodeSchema` gives the spec of `node`'s type, a later
+/// extension's replacing an earlier one's, but those `null`, which `cleanUpSchemaItem` leaves
+/// out.
+fn extra_node_fields(extensions: &[&Extension], node: &Extension) -> Map {
+    let mut fields = Map::new();
+    for extend in extensions
+        .iter()
+        .filter_map(|extension| extension.extend_node_schema.as_ref())
+    {
+        for (key, value) in extend(node) {
+            fields.insert(key, value);
+        }
+    }
+    fields.retain(|_, value| !value.is_null());
+    fields
 }
 
 /// `sortExtensions`: highest priority first, and equal priorities in the order given.
