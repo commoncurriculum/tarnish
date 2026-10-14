@@ -19,6 +19,7 @@ pub fn flat_list_ordered() -> NodeExtension {
         .group("block")
         .content("inline*")
         .priority(230)
+        .defining()
         .add_attributes(attributes(Some(
             ExtensionAttribute::new("counter", json!(1)).not_rendered(),
         )))
@@ -39,6 +40,7 @@ pub fn flat_list_unordered() -> NodeExtension {
         .group("block")
         .content("inline*")
         .priority(210)
+        .defining()
         .add_attributes(attributes(None))
         .render_html(|node, _| {
             Ok(DomSpec::element(
@@ -54,6 +56,7 @@ pub fn flat_list_task() -> NodeExtension {
         .group("block")
         .content("inline*")
         .priority(220)
+        .defining()
         .add_attributes(attributes(Some(ExtensionAttribute::new(
             "checked",
             json!(false),
