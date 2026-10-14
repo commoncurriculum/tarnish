@@ -20,6 +20,7 @@ pub fn image(options: ImageOptions) -> NodeExtension {
     NodeExtension::create("image")
         .inline(options.inline)
         .group(if options.inline { "inline" } else { "block" })
+        .draggable()
         .add_attributes(attributes.into())
         .parse_html([ParseHtml::tag(if options.allow_base64 {
             "img[src]"

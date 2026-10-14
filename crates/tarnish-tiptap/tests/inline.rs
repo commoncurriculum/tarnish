@@ -13,8 +13,8 @@ use tarnish_tiptap::extensions::{
     heading::heading, italic::italic, paragraph::paragraph, text::text,
 };
 use tarnish_tiptap::{
-    Extension, ExtensionAttribute, GlobalAttributes, GlobalTypes, PlainExtension, TiptapSchema,
-    get_schema,
+    Extension, ExtensionAttribute, GlobalAttributes, GlobalTypes, MarkExtension, NodeExtension,
+    PlainExtension, TiptapSchema, get_schema,
 };
 
 /// Global attributes for each kind of `types`.
@@ -47,9 +47,34 @@ fn globals() -> PlainExtension {
     ])
 }
 
+/// Document, Paragraph and Text, and `others`.
+fn with(others: impl IntoIterator<Item = Extension>) -> Vec<Extension> {
+    let base: [Extension; 3] = [document().into(), paragraph().into(), text().into()];
+    base.into_iter().chain(others).collect()
+}
+
+/// A node and marks that set the fields of a spec that only an editor reads.
+fn specs() -> Vec<Extension> {
+    let chip = NodeExtension::create("chip")
+        .group("inline")
+        .inline(true)
+        .atom()
+        .selectable(false)
+        .draggable();
+    let rule = NodeExtension::create("rule")
+        .group("block")
+        .atom()
+        .selectable(true);
+    let tag = MarkExtension::create("tag").inclusive(false);
+    let free = MarkExtension::create("free").inclusive(true);
+    with([chip.into(), rule.into(), tag.into(), free.into()])
+}
+
 /// The extensions of each configuration the recorder names.
 fn configuration(name: &str) -> Vec<Extension> {
     match name {
+        "own" => own::extensions(),
+        "specs" => specs(),
         "globals" => vec![
             document().into(),
             paragraph().into(),
@@ -128,6 +153,8 @@ fn types(schema: &TiptapSchema) -> Value {
             json!([node.name(), {
                 "atom": node.is_atom(),
                 "inline": node.is_inline(),
+                "selectable": node.spec().selectable != Some(false),
+                "draggable": node.spec().draggable,
                 "groups": node.groups(),
                 "attrs": attrs(node.default_attrs()),
             }])

@@ -5,7 +5,7 @@
 // - `parsesMarkdown`, `serializesMarkdown`, `parsesHTML` and `serializesHTML` record what
 //   harness/record-tiptap.mjs records, of each configuration.
 import { readFileSync } from "node:fs"
-import { Extension, getSchema, splitExtensions } from "@tiptap/core"
+import { Extension, Mark, Node as TiptapNode, getSchema, splitExtensions } from "@tiptap/core"
 import { Bold } from "@tiptap/extension-bold"
 import { Document } from "@tiptap/extension-document"
 import { HardBreak } from "@tiptap/extension-hard-break"
@@ -64,8 +64,23 @@ const Globals = Extension.create({
   },
 })
 
+// A node and marks that set the fields of a spec that only an editor reads.
+const Chip = TiptapNode.create({
+  name: "chip",
+  group: "inline",
+  inline: true,
+  atom: true,
+  selectable: false,
+  draggable: true,
+})
+const Rule = TiptapNode.create({ name: "rule", group: "block", atom: true, selectable: true })
+const Tag = Mark.create({ name: "tag", inclusive: false })
+const Free = Mark.create({ name: "free", inclusive: true })
+
 const configurations = {
+  own,
   globals: [Document, Paragraph, Text, Heading, HardBreak, Bold, Italic, Globals],
+  specs: [Document, Paragraph, Text, Chip, Rule, Tag, Free],
 }
 
 const converters = Object.fromEntries(
@@ -91,6 +106,8 @@ const schemas = Object.entries(converters).map(([name, { schema }]) => ({
     {
       atom: type.isAtom,
       inline: type.isInline,
+      selectable: type.spec.selectable !== false,
+      draggable: !!type.spec.draggable,
       groups: type.groups,
       attrs: type.defaultAttrs,
     },

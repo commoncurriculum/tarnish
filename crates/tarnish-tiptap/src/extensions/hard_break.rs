@@ -11,6 +11,7 @@ pub fn hard_break() -> NodeExtension {
         .markdown_token_name("br")
         .inline(true)
         .group("inline")
+        .selectable(false)
         .linebreak_replacement()
         .parse_html([ParseHtml::tag("br")])
         .render_html(|_, html| Ok(DomSpec::element("br", html, Vec::new())))
