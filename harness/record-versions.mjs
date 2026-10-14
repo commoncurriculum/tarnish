@@ -51,25 +51,9 @@ function version(key) {
   return JSON.parse(readFileSync(join(dir, "package.json"), "utf8")).version
 }
 
-const tiptap = [
-  "core",
-  "extension-bold",
-  "extension-document",
-  "extension-hard-break",
-  "extension-heading",
-  "extension-highlight",
-  "extension-image",
-  "extension-italic",
-  "extension-paragraph",
-  "extension-strike",
-  "extension-subscript",
-  "extension-superscript",
-  "extension-text",
-  "extension-text-style",
-  "extension-underline",
-  "markdown",
-  "pm",
-].map(name => `@tiptap/${name}`)
+// The recorders run every Tiptap package the harness installs.
+const { devDependencies } = JSON.parse(readFileSync(join(root, "package.json"), "utf8"))
+const tiptap = Object.keys(devDependencies).filter(name => name.startsWith("@tiptap/"))
 
 const packages = [
   "@tiptap/pm > prosemirror-model",

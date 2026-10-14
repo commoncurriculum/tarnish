@@ -56,7 +56,6 @@
     "@tiptap/extension-youtube": "3.30.0",
     "@tiptap/markdown": "3.30.0",
     "@tiptap/pm": "3.30.0",
-    "@tiptap/static-renderer": "3.30.0",
     "@tiptap/suggestion": "3.30.0",
     "ist": "1.1.7",
     "linkedom": "github:commoncurriculum/linkedom#345ef3f3298ae3e3703374f653f80790b0af324b",
