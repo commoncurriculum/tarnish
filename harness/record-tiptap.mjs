@@ -4,11 +4,13 @@
 // `htmlAttributes` and `htmlAttributeValues`, each with HTMLAttributes and an application's
 // attribute that renders some of the same ones; `levels` and `noLevels`, with Heading's levels;
 // `multicolor`, with Highlight's; `inline` and `base64`, with Image's; `renderedValues`, with
-// an application's attributes that render classes and styles of any value; and `nodeType`, with
-// attributes named `nodeType`, which renderSpec takes for a DOM node but where they're null. The
-// options reach no Markdown, since MarkdownManager reads the schema only for HTML, which it keeps
-// as text without a `window`. `all` has every group's extensions, as the other recorders record them: it records
-// fixtures/marked.json's and fixtures/dom.json's inputs, and what one group nests in another's.
+// an application's attributes that render classes and styles of any value; `nodeType`, with
+// attributes named `nodeType`, which renderSpec takes for a DOM node but where they're null; and
+// `application`, with the lists and an application's blocks, one whose Markdown is its level and
+// one whose whitespace is `pre`. The options reach no Markdown, since MarkdownManager reads the
+// schema only for HTML, which it keeps as text without a `window`. `all` has every group's
+// extensions, as the other recorders record them: it records fixtures/marked.json's and
+// fixtures/dom.json's inputs, and what one group nests in another's.
 import { Extension, Mark, Node as TiptapNode } from "@tiptap/core"
 import { Audio } from "@tiptap/extension-audio"
 import { Blockquote } from "@tiptap/extension-blockquote"
@@ -74,6 +76,22 @@ const Figure = TiptapNode.create({
   renderHTML: ({ HTMLAttributes }) => ["figure", HTMLAttributes],
   addAttributes: () => ({ made: { default: null, renderHTML: attributes => ({ "data-made": attributes.made }) } }),
 })
+// An application's block whose Markdown is the `level` its renderer is given, and one whose
+// whitespace is `pre` though its element's isn't.
+const Leveled = TiptapNode.create({
+  name: "leveled",
+  group: "block",
+  content: "inline*",
+  renderMarkdown: (node, helpers, context) => `${context.level}> ` + helpers.renderChildren(node),
+})
+const Preformatted = TiptapNode.create({
+  name: "preformatted",
+  group: "block",
+  content: "text*",
+  whitespace: "pre",
+  parseHTML: () => [{ tag: "div[data-pre]" }],
+})
+
 // An application's attribute on each type with HTMLAttributes, which renders a class, a style and
 // an attribute of the options'.
 const Given = Extension.create({
@@ -306,6 +324,36 @@ const codeDocs = [
   ...["x", 1, true, "", null].map(made => doc({ type: "figure", attrs: { made } })),
 ]
 
+// Leveled outside lists, after an item's paragraph in each kind of list, and in lists nested in
+// lists' items, which each indent their content.
+const leveled = value => ({ type: "leveled", content: [text(value)] })
+const listed = (type, ...content) => ({ type, content: [{ type: type === "taskList" ? "taskItem" : "listItem", content }] })
+const levelDocs = [
+  doc(leveled("a")),
+  ...["bulletList", "orderedList", "taskList"].map(type => doc(listed(type, paragraph(text("a")), leveled("b")))),
+  doc(listed("bulletList", paragraph(text("a")), listed("orderedList", paragraph(text("b")), leveled("c")))),
+  doc(
+    listed(
+      "orderedList",
+      paragraph(text("a")),
+      listed("taskList", paragraph(text("b")), listed("bulletList", paragraph(text("c")), leveled("d"))),
+      leveled("e"),
+    ),
+    leveled("f"),
+  ),
+]
+// Spaces, tabs and newlines in Preformatted's element and in elements around it, beside a
+// paragraph's and a list item's, which collapse theirs.
+const preHTML = [
+  "<div data-pre>  a  \n\tb  </div>",
+  "<div data-pre>\n\na\n</div>",
+  "<div data-pre> </div>",
+  "<div data-pre><span> a </span>  <b>b\n</b>\n</div>",
+  "<p> a  \n b </p><div data-pre> a  \n b </div><div> a  \n b </div>",
+  "<ul><li><p> a  b </p><div data-pre> c \n  d </div></li></ul>",
+  "<div data-pre>a\r\nb\rc&nbsp; d</div>",
+]
+
 // Documents of text whose `text` or `marks` is something other than what the manager calls a
 // method of, so that they record V8's error for each.
 const textOf = node => doc(paragraph({ type: "text", ...node }))
@@ -515,6 +563,22 @@ record("tiptap", {
       Typed,
     ],
     serializesHTML: nodeTypeDocs,
+  },
+  application: {
+    extensions: [
+      Document,
+      Paragraph,
+      Text,
+      BulletList,
+      OrderedList,
+      ListItem,
+      TaskList,
+      TaskItem.configure({ nested: true }),
+      Leveled,
+      Preformatted,
+    ],
+    parsesHTML: preHTML,
+    serializesMarkdown: levelDocs,
   },
   all: {
     extensions: [

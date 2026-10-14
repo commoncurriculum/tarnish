@@ -6,6 +6,7 @@
 
 use tarnish::js::stack::on_dirty_scheduler_stack;
 use tarnish::json::{Map, Value, json, object};
+use tarnish::model::Whitespace;
 use tarnish_fixtures::{read, same, version};
 use tarnish_tiptap::extensions::audio::audio;
 use tarnish_tiptap::extensions::blockquote::blockquote;
@@ -34,7 +35,7 @@ use tarnish_tiptap::extensions::subscript::{SubscriptOptions, subscript};
 use tarnish_tiptap::extensions::superscript::{SuperscriptOptions, superscript};
 use tarnish_tiptap::extensions::table::{table, table_cell, table_header, table_row};
 use tarnish_tiptap::extensions::table_of_contents::table_of_contents;
-use tarnish_tiptap::extensions::task_item::task_item;
+use tarnish_tiptap::extensions::task_item::{TaskItemOptions, task_item};
 use tarnish_tiptap::extensions::task_list::task_list;
 use tarnish_tiptap::extensions::text::text;
 use tarnish_tiptap::extensions::text_align::{TextAlignOptions, text_align};
@@ -102,6 +103,7 @@ fn configuration(name: &str) -> Configuration {
             extensions
         }
         "nodeType" => node_type(),
+        "application" => application(),
         "all" => all(),
         other => panic!("no configuration {other}"),
     }
@@ -387,6 +389,42 @@ fn node_type() -> Vec<Extension> {
         })
         .into(),
         typed.into(),
+    ]
+}
+
+/// The lists, TaskItem nested, and an application's blocks: one whose Markdown is the level its
+/// renderer is given, and one whose whitespace is `pre`.
+fn application() -> Vec<Extension> {
+    let leveled = NodeExtension::create("leveled")
+        .group("block")
+        .content("inline*")
+        .render_markdown(|node, helpers, context| {
+            Ok(format!(
+                "{}> {}",
+                context.level,
+                helpers.render_children(node, "")?
+            ))
+        });
+    let preformatted = NodeExtension::create("preformatted")
+        .group("block")
+        .content("text*")
+        .whitespace(Whitespace::Pre)
+        .parse_html([ParseHtml::tag("div[data-pre]")]);
+    vec![
+        document().into(),
+        paragraph(ParagraphOptions::default()).into(),
+        text().into(),
+        bullet_list(Default::default()).into(),
+        ordered_list(Default::default()).into(),
+        list_item(Default::default()).into(),
+        task_list(Default::default()).into(),
+        task_item(TaskItemOptions {
+            nested: true,
+            ..TaskItemOptions::default()
+        })
+        .into(),
+        leveled.into(),
+        preformatted.into(),
     ]
 }
 
