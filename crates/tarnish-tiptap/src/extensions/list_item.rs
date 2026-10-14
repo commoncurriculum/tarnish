@@ -1,6 +1,6 @@
 //! `@tiptap/extension-list`'s `ListItem`, which `@tiptap/extension-list-item` exports.
 
-use super::ordered_list::list_marker;
+use super::ordered_list::roman::list_marker;
 use crate::markdown::{
     ParseHelpers, Parsed, RenderContext, RenderHelpers, render_nested_markdown_content,
 };
