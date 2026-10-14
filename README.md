@@ -160,7 +160,7 @@ making what its JavaScript makes:
   CodeBlockLowlight, whose documents are CodeBlock's), HorizontalRule, Image, BulletList,
   OrderedList, ListItem, TaskList, TaskItem, Table, TableRow, TableCell, TableHeader, Details,
   DetailsSummary, DetailsContent, InlineMath, BlockMath, Emoji, Mention, YouTube, Twitch and
-  Audio, and tiptap-extension-flat-list's flat list.
+  Audio, and tiptap-extension-flat-list 0.4.0's flat list items.
 - **Marks:** Bold, Italic, Strike, Underline, Code, Highlight, Subscript, Superscript, Link,
   RubyText and TextStyle, with Color, BackgroundColor, FontFamily, FontSize and LineHeight.
 - **Attributes on other types:** TextAlign, UniqueID, TableOfContents' ids, and `@tiptap/core`'s
@@ -170,8 +170,10 @@ making what its JavaScript makes:
 What only an editor uses isn't here: commands, keyboard shortcuts, input and paste rules, node
 views, and plugins that decorate, suggest or react to typing. Nor are the plugins that change a
 document as it's edited: UniqueID's and TableOfContents' ids for new nodes, prosemirror-tables'
-`fixTables`, and Emoji's and Mathematics' conversions of typed text. `generateUniqueIds` and
-`generateText` are here.
+`fixTables`, Emoji's and Mathematics' conversions of typed text, and the flat list's numbering
+of ordered items and repair of indents. Nor is the flat list's `JoinListDOMSerializer`, which
+writes its items as nested lists for the clipboard and its own `getHTML`. `generateUniqueIds`
+and `generateText` are here.
 
 ```toml
 [dependencies]

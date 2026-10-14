@@ -2,20 +2,22 @@
 // fixtures/tiptap-lists.json, as harness/tiptap.mjs records them: `lists`, Tiptap's own
 // extensions with the five lists; `nested`, with TaskItem's `nested`; `attributes` and
 // `attributeValues`, with each list's HTMLAttributes, of strings and of other values; `bullets`,
-// `ordered` and `tasks`, with only those lists; `paragraphs`, lists of paragraphs; `flat`, the
-// lists beside tiptap-extension-flat-list's items, without the items' parse rules, which tarnish
-// leaves to the application; and `tabs`, the lists with a manager that indents with tabs.
+// `ordered` and `tasks`, with only those lists; `paragraphs`, lists of paragraphs; `flat`, Tiptap's
+// own extensions with tiptap-extension-flat-list's items in place of the lists; and `tabs`, the
+// lists with a manager that indents with tabs.
 import { BulletList } from "@tiptap/extension-bullet-list"
-import { Document } from "@tiptap/extension-document"
 import * as list from "@tiptap/extension-list"
 import { ListItem } from "@tiptap/extension-list-item"
 import { OrderedList } from "@tiptap/extension-ordered-list"
-import { Paragraph } from "@tiptap/extension-paragraph"
 import { TaskItem } from "@tiptap/extension-task-item"
 import { TaskList } from "@tiptap/extension-task-list"
-import { Text } from "@tiptap/extension-text"
+import { HTMLElement, HTMLLabelElement } from "linkedom"
 import { FlatListCore, FlatListOrdered, FlatListTask, FlatListUnordered } from "tiptap-extension-flat-list"
 import { doc, otherAttributes, own, paragraph, record, rendered, text, withParsed } from "./tiptap.mjs"
+
+// The flat items' parse rules test elements against the page's global classes, which are
+// linkedom's here, as a browser's would be its own.
+Object.assign(globalThis, { HTMLElement, HTMLLabelElement })
 
 // The package of each list is @tiptap/extension-list's.
 if (
@@ -28,7 +30,6 @@ if (
   throw new Error("The list packages aren't @tiptap/extension-list's")
 }
 const lists = [BulletList, OrderedList, ListItem, TaskList, TaskItem]
-const withoutParseRules = extension => extension.extend({ parseHTML: () => [] })
 
 const p = value => paragraph(text(value))
 const item = (...content) => ({ type: "listItem", content })
@@ -425,13 +426,92 @@ const markDocs = [
   { type: "taskItem", attrs: { checked: true } },
   { type: "taskList" },
 ].map(mark => doc(paragraph(text("a", mark), text("b"))))
+
+// tiptap-extension-flat-list's items, which hold inline content, each item a block of its own.
+const flatExtensions = [...own, FlatListCore, FlatListOrdered, FlatListUnordered, FlatListTask]
+const flatItem = type => (attrs, ...content) => ({ type, ...(attrs ? { attrs } : {}), content })
+const [flatBullet, flatNumber, flatTask] = ["flatListItemUnordered", "flatListItemOrdered", "flatListItemTask"].map(
+  flatItem,
+)
 const flatDocs = [
   doc(
-    { type: "flatListItemUnordered", attrs: { indent: 1 }, content: [text("flat")] },
-    bullets(item(p("a"))),
-    { type: "flatListItemTask", attrs: { checked: true }, content: [text("task")] },
+    p("x"),
+    flatBullet(null, text("a")),
+    flatBullet({ indent: 1 }, text("b")),
+    flatNumber({ indent: 2, counter: 3 }, text("c")),
+    flatNumber({ indent: 2, counter: 4 }, text("d")),
+    flatTask({ indent: 1, checked: true }, text("e")),
+    flatTask({ checked: false }, text("f")),
+    { type: "heading", attrs: { level: 2 }, content: [text("h")] },
+    flatNumber(null, text("g")),
   ),
-  doc({ type: "flatListItemOrdered", attrs: { indent: 2, counter: 3 }, content: [text("ordered")] }, { type: "flatListItemTask" }),
+  // An indent that skips a level.
+  doc(flatBullet(null, text("a")), flatBullet({ indent: 2 }, text("b"))),
+  doc({ type: "flatListItemUnordered" }, { type: "flatListItemOrdered" }, { type: "flatListItemTask" }),
+  // Content over lines.
+  doc(flatNumber({ indent: 1 }, text("a", "bold"), { type: "hardBreak" }, text("b")), flatTask(null, text("c\nd"))),
+  // Attributes of other values than the items give them.
+  doc(
+    flatBullet({ indent: "2" }, text("a")),
+    flatNumber({ indent: null, counter: null }, text("b")),
+    flatTask({ indent: 1.5, checked: "x" }, text("c")),
+  ),
+  doc(flatBullet({ indent: -1 }, text("a"))),
+  // The attributes 0.1.1 gave items.
+  doc(
+    flatNumber({ indent: 0, counter: 1, _isTempPropped: false }, text("a")),
+    flatTask({ indent: 0, checked: false, _isTempPropped: false }, text("b")),
+  ),
+]
+const flatMarkdown = [
+  // Nested by the indent the items render with, and by the least CommonMark takes.
+  "- a\n- b",
+  "- a\n\n    - b\n\n        - c\n\n- d",
+  "- a\n  - b",
+  // Numbered from 1, from another number, and as repeated `1.`s, nested.
+  "1. a\n2. b",
+  "3. a\n4. b",
+  "1. a\n1. b\n\n    1. c\n    1. d",
+  // Tasks, checked and not, among bullets, and kinds in and after each other.
+  "- [ ] a\n- [x] b",
+  "- a\n- [ ] b\n- c\n- [X] d",
+  "- a\n1. b\n- [ ] c",
+  "1. a\n    - [x] b\n        - c",
+  "1. [ ] a",
+  // An indent that skips a level, which is code.
+  "- a\n\n        - b",
+  "-\n-",
+  "- [ ] \n1. ",
+  "x\n\n- a\n\n# h\n\n1. b\n\ny",
+  // More than a line of text, a second paragraph, and blocks.
+  "- **a**  \n  b",
+  "- a\n\n  b",
+  "- # h",
+  "-     code",
+  "- > q",
+]
+const flatHTML = [
+  // An item's indent is how many lists it's in, and an ordered item's counter its place among
+  // the list's items.
+  "<ul><li>a<ul><li>b<ol><li>c</li>x<li>d</li></ol></li></ul></li><li>e</li></ul>",
+  '<ol start="3"><li>a</li><li>b</li></ol>',
+  "<ul><li><ol><li>a</li></ol></li></ul>",
+  // Paragraphs in an item are its text between breaks, but before a list.
+  "<ul><li><p>a</p><p>b</p> <p>c</p><ul><li><p>d</p></li></ul></li></ul>",
+  // Only a list marked data-task-list holds tasks.
+  '<ul data-task-list=""><li data-checked="">a</li><li data-checked="false">b</li><li>c</li></ul>',
+  '<ul data-task-list="false"><li>a</li></ul>',
+  "<ol data-task-list><li>a</li></ol>",
+  // A task's content is the last element after a label, an HTML one, or else the item's.
+  '<ul data-task-list><li><label><input type="checkbox"></label><div><p>a</p><p>b</p></div></li><li><label></label>c</li><li><span>d</span><div>e</div></li><li><label></label>f<svg></svg></li></ul>',
+  // The indent an item stores, as parseInt reads it, and one below 0.
+  '<ul><li data-list-indent="2">a</li><li data-list-indent=" 3px">b</li><li data-list-indent="0x2">c</li><li data-list-indent="x">d</li><li data-list-indent="-0">e</li></ul>',
+  '<li data-list-indent="1">a</li>',
+  '<ul><li data-list-indent="-1">a</li></ul>',
+  // Tiptap reads each attribute from the item's attribute of its name.
+  '<ol><li indent="2" counter="7">a</li></ol><ul data-task-list><li checked="true">b</li></ul>',
+  "<p>x</p><ul><li>a</li></ul><h1>h</h1><ol><li></li></ol><p>y</p>",
+  ...rendered(flatExtensions, flatDocs),
 ]
 
 const fiveLists = [...own, ...lists]
@@ -491,18 +571,10 @@ record("tiptap-lists", {
     serializesMarkdown: withParsed(docs),
     serializesHTML: withParsed(docs),
   },
-  // The flat items have no parse rules here, and no Markdown hooks.
   flat: {
-    extensions: [
-      Document,
-      Paragraph,
-      Text,
-      FlatListCore,
-      withoutParseRules(FlatListOrdered),
-      withoutParseRules(FlatListUnordered),
-      withoutParseRules(FlatListTask),
-      ...lists,
-    ],
+    extensions: flatExtensions,
+    parsesMarkdown: flatMarkdown,
+    parsesHTML: flatHTML,
     serializesMarkdown: flatDocs,
     serializesHTML: flatDocs,
   },

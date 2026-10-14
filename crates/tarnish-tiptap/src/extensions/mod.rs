@@ -1,7 +1,6 @@
 //! Tiptap's own extensions: the `@tiptap/extension-*` packages, `@tiptap/core`'s TextDirection
 //! and `tiptap-extension-flat-list`, each as far as the conversions read it: its schema, its HTML
-//! rules and its Markdown hooks, save the flat list items' parse rules. An application extends
-//! one with the rest it needs.
+//! rules and its Markdown hooks. An application extends one with the rest it needs.
 
 pub mod audio;
 pub mod blockquote;

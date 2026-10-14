@@ -4,16 +4,13 @@
 use tarnish::json::{Map, Value, json, object};
 use tarnish_tiptap::Extension;
 use tarnish_tiptap::extensions::bullet_list::{BulletListOptions, bullet_list};
-use tarnish_tiptap::extensions::document::document;
 use tarnish_tiptap::extensions::flat_list::{
     flat_list_core, flat_list_ordered, flat_list_task, flat_list_unordered,
 };
 use tarnish_tiptap::extensions::list_item::{ListItemOptions, list_item};
 use tarnish_tiptap::extensions::ordered_list::{OrderedListOptions, ordered_list};
-use tarnish_tiptap::extensions::paragraph::paragraph;
 use tarnish_tiptap::extensions::task_item::{TaskItemOptions, task_item};
 use tarnish_tiptap::extensions::task_list::{TaskListOptions, task_list};
-use tarnish_tiptap::extensions::text::text;
 use tarnish_tiptap::markdown::{IndentStyle, Indentation};
 
 use crate::own::{self, Configuration, Nested, Replay};
@@ -67,19 +64,12 @@ fn configuration(name: &str) -> Configuration {
             })
             .into(),
         ]),
-        "flat" => {
-            let mut flat: Vec<Extension> = vec![
-                document().into(),
-                paragraph(Default::default()).into(),
-                text().into(),
-                flat_list_core().into(),
-                flat_list_ordered().into(),
-                flat_list_unordered().into(),
-                flat_list_task().into(),
-            ];
-            flat.extend(lists());
-            flat
-        }
+        "flat" => with_own(vec![
+            flat_list_core().into(),
+            flat_list_ordered().into(),
+            flat_list_unordered().into(),
+            flat_list_task().into(),
+        ]),
         "tabs" => {
             let indentation = Indentation {
                 style: IndentStyle::Tab,
