@@ -303,8 +303,8 @@ fn the_forks_css_engine_is_this_one() {
     assert_eq!(version("CSS engine"), tarnish_css::ENGINE);
 }
 
-/// Each spec rendered as JSON reaches `renderSpec`: an array as a spec's own value, and any spec
-/// as the value of a node's attribute.
+/// Each spec rendered as JSON reaches `renderSpec`: an array as a spec's own value, or as an
+/// array of the values of a node's attribute, and any spec as the value of a node's attribute.
 #[test]
 fn rendered_specs_match_the_fork() {
     let (_, fixtures) = fixtures();
@@ -323,6 +323,12 @@ fn rendered_specs_match_the_fork() {
         let mut specs = vec![("As an attribute's value", DomSpec::Attr(attribute))];
         if json.is_array() {
             specs.push(("As a spec", DomSpec::from(json.clone())));
+            let items = attribute.items().map(DomSpec::Attr).collect();
+            let items = DomSpec::Array {
+                items,
+                origin: None,
+            };
+            specs.push(("As the attribute's items", items));
         }
         let recorded = expected(&recorded(record, &["spec"]));
         for (how, spec) in specs {

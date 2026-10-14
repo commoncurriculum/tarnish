@@ -660,20 +660,10 @@ fn render_json<'v, D: Dom>(
     }
     let (namespace, tag) = qualified(tag, xml_ns);
     let element = dom.create_element(namespace, tag)?;
-    let mut start = 1;
-    if let Some(attrs) = item(1)
-        && matches!(attrs.kind(), Kind::Object(_))
-        && attrs
-            .get("nodeType")
-            .is_none_or(|node_type| matches!(node_type.kind(), Kind::Null))
-    {
-        start = 2;
-        for (name, value) in attrs.entries() {
-            if !matches!(value.kind(), Kind::Null) {
-                set_attribute(dom, &element, name, &value.to_value())?;
-            }
-        }
-    }
+    let start = match item(1) {
+        Some(attrs) if set_json_attributes(dom, &element, attrs)? => 2,
+        _ => 1,
+    };
     let length = match array {
         true => structure.items().len() as f64,
         false => structure
@@ -778,11 +768,7 @@ fn render<D: Dom>(
         DomSpec::Array { items, origin } => (items, *origin),
         DomSpec::Node(_) | DomSpec::Rendered(_) | DomSpec::Hole => return Err(invalid()),
     };
-    let tag = match items.first() {
-        Some(DomSpec::Value(Value::String(tag))) => tag.as_str(),
-        Some(DomSpec::Text(tag)) => tag.as_ref(),
-        _ => return Err(invalid()),
-    };
+    let tag = items.first().and_then(as_string).ok_or_else(invalid)?;
     if let (Some(attrs), Some(origin)) = (block_arrays_in, origin)
         && holds_spec_array(attrs, origin)
     {
@@ -805,12 +791,8 @@ fn render<D: Dom>(
             }
             2
         }
-        Some(DomSpec::Value(Value::Object(attrs)))
-            if attrs.get("nodeType").is_none_or(Value::is_null) =>
-        {
-            set_attributes(dom, &element, attrs)?;
-            2
-        }
+        Some(DomSpec::Value(attrs)) if set_json_attributes(dom, &element, attrs)? => 2,
+        Some(DomSpec::Attr(attrs)) if set_json_attributes(dom, &element, *attrs)? => 2,
         _ => 1,
     };
     fill(
@@ -886,13 +868,23 @@ fn set_attribute<D: Dom>(dom: &D, element: &D::Node, name: &str, value: &Value) 
     }
 }
 
-fn set_attributes<D: Dom>(dom: &D, element: &D::Node, attrs: &Map) -> Result<()> {
-    for (name, value) in attrs.iter() {
-        if !matches!(value, Value::Null) {
-            set_attribute(dom, element, name, value)?;
+/// Sets the attributes of a JSON value an array spec holds second, when `renderSpec` reads it as
+/// attributes: an object whose `nodeType` is null. Gives whether it did.
+fn set_json_attributes<'v, D: Dom>(
+    dom: &D,
+    element: &D::Node,
+    attrs: impl JsonView<'v>,
+) -> Result<bool> {
+    let node_type = attrs.get("nodeType").map(JsonView::kind);
+    if !matches!(attrs.kind(), Kind::Object(_)) || !matches!(node_type, None | Some(Kind::Null)) {
+        return Ok(false);
+    }
+    for (name, value) in attrs.entries() {
+        if !matches!(value.kind(), Kind::Null) {
+            set_attribute(dom, element, name, &value.to_value())?;
         }
     }
-    Ok(())
+    Ok(true)
 }
 
 /// Sets a spec's attributes on its element, as `renderSpec` does those whose `nodeType` is null.
