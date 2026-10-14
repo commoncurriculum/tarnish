@@ -1,17 +1,10 @@
-//! What @tiptap/markdown's `MarkdownManager` and ProseMirror's `DOMParser` and `DOMSerializer` do
-//! with Tiptap's block and embed extensions, recorded by `harness/record-tiptap-blocks.mjs`:
-//! tarnish-tiptap's must make the same schemas, documents, Markdown and HTML, or fail with the
-//! same error, in each configuration a record names, and at any depth blockquotes and details
-//! nest.
+//! `fixtures/tiptap-blocks.json`, of Tiptap's block and embed extensions, and blockquotes and
+//! details nested far deeper than a small stack could recurse through.
 
-#[allow(dead_code)]
-mod own;
-
-use own::{Converter, input_of};
-use tarnish::js::stack::on_dirty_scheduler_stack;
 use tarnish::json::{Map, Value, json, object};
-use tarnish_fixtures::{expect, outcome, read, records, same};
+use tarnish_fixtures::outcome;
 use tarnish_js::utf16;
+use tarnish_tiptap::Extension;
 use tarnish_tiptap::extensions::audio::{AudioOptions, audio};
 use tarnish_tiptap::extensions::blockquote::{BlockquoteOptions, blockquote};
 use tarnish_tiptap::extensions::bold::bold;
@@ -35,7 +28,8 @@ use tarnish_tiptap::extensions::text::text;
 use tarnish_tiptap::extensions::twitch::{TwitchOptions, twitch};
 use tarnish_tiptap::extensions::youtube::{YoutubeOptions, youtube};
 use tarnish_tiptap::markdown::specs::{parse_attributes, serialize_attributes};
-use tarnish_tiptap::{Extension, TextOptions, generate_text};
+
+use crate::own::{self, Configuration, Nested, Replay};
 
 /// Document, Paragraph, Text, Heading, HardBreak, Bold and Italic.
 fn base() -> Vec<Extension> {
@@ -149,10 +143,18 @@ fn added(name: &str) -> Vec<Extension> {
             })
             .into(),
         ],
-        "codeNullPrefix" | "codeEmptyPrefix" => vec![
+        "codeNullPrefix" => vec![
             code(CodeOptions::default()).into(),
             code_block(CodeBlockOptions {
-                language_class_prefix: (name == "codeEmptyPrefix").then_some(""),
+                language_class_prefix: None,
+                ..CodeBlockOptions::default()
+            })
+            .into(),
+        ],
+        "codeEmptyPrefix" => vec![
+            code(CodeOptions::default()).into(),
+            code_block(CodeBlockOptions {
+                language_class_prefix: Some(""),
                 ..CodeBlockOptions::default()
             })
             .into(),
@@ -178,14 +180,18 @@ fn added(name: &str) -> Vec<Extension> {
             object!({"class": "content", "data-type": "given"}),
         ),
         "mathematics" => mathematics(),
-        "emoji" | "emojiOptions" => vec![
+        "emoji" => vec![
             emoji(EmojiOptions {
                 emojis: emojis(),
-                force_fallback_images: name == "emojiOptions",
-                html_attributes: match name {
-                    "emojiOptions" => given(),
-                    _ => Map::new(),
-                },
+                ..EmojiOptions::default()
+            })
+            .into(),
+        ],
+        "emojiOptions" => vec![
+            emoji(EmojiOptions {
+                emojis: emojis(),
+                force_fallback_images: true,
+                html_attributes: given(),
             })
             .into(),
         ],
@@ -345,133 +351,39 @@ fn added(name: &str) -> Vec<Extension> {
     }
 }
 
-fn extensions(name: &str) -> Vec<Extension> {
+fn configuration(name: &str) -> Configuration {
     let mut extensions = base();
     extensions.extend(added(name));
-    extensions
+    extensions.into()
 }
 
-fn converter(name: &str) -> Converter {
-    Converter::of(&extensions(name))
-}
-
-/// The configuration a record names.
-fn named(record: &Value) -> &str {
-    record["extensions"].as_str().expect("a configuration")
-}
-
-/// Holds each record of `section` to what its conversion makes of the record's input, in the
-/// configuration the record names.
-fn check(section: &str) {
-    let fixtures = read("tiptap-blocks");
-    let mut converters: Vec<(String, Converter)> = Vec::new();
-    let mut failures = Vec::new();
-    for mut record in records(&fixtures, section).to_vec() {
-        let name = named(&record).to_owned();
-        if !converters.iter().any(|(known, _)| *known == name) {
-            converters.push((name.clone(), converter(&name)));
+/// `parseAttributes` of a string, or `serializeAttributes` of a value.
+fn attributes(inputs: &Map) -> Value {
+    match (inputs.get("parse"), inputs.get("serialize")) {
+        (Some(Value::String(input)), None) => {
+            let attributes = parse_attributes(&utf16::from(input));
+            json!({ "attributes": Value::Object(attributes) })
         }
-        let (_, converter) = converters
-            .iter()
-            .find(|(known, _)| *known == name)
-            .expect("the converter");
-        let fields = record.as_object_mut().expect("a record");
-        let input = fields.remove(input_of(section)).expect("an input");
-        fields.remove("extensions");
-        let actual = converter.convert(section, &input);
-        if !same(&record, &actual) {
-            failures.push(format!(
-                "{name}: {input}\n  Tiptap: {record}\n  tarnish-tiptap: {actual}"
-            ));
+        (None, Some(input)) => {
+            outcome(serialize_attributes(input).map(|string| json!({ "string": string })))
         }
+        _ => panic!("a parse or a serialize"),
     }
-    assert!(
-        failures.is_empty(),
-        "{} failures:\n\n{}",
-        failures.len(),
-        failures.join("\n\n")
-    );
+}
+
+fn replay() -> Replay {
+    let replay = Replay::new("tiptap-blocks", configuration);
+    replay.with("attributes", &["parse", "serialize"], attributes)
 }
 
 #[test]
-fn builds_the_schemas_tiptap_does() {
-    own::check_schemas("tiptap-blocks", |name| {
-        converter(name.expect("a configuration"))
-    });
+fn converts_as_tiptap_does() {
+    replay().check();
 }
 
 #[test]
-fn parses_markdown_as_tiptap_does() {
-    check("parsesMarkdown");
-}
-
-#[test]
-fn serializes_markdown_as_tiptap_does() {
-    check("serializesMarkdown");
-}
-
-#[test]
-fn parses_html_as_tiptap_does() {
-    check("parsesHTML");
-}
-
-#[test]
-fn serializes_html_as_tiptap_does() {
-    check("serializesHTML");
-}
-
-/// The text `generateText` makes of each document, with the extensions the record names.
-#[test]
-fn generates_text_as_tiptap_does() {
-    let fixtures = read("tiptap-blocks");
-    let mut failures = Vec::new();
-    for record in records(&fixtures, "generatesText") {
-        let (name, doc) = (named(record), &record["doc"]);
-        let text = generate_text(doc, &extensions(name), &TextOptions::default());
-        let actual = outcome(text.map(|text| json!({ "text": text })));
-        let mut expected = record.clone();
-        let fields = expected.as_object_mut().expect("a record");
-        fields.shift_remove("extensions");
-        fields.shift_remove("doc");
-        if !same(&expected, &actual) {
-            failures.push(format!(
-                "{name} {doc}\n  Tiptap: {expected}\n  tarnish-tiptap: {actual}"
-            ));
-        }
-    }
-    assert!(
-        failures.is_empty(),
-        "{} failures:\n\n{}",
-        failures.len(),
-        failures.join("\n\n")
-    );
-}
-
-/// `parseAttributes` of each string, and `serializeAttributes` of each value.
-#[test]
-fn reads_and_writes_attributes_as_tiptap_does() {
-    let fixtures = read("tiptap-blocks");
-    let mut failures = Vec::new();
-    for mut record in records(&fixtures, "attributes").to_vec() {
-        let fields = record.as_object_mut().expect("a record");
-        let (parse, serialize) = (fields.remove("parse"), fields.remove("serialize"));
-        let actual = match (&parse, serialize) {
-            (Some(Value::String(input)), None) => {
-                let attributes = parse_attributes(&utf16::from(input));
-                outcome(Ok::<_, tarnish::Error>(
-                    json!({ "attributes": Value::Object(attributes) }),
-                ))
-            }
-            (None, Some(input)) => {
-                outcome(serialize_attributes(&input).map(|string| json!({ "string": string })))
-            }
-            _ => panic!("a parse or a serialize"),
-        };
-        if !same(&record, &actual) {
-            failures.push(format!("Tiptap: {record}\n  tarnish-tiptap: {actual}"));
-        }
-    }
-    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+fn converts_what_nests_as_deeply_as_memory_allows() {
+    replay().check_nested(&NESTED);
 }
 
 /// How deep the conversions are held at. Blockquotes' Markdown is written and read in time that
@@ -481,16 +393,6 @@ fn reads_and_writes_attributes_as_tiptap_does() {
 const DOCUMENTS: usize = 10_000;
 const PARSES: usize = 2_000;
 const DETAILS: usize = 1_000;
-
-/// An input nested `depth` deep, and what the conversion a `section` records makes of it, which
-/// the test folds from the depths below and holds to Tiptap's at the depths the recorder records.
-struct Nested {
-    what: &'static str,
-    section: &'static str,
-    depth: usize,
-    input: fn(usize) -> Value,
-    output: fn(usize) -> Value,
-}
 
 fn x() -> Value {
     json!({"type": "paragraph", "content": [{"type": "text", "text": "x"}]})
@@ -528,6 +430,7 @@ fn doc(node: Value) -> Value {
 const NESTED: [Nested; 9] = [
     Nested {
         what: "HTML of blockquotes",
+        configuration: "all",
         section: "serializesHTML",
         depth: DOCUMENTS,
         input: |depth| doc(quoted(depth)),
@@ -538,6 +441,7 @@ const NESTED: [Nested; 9] = [
     },
     Nested {
         what: "HTML of details",
+        configuration: "all",
         section: "serializesHTML",
         depth: DOCUMENTS,
         input: |depth| doc(nested_details(depth)),
@@ -546,6 +450,7 @@ const NESTED: [Nested; 9] = [
     // Each blockquote puts `> ` ahead of each line its child renders.
     Nested {
         what: "Markdown of blockquotes",
+        configuration: "all",
         section: "serializesMarkdown",
         depth: DOCUMENTS,
         input: |depth| doc(quoted(depth)),
@@ -553,6 +458,7 @@ const NESTED: [Nested; 9] = [
     },
     Nested {
         what: "Markdown of details",
+        configuration: "all",
         section: "serializesMarkdown",
         depth: DOCUMENTS / 5,
         input: |depth| doc(nested_details(depth)),
@@ -560,6 +466,7 @@ const NESTED: [Nested; 9] = [
     },
     Nested {
         what: "<blockquote>",
+        configuration: "all",
         section: "parsesHTML",
         depth: PARSES,
         input: |depth| Value::String("<blockquote>".repeat(depth) + "x"),
@@ -567,6 +474,7 @@ const NESTED: [Nested; 9] = [
     },
     Nested {
         what: "<details>",
+        configuration: "all",
         section: "parsesHTML",
         depth: PARSES,
         input: |depth| Value::String(details_html(depth)),
@@ -574,6 +482,7 @@ const NESTED: [Nested; 9] = [
     },
     Nested {
         what: "spaced blockquotes",
+        configuration: "all",
         section: "parsesMarkdown",
         depth: PARSES,
         input: |depth| Value::String("> ".repeat(depth) + "x"),
@@ -581,6 +490,7 @@ const NESTED: [Nested; 9] = [
     },
     Nested {
         what: "blockquotes",
+        configuration: "all",
         section: "parsesMarkdown",
         depth: PARSES,
         input: |depth| Value::String(">".repeat(depth) + " x"),
@@ -588,33 +498,10 @@ const NESTED: [Nested; 9] = [
     },
     Nested {
         what: "Markdown details",
+        configuration: "all",
         section: "parsesMarkdown",
         depth: DETAILS,
         input: |depth| Value::String(details_markdown(depth)),
         output: |depth| json!({ "doc": doc(nested_details(depth)) }),
     },
 ];
-
-#[test]
-fn converts_what_nests_as_deeply_as_memory_allows() {
-    let fixtures = read("tiptap-blocks");
-    for nested in &NESTED {
-        let input = input_of(nested.section);
-        for depth in 1..=3 {
-            let given = (nested.input)(depth);
-            let record = records(&fixtures, nested.section)
-                .iter()
-                .find(|record| named(record) == "all" && same(&record[input], &given));
-            let record = record.unwrap_or_else(|| panic!("no record of {given}"));
-            expect(record, &[input, "extensions"], (nested.output)(depth));
-        }
-    }
-    on_dirty_scheduler_stack(|| {
-        let converter = converter("all");
-        for nested in &NESTED {
-            let converted = converter.convert(nested.section, &(nested.input)(nested.depth));
-            let expected = (nested.output)(nested.depth);
-            assert!(same(&expected, &converted), "{}", nested.what);
-        }
-    });
-}

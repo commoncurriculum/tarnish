@@ -1,15 +1,7 @@
-//! What @tiptap/extension-table's Table, TableRow, TableCell and TableHeader make with the
-//! `MarkdownManager`, `DOMParser` and `DOMSerializer`, recorded by
-//! `harness/record-tiptap-tables.mjs` in each configuration a record names, and tables nested in
-//! cells far deeper than a small stack could recurse through.
+//! `fixtures/tiptap-tables.json`, of @tiptap/extension-table's Table, TableRow, TableCell and
+//! TableHeader, and tables nested in cells far deeper than a small stack could recurse through.
 
-#[allow(dead_code)]
-mod own;
-
-use own::{Converter, input_of};
-use tarnish::js::stack::on_dirty_scheduler_stack;
-use tarnish::json::{Value, json, object};
-use tarnish_fixtures::{expect, read, records, same};
+use tarnish::json::{Map, Value, json, object};
 use tarnish_html::HtmlDom;
 use tarnish_js::utf16;
 use tarnish_tiptap::extensions::bold::bold;
@@ -27,6 +19,8 @@ use tarnish_tiptap::{
     DomSpec, Extension, ExtensionAttribute, GlobalAttributes, GlobalTypes, MarkExtension,
     ParseHtml, PlainExtension,
 };
+
+use crate::own::{self, Configuration, Nested, Replay};
 
 /// An application's code mark, which parses marked's code spans.
 fn code() -> MarkExtension {
@@ -95,8 +89,7 @@ fn style() -> PlainExtension {
     }])
 }
 
-/// The extensions of a configuration the recorder names.
-fn configuration(name: &str) -> Vec<Extension> {
+fn configuration(name: &str) -> Configuration {
     match name {
         // Table's other options change only an editor's plugins and node view.
         "tables" | "resizable" => with_table(TableOptions::default()),
@@ -176,89 +169,44 @@ fn configuration(name: &str) -> Vec<Extension> {
         ],
         other => panic!("no configuration {other}"),
     }
+    .into()
 }
 
-const CONFIGURATIONS: [&str; 11] = [
-    "tables",
-    "attributes",
-    "attributeValues",
-    "wrapper",
-    "minWidth",
-    "zero",
-    "resizable",
-    "global",
-    "both",
-    "kit",
-    "partial",
-];
-
-fn converters() -> Vec<(&'static str, Converter)> {
-    CONFIGURATIONS
+/// The `width` of each `col` that each table's `querySelectorAll("colgroup > col")` finds, which
+/// TableCell's colwidth reads.
+fn queries(inputs: &Map) -> Value {
+    let html = inputs["html"].as_str().expect("HTML");
+    let dom = HtmlDom::parse_document(&format!("<!DOCTYPE html><html><body>{html}</body></html>"));
+    let body = dom.body().expect("a body");
+    let tables: Vec<Value> = body
+        .query_selector_all("table")
+        .expect("a selector")
         .iter()
-        .map(|name| (*name, Converter::of(&configuration(name))))
-        .collect()
+        .map(|table| {
+            let cols = table
+                .query_selector_all("colgroup > col")
+                .expect("a selector");
+            let width = |col: &tarnish_html::HtmlNode| {
+                col.attribute("width").map_or(Value::Null, Value::String)
+            };
+            Value::Array(cols.iter().map(width).collect())
+        })
+        .collect();
+    json!({ "tables": tables })
 }
 
-fn named(record: &Value) -> &str {
-    record["extensions"].as_str().expect("a configuration")
-}
-
-/// Holds each record of `section` to what its conversion makes of the record's input, in the
-/// configuration the record names.
-fn check(section: &str) {
-    let fixtures = read("tiptap-tables");
-    let converters = converters();
-    let mut failures = Vec::new();
-    for mut record in records(&fixtures, section).to_vec() {
-        let name = named(&record).to_owned();
-        let (_, converter) = converters
-            .iter()
-            .find(|(configuration, _)| *configuration == name)
-            .expect("the configuration");
-        let fields = record.as_object_mut().expect("a record");
-        let input = fields.remove(input_of(section)).expect("an input");
-        fields.remove("extensions");
-        let actual = converter.convert(section, &input);
-        if !same(&record, &actual) {
-            failures.push(format!(
-                "{name}: {input}\n  Tiptap: {record}\n  tarnish-tiptap: {actual}"
-            ));
-        }
-    }
-    assert!(
-        failures.is_empty(),
-        "{} failures:\n\n{}",
-        failures.len(),
-        failures.join("\n\n")
-    );
+fn replay() -> Replay {
+    Replay::new("tiptap-tables", configuration).with("queries", &["html"], queries)
 }
 
 #[test]
-fn parses_markdown_as_tiptap_does() {
-    check("parsesMarkdown");
+fn converts_as_tiptap_does() {
+    replay().check();
 }
 
 #[test]
-fn serializes_markdown_as_tiptap_does() {
-    check("serializesMarkdown");
-}
-
-#[test]
-fn parses_html_as_tiptap_does() {
-    check("parsesHTML");
-}
-
-#[test]
-fn serializes_html_as_tiptap_does() {
-    check("serializesHTML");
-}
-
-/// Each configuration's schema, with `tableRole` only where Table's `extendNodeSchema` puts it.
-#[test]
-fn builds_the_schemas_tiptap_does() {
-    own::check_schemas("tiptap-tables", |name| {
-        Converter::of(&configuration(name.expect("a configuration")))
-    });
+fn converts_tables_nested_as_deeply_as_memory_allows() {
+    replay().check_nested(&NESTED);
 }
 
 const DOCUMENTS: usize = 20_000;
@@ -268,17 +216,6 @@ const QUOTES: usize = 500;
 /// Each level's Markdown holds the next's twice, once as its cell and once as the dashes under
 /// its header, which are as wide, so the Markdown doubles with each level.
 const MARKDOWNS: usize = 16;
-
-/// An input nested `depth` deep, and what the conversion a `section` of `tiptap-tables.json`
-/// records makes of it, which the test folds from the depths below and holds to Tiptap's at the
-/// depths the recorder records.
-struct Nested {
-    what: &'static str,
-    section: &'static str,
-    depth: usize,
-    input: fn(usize) -> Value,
-    output: fn(usize) -> Value,
-}
 
 /// A table `depth` deep in a cell of a table, around a paragraph's text, as JSON.
 fn nested_table(depth: usize) -> Value {
@@ -320,6 +257,7 @@ fn table_markdown(cell: &str) -> String {
 const NESTED: [Nested; 5] = [
     Nested {
         what: "HTML of tables in cells",
+        configuration: "tables",
         section: "serializesHTML",
         depth: DOCUMENTS,
         input: nested_table,
@@ -336,6 +274,7 @@ const NESTED: [Nested; 5] = [
     // spaces one.
     Nested {
         what: "Markdown of tables in cells",
+        configuration: "tables",
         section: "serializesMarkdown",
         depth: MARKDOWNS,
         input: nested_table,
@@ -350,6 +289,7 @@ const NESTED: [Nested; 5] = [
     },
     Nested {
         what: "<table><tr><td>",
+        configuration: "tables",
         section: "parsesHTML",
         depth: PARSES,
         input: |depth| {
@@ -361,6 +301,7 @@ const NESTED: [Nested; 5] = [
     // Without an extension for blockquotes, the manager parses a blockquote's content.
     Nested {
         what: "tables in blockquotes",
+        configuration: "tables",
         section: "parsesMarkdown",
         depth: QUOTES,
         input: |depth| {
@@ -371,6 +312,7 @@ const NESTED: [Nested; 5] = [
     // Table's tokenizer lexes the innermost table again, its code span's pipe escaped.
     Nested {
         what: "tables with code spans in blockquotes",
+        configuration: "tables",
         section: "parsesMarkdown",
         depth: QUOTES,
         input: |depth| {
@@ -382,54 +324,3 @@ const NESTED: [Nested; 5] = [
         },
     },
 ];
-
-#[test]
-fn converts_tables_nested_as_deeply_as_memory_allows() {
-    let fixtures = read("tiptap-tables");
-    for nested in &NESTED {
-        let input = input_of(nested.section);
-        for depth in 1..=3 {
-            let given = (nested.input)(depth);
-            let record = records(&fixtures, nested.section)
-                .iter()
-                .find(|record| named(record) == "tables" && same(&record[input], &given));
-            let record = record.unwrap_or_else(|| panic!("no record of {given}"));
-            expect(record, &[input, "extensions"], (nested.output)(depth));
-        }
-    }
-    on_dirty_scheduler_stack(|| {
-        let converter = Converter::of(&configuration("tables"));
-        for nested in &NESTED {
-            let converted = converter.convert(nested.section, &(nested.input)(nested.depth));
-            let expected = (nested.output)(nested.depth);
-            assert!(same(&expected, &converted), "{}", nested.what);
-        }
-    });
-}
-
-/// `querySelectorAll("colgroup > col")` of each table, which TableCell's colwidth reads.
-#[test]
-fn finds_the_cols_linkedom_does() {
-    let fixtures = read("tiptap-tables");
-    for record in records(&fixtures, "queries") {
-        let html = record["html"].as_str().expect("HTML");
-        let dom =
-            HtmlDom::parse_document(&format!("<!DOCTYPE html><html><body>{html}</body></html>"));
-        let body = dom.body().expect("a body");
-        let tables: Vec<Value> = body
-            .query_selector_all("table")
-            .expect("a selector")
-            .iter()
-            .map(|table| {
-                let cols = table
-                    .query_selector_all("colgroup > col")
-                    .expect("a selector");
-                let width = |col: &tarnish_html::HtmlNode| {
-                    col.attribute("width").map_or(Value::Null, Value::String)
-                };
-                Value::Array(cols.iter().map(width).collect())
-            })
-            .collect();
-        expect(record, &["html"], json!({ "tables": tables }));
-    }
-}

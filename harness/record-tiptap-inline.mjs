@@ -712,7 +712,7 @@ const textDocs = {
 // The documents tiptap.json serializes to HTML with Tiptap's own extensions, with the default
 // options, and those above with each.
 const tiptapDocs = fixture("tiptap")
-  .serializesHTML.filter(record => !record.extensions && record.html !== undefined)
+  .serializesHTML.filter(record => record.extensions === "own" && record.html !== undefined)
   .map(record => JSON.stringify(record.doc))
 const textOptions = [{}, { blockSeparator: "\n" }, { blockSeparator: "" }, { serializers: "places" }]
 const generatesText = [

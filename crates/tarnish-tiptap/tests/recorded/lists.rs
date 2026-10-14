@@ -1,82 +1,160 @@
-//! What @tiptap/markdown's `MarkdownManager` and ProseMirror's `DOMParser` and `DOMSerializer` do
-//! with @tiptap/extension-list's lists, recorded by `harness/record-tiptap-lists.mjs` in each of
-//! its configurations: tarnish-tiptap's must make the same schemas, documents, Markdown and HTML,
-//! or fail with the same error, and lists nested far deeper than a small stack could recurse
-//! through convert as the recorded ones fold to.
+//! `fixtures/tiptap-lists.json`, of @tiptap/extension-list's lists, and lists nested far deeper
+//! than a small stack could recurse through.
 
-#[allow(dead_code)]
-mod own;
+use tarnish::json::{Map, Value, json, object};
+use tarnish_tiptap::Extension;
+use tarnish_tiptap::extensions::bullet_list::{BulletListOptions, bullet_list};
+use tarnish_tiptap::extensions::document::document;
+use tarnish_tiptap::extensions::flat_list::{
+    flat_list_core, flat_list_ordered, flat_list_task, flat_list_unordered,
+};
+use tarnish_tiptap::extensions::list_item::{ListItemOptions, list_item};
+use tarnish_tiptap::extensions::ordered_list::{OrderedListOptions, ordered_list};
+use tarnish_tiptap::extensions::paragraph::paragraph;
+use tarnish_tiptap::extensions::task_item::{TaskItemOptions, task_item};
+use tarnish_tiptap::extensions::task_list::{TaskListOptions, task_list};
+use tarnish_tiptap::extensions::text::text;
+use tarnish_tiptap::markdown::{IndentStyle, Indentation};
 
-use own::{Converter, input_of, named};
-use tarnish::js::stack::on_dirty_scheduler_stack;
-use tarnish::json::{Value, json};
-use tarnish_fixtures::{expect, read, records, same};
+use crate::own::{self, Configuration, Nested, Replay};
 
-const CONFIGURATIONS: [&str; 10] = [
-    "lists",
-    "nested",
-    "attributes",
-    "attributeValues",
-    "bullets",
-    "ordered",
-    "tasks",
-    "paragraphs",
-    "flat",
-    "tabs",
-];
-
-/// Holds each record of `section` to what its conversion makes of the record's input, with the
-/// configuration the record names.
-fn check(section: &str) {
-    let fixtures = read("tiptap-lists");
-    let converters = CONFIGURATIONS.map(|name| (name, Converter::new(Some(name))));
-    let mut failures = Vec::new();
-    for mut record in records(&fixtures, section).to_vec() {
-        let (_, converter) = converters
-            .iter()
-            .find(|(name, _)| Some(*name) == named(&record))
-            .expect("the configuration");
-        let fields = record.as_object_mut().expect("a record");
-        let input = fields.remove(input_of(section)).expect("an input");
-        let configuration = fields.remove("extensions").expect("a configuration");
-        let actual = converter.convert(section, &input);
-        if !same(&record, &actual) {
-            failures.push(format!(
-                "{configuration} {input}\n  Tiptap: {record}\n  tarnish-tiptap: {actual}"
-            ));
+fn configuration(name: &str) -> Configuration {
+    match name {
+        "lists" => with_own(lists()),
+        "nested" => {
+            let mut nested = lists();
+            nested[4] = task_item(TaskItemOptions {
+                nested: true,
+                ..TaskItemOptions::default()
+            })
+            .into();
+            with_own(nested)
         }
+        "attributes" => with_attributes([
+            object!({"class": "bullets", "data-list": "bullet"}),
+            object!({"class": "numbers", "start": "9", "type": "A", "style": "color: red"}),
+            object!({"class": "item"}),
+            object!({"class": "tasks", "data-type": "mine"}),
+            object!({"class": "task", "data-checked": "maybe", "style": "color: blue"}),
+        ]),
+        "attributeValues" => with_attributes(std::array::from_fn(|_| own::other_attributes())),
+        "bullets" => with_own(vec![
+            bullet_list(BulletListOptions::default()).into(),
+            list_item(ListItemOptions::default()).into(),
+        ]),
+        "ordered" => with_own(vec![
+            ordered_list(OrderedListOptions::default()).into(),
+            list_item(ListItemOptions::default()).into(),
+        ]),
+        "tasks" => with_own(vec![
+            task_list(TaskListOptions::default()).into(),
+            task_item(TaskItemOptions::default()).into(),
+        ]),
+        "paragraphs" => with_own(vec![
+            bullet_list(BulletListOptions {
+                item_type_name: "paragraph",
+                ..BulletListOptions::default()
+            })
+            .into(),
+            ordered_list(OrderedListOptions {
+                item_type_name: "paragraph",
+                ..OrderedListOptions::default()
+            })
+            .into(),
+            task_list(TaskListOptions {
+                item_type_name: "paragraph",
+                ..TaskListOptions::default()
+            })
+            .into(),
+        ]),
+        "flat" => {
+            let mut flat: Vec<Extension> = vec![
+                document().into(),
+                paragraph(Default::default()).into(),
+                text().into(),
+                flat_list_core().into(),
+                flat_list_ordered().into(),
+                flat_list_unordered().into(),
+                flat_list_task().into(),
+            ];
+            flat.extend(lists());
+            flat
+        }
+        "tabs" => {
+            let indentation = Indentation {
+                style: IndentStyle::Tab,
+                size: 3,
+            };
+            return Configuration {
+                indentation,
+                ..with_own(lists()).into()
+            };
+        }
+        other => panic!("no configuration {other}"),
     }
-    assert!(
-        failures.is_empty(),
-        "{} failures:\n\n{}",
-        failures.len(),
-        failures.join("\n\n")
-    );
+    .into()
+}
+
+/// The five lists, with their default options.
+fn lists() -> Vec<Extension> {
+    vec![
+        bullet_list(BulletListOptions::default()).into(),
+        ordered_list(OrderedListOptions::default()).into(),
+        list_item(ListItemOptions::default()).into(),
+        task_list(TaskListOptions::default()).into(),
+        task_item(TaskItemOptions::default()).into(),
+    ]
+}
+
+/// Tiptap's own extensions and `more`.
+fn with_own(more: Vec<Extension>) -> Vec<Extension> {
+    let mut extensions = own::extensions();
+    extensions.extend(more);
+    extensions
+}
+
+/// Tiptap's own extensions and the five lists, each with its HTMLAttributes.
+fn with_attributes([bullets, numbers, item, tasks, task]: [Map; 5]) -> Vec<Extension> {
+    with_own(vec![
+        bullet_list(BulletListOptions {
+            html_attributes: bullets,
+            ..BulletListOptions::default()
+        })
+        .into(),
+        ordered_list(OrderedListOptions {
+            html_attributes: numbers,
+            ..OrderedListOptions::default()
+        })
+        .into(),
+        list_item(ListItemOptions {
+            html_attributes: item,
+        })
+        .into(),
+        task_list(TaskListOptions {
+            html_attributes: tasks,
+            ..TaskListOptions::default()
+        })
+        .into(),
+        task_item(TaskItemOptions {
+            html_attributes: task,
+            ..TaskItemOptions::default()
+        })
+        .into(),
+    ])
+}
+
+fn replay() -> Replay {
+    Replay::new("tiptap-lists", configuration)
 }
 
 #[test]
-fn parses_markdown_as_tiptap_does() {
-    check("parsesMarkdown");
+fn converts_as_tiptap_does() {
+    replay().check();
 }
 
 #[test]
-fn serializes_markdown_as_tiptap_does() {
-    check("serializesMarkdown");
-}
-
-#[test]
-fn parses_html_as_tiptap_does() {
-    check("parsesHTML");
-}
-
-#[test]
-fn serializes_html_as_tiptap_does() {
-    check("serializesHTML");
-}
-
-#[test]
-fn builds_the_schemas_tiptap_does() {
-    own::check_schemas("tiptap-lists", Converter::new);
+fn converts_lists_nested_as_deeply_as_memory_allows() {
+    replay().check_nested(&NESTED);
 }
 
 const DOCUMENTS: usize = 10_000;
@@ -121,7 +199,8 @@ const TASKS: Kind = Kind {
     close: "</div></li></ul>",
 };
 
-fn paragraph() -> Value {
+/// A paragraph of `x`.
+fn x() -> Value {
     json!({"type": "paragraph", "content": [{"type": "text", "text": "x"}]})
 }
 
@@ -142,17 +221,15 @@ impl Kind {
 
     /// Lists `depth` deep, each item holding the next list first.
     fn first(&self, depth: usize, attrs: Option<Value>) -> Value {
-        let nested = (0..depth).fold(paragraph(), |inner, _| {
-            self.list(vec![inner], attrs.clone())
-        });
+        let nested = (0..depth).fold(x(), |inner, _| self.list(vec![inner], attrs.clone()));
         json!({"type": "doc", "content": [nested]})
     }
 
     /// Lists `depth` deep, each item holding the next list after its paragraph.
     fn after(&self, depth: usize, attrs: Option<Value>) -> Value {
-        let innermost = self.list(vec![paragraph()], attrs.clone());
+        let innermost = self.list(vec![x()], attrs.clone());
         let nested = (1..depth).fold(innermost, |inner, _| {
-            self.list(vec![paragraph(), inner], attrs.clone())
+            self.list(vec![x(), inner], attrs.clone())
         });
         json!({"type": "doc", "content": [nested]})
     }
@@ -162,7 +239,7 @@ impl Kind {
     fn closed(&self, depth: usize, attrs: Option<Value>) -> Value {
         let mut content =
             vec![self.list(vec![json!({"type": "paragraph"})], attrs.clone()); depth - 1];
-        content.push(self.list(vec![paragraph()], attrs));
+        content.push(self.list(vec![x()], attrs));
         json!({"type": "doc", "content": content})
     }
 
@@ -190,18 +267,6 @@ fn doc(doc: Value) -> Value {
 /// What `parseHTML` gives an ordered list without a start or a type.
 fn numbered() -> Option<Value> {
     Some(json!({"start": 1, "type": null}))
-}
-
-/// An input nested `depth` deep, and what the conversion a `section` of `tiptap-lists.json`
-/// records with `configuration` makes of it, which the test folds from the depths below and
-/// holds to Tiptap's at the depths the recorder records.
-struct Nested {
-    what: &'static str,
-    section: &'static str,
-    configuration: &'static str,
-    depth: usize,
-    input: fn(usize) -> Value,
-    output: fn(usize) -> Value,
 }
 
 const NESTED: [Nested; 19] = [
@@ -357,7 +422,7 @@ const NESTED: [Nested; 19] = [
         depth: PARSES,
         input: |depth| Value::String((TASK_ITEM.to_owned() + "x").repeat(depth)),
         output: |depth| {
-            let content = vec![TASKS.list(vec![paragraph()], None); depth];
+            let content = vec![TASKS.list(vec![x()], None); depth];
             doc(json!({"type": "doc", "content": content}))
         },
     },
@@ -372,27 +437,3 @@ const NESTED: [Nested; 19] = [
 ];
 
 const TASK_ITEM: &str = r#"<ul data-type="taskList"><li data-type="taskItem">"#;
-
-#[test]
-fn converts_lists_nested_as_deeply_as_memory_allows() {
-    let fixtures = read("tiptap-lists");
-    for nested in &NESTED {
-        let input = input_of(nested.section);
-        for depth in 1..=3 {
-            let given = (nested.input)(depth);
-            let record = records(&fixtures, nested.section).iter().find(|record| {
-                named(record) == Some(nested.configuration) && same(&record[input], &given)
-            });
-            let record = record.unwrap_or_else(|| panic!("no record of {given}"));
-            expect(record, &[input, "extensions"], (nested.output)(depth));
-        }
-    }
-    on_dirty_scheduler_stack(|| {
-        for nested in &NESTED {
-            let converter = Converter::new(Some(nested.configuration));
-            let converted = converter.convert(nested.section, &(nested.input)(nested.depth));
-            let expected = (nested.output)(nested.depth);
-            assert!(same(&expected, &converted), "{}", nested.what);
-        }
-    });
-}

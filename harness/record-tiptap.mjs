@@ -9,8 +9,8 @@
 // - Each HTML input records the document DOMParser parses the body of a linkedom document holding
 //   it to: fixtures/dom.json's, and Tiptap's own elements and styles.
 // - Each document records the innerHTML of an element DOMSerializer fills in linkedom.
-// A record is of Tiptap's own extensions, or names the others it's of in `extensions`: `colors`,
-// with Highlight's colors and Color's, or `code`, an application's code mark and code block, and
+// A record names the extensions it's of in `extensions`: `own`, Tiptap's own; `colors`, with
+// Highlight's colors and Color's, or `code`, an application's code mark and code block, and
 // a figure whose attribute renders under a name it makes. Tiptap's own extensions with an option
 // set record their schemas and the HTML conversions of the inputs that hold what the option
 // changes: `htmlAttributes` and `htmlAttributeValues`, each with HTMLAttributes and an
@@ -194,7 +194,7 @@ const converters = Object.fromEntries(
 )
 const { document } = parseHTML("<!DOCTYPE html><html><body></body></html>")
 const fixture = name => JSON.parse(readFileSync(new URL(`../fixtures/${name}.json`, import.meta.url), "utf8"))
-const named = name => (name === "own" ? {} : { extensions: name })
+const named = name => ({ extensions: name })
 const unique = values => [...new Set(values)]
 
 const schemas = Object.entries(converters).map(([name, { schema }]) => ({ ...named(name), ...schemaRecord(schema) }))
@@ -363,7 +363,7 @@ const parsesHTML = [
 // read it.
 const parsed = name =>
   [...parsesMarkdown, ...parsesHTML]
-    .filter(record => (record.extensions ?? "own") === name && record.doc)
+    .filter(record => record.extensions === name && record.doc)
     .map(record => record.doc)
 const documents = (name, docs) =>
   unique([...docs, ...parsed(name)].map(doc => JSON.stringify(doc))).map(text => [name, JSON.parse(text)])

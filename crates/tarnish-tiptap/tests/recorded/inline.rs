@@ -1,17 +1,10 @@
-//! What Tiptap's inline extensions, and the extensions that give other types attributes, make of
-//! documents, recorded by `harness/record-tiptap-inline.mjs`: tarnish-tiptap's must make the same
-//! schemas, documents, Markdown and HTML, or fail with the same error.
+//! `fixtures/tiptap-inline.json`, of Tiptap's inline extensions and the extensions that give
+//! other types attributes, and blocks, spans and links nested far deeper than a small stack could
+//! recurse through.
 
-#[allow(dead_code)]
-mod own;
-
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use own::{Converter, input_of};
-use tarnish::js::stack::on_dirty_scheduler_stack;
-use tarnish::json::{Map, Value, json, object};
-use tarnish_fixtures::{expect, outcome, read, records, same};
+use tarnish::json::{Value, json, object};
 use tarnish_tiptap::extensions::link::{LinkOptions, link};
 use tarnish_tiptap::extensions::mention::{MentionHtml, MentionOptions, mention};
 use tarnish_tiptap::extensions::text_align::{TextAlignOptions, text_align};
@@ -20,7 +13,7 @@ use tarnish_tiptap::extensions::text_style::{
     font_size, line_height, text_style, text_style_kit,
 };
 use tarnish_tiptap::extensions::unique_id::{
-    UniqueIdOptions, UniqueIdTypes, generate_unique_ids, unique_id,
+    GenerateId, UniqueIdOptions, UniqueIdTypes, unique_id,
 };
 use tarnish_tiptap::extensions::{
     bold::bold, document::document, hard_break::hard_break, heading::HeadingOptions,
@@ -28,9 +21,10 @@ use tarnish_tiptap::extensions::{
 };
 use tarnish_tiptap::{
     DomSpec, Extension, ExtensionAttribute, GlobalAttributes, GlobalTypes, MarkExtension,
-    NodeExtension, ParseHtml, PlainExtension, TextOptions, TextSerializer, generate_text,
-    node_attr,
+    NodeExtension, ParseHtml, PlainExtension, node_attr,
 };
+
+use crate::own::{self, Configuration, Nested, Replay};
 
 /// Global attributes for each kind of `types`.
 fn globals() -> PlainExtension {
@@ -115,42 +109,18 @@ fn own_with(others: impl IntoIterator<Item = Extension>) -> Vec<Extension> {
     own::extensions().into_iter().chain(others).collect()
 }
 
-/// The options of the UniqueID of each configuration that has one.
-fn ids(name: &str) -> UniqueIdOptions {
-    match name {
-        "uniqueIdNone" => UniqueIdOptions::default(),
-        "uniqueId" => UniqueIdOptions {
-            types: UniqueIdTypes::Named(&["paragraph", "heading"]),
-            generate_id: Arc::new(|node, pos| {
-                Ok(json!(format!("{}-{pos}", node.node_type().name())))
-            }),
-            ..UniqueIdOptions::default()
-        },
-        "uniqueIdAll" => UniqueIdOptions {
-            types: UniqueIdTypes::All,
-            generate_id: Arc::new(|node, pos| {
-                Ok(if node.is_inline() {
-                    json!(pos)
-                } else {
-                    json!({"at": pos})
-                })
-            }),
-            ..UniqueIdOptions::default()
-        },
-        "uniqueIdName" => UniqueIdOptions {
-            attribute_name: "uid",
-            types: UniqueIdTypes::Named(&["paragraph"]),
-            generate_id: Arc::new(|_, _| Ok(json!(""))),
-        },
-        "deep" => UniqueIdOptions {
-            types: UniqueIdTypes::Named(&["box"]),
-            generate_id: Arc::new(|node, pos| {
-                Ok(json!(format!("{}-{pos}", node.node_type().name())))
-            }),
-            ..UniqueIdOptions::default()
-        },
-        other => panic!("no UniqueID in {other}"),
+/// `extensions`, then UniqueID with `options`, which `generateUniqueIds` reads.
+fn with_unique_id(mut extensions: Vec<Extension>, options: UniqueIdOptions) -> Configuration {
+    extensions.push(unique_id(options.clone()).into());
+    Configuration {
+        unique_id: Some(options),
+        ..extensions.into()
     }
+}
+
+/// An id of the node's type and position.
+fn type_and_position() -> GenerateId {
+    Arc::new(|node, pos| Ok(json!(format!("{}-{pos}", node.node_type().name()))))
 }
 
 /// Document, Paragraph, Text, Heading and Bold, and the extensions of a `TextStyleKit`.
@@ -162,8 +132,7 @@ fn kit(options: TextStyleKitOptions) -> Vec<Extension> {
     base.into_iter().chain(text_style_kit(options)).collect()
 }
 
-/// The extensions of each configuration the recorder names.
-fn configuration(name: &str) -> Vec<Extension> {
+fn configuration(name: &str) -> Configuration {
     match name {
         "own" => own::extensions(),
         "specs" => specs(),
@@ -267,18 +236,40 @@ fn configuration(name: &str) -> Vec<Extension> {
             ..MentionOptions::default()
         })
         .into()]),
-        "uniqueIdNone" => own_with([unique_id(UniqueIdOptions::default()).into()]),
-        "uniqueId" | "uniqueIdAll" | "uniqueIdName" => {
-            let options = ids(name);
-            let mut extensions = own::extensions();
-            if name == "uniqueIdAll" {
-                extensions.push(mention(MentionOptions::default()).into());
-            }
-            extensions.push(unique_id(options).into());
-            extensions
+        "uniqueIdNone" => return with_unique_id(own::extensions(), UniqueIdOptions::default()),
+        "uniqueId" => {
+            let options = UniqueIdOptions {
+                types: UniqueIdTypes::Named(&["paragraph", "heading"]),
+                generate_id: type_and_position(),
+                ..UniqueIdOptions::default()
+            };
+            return with_unique_id(own::extensions(), options);
+        }
+        "uniqueIdAll" => {
+            let options = UniqueIdOptions {
+                types: UniqueIdTypes::All,
+                generate_id: Arc::new(|node, pos| {
+                    Ok(if node.is_inline() {
+                        json!(pos)
+                    } else {
+                        json!({"at": pos})
+                    })
+                }),
+                ..UniqueIdOptions::default()
+            };
+            let extensions = own_with([mention(MentionOptions::default()).into()]);
+            return with_unique_id(extensions, options);
+        }
+        "uniqueIdName" => {
+            let options = UniqueIdOptions {
+                attribute_name: "uid",
+                types: UniqueIdTypes::Named(&["paragraph"]),
+                generate_id: Arc::new(|_, _| Ok(json!(""))),
+            };
+            return with_unique_id(own::extensions(), options);
         }
         "deep" => {
-            let others: [Extension; 8] = [
+            let others: [Extension; 7] = [
                 bold(Default::default()).into(),
                 boxes().into(),
                 text_style(TextStyleOptions::default()).into(),
@@ -290,9 +281,13 @@ fn configuration(name: &str) -> Vec<Extension> {
                     ..TextAlignOptions::default()
                 })
                 .into(),
-                unique_id(ids("deep")).into(),
             ];
-            with(others)
+            let options = UniqueIdOptions {
+                types: UniqueIdTypes::Named(&["box"]),
+                generate_id: type_and_position(),
+                ..UniqueIdOptions::default()
+            };
+            return with_unique_id(with(others), options);
         }
         "kit" => kit(TextStyleKitOptions::default()),
         "kitOptions" => kit(TextStyleKitOptions {
@@ -327,169 +322,26 @@ fn configuration(name: &str) -> Vec<Extension> {
         ],
         other => panic!("no configuration {other}"),
     }
+    .into()
 }
 
-/// A configuration's extensions, and what converts with them.
-struct Configured {
-    name: String,
-    extensions: Vec<Extension>,
-    converter: Converter,
-}
-
-/// Each configuration the records of `section` name, in the order they first name it.
-fn configured(records: &[Value]) -> Vec<Configured> {
-    let mut configured: Vec<Configured> = Vec::new();
-    for record in records {
-        let name = record["extensions"].as_str().expect("a configuration");
-        if configured.iter().all(|done| done.name != name) {
-            let extensions = configuration(name);
-            let converter = Converter::of(&extensions);
-            configured.push(Configured {
-                name: name.to_owned(),
-                extensions,
-                converter,
-            });
-        }
-    }
-    configured
-}
-
-/// The fields of a record of `section` that are inputs.
-fn inputs(section: &str) -> &'static [&'static str] {
-    match section {
-        "generatesText" => &["doc", "blockSeparator", "serializers"],
-        "parsesMarkdown" => &["markdown"],
-        "parsesHTML" => &["html"],
-        _ => &["doc"],
-    }
-}
-
-/// What the conversion a `section` records makes of a record's inputs, those of its fields
-/// `inputs` names, with a configuration's extensions, as a record of it holds it.
-fn run(section: &str, configured: &Configured, given: &Map) -> Value {
-    match section {
-        "generatesText" => {
-            let mut options = TextOptions::default();
-            if let Some(separator) = given.get("blockSeparator") {
-                options.block_separator = separator.as_str().expect("a separator").to_owned();
-            }
-            if let Some(named) = given.get("serializers") {
-                options.text_serializers = serializers(named.as_str().expect("a name"));
-            }
-            let text = generate_text(&given["doc"], &configured.extensions, &options);
-            outcome(text.map(|text| json!({"text": text})))
-        }
-        "generatesUniqueIds" => {
-            let options = ids(&configured.name);
-            let doc = generate_unique_ids(&given["doc"], &configured.extensions, &options);
-            outcome(doc.map(|doc| json!({"ids": doc})))
-        }
-        _ => configured
-            .converter
-            .convert(section, &given[input_of(section)]),
-    }
-}
-
-/// Holds each record of `section` to what its conversion makes of its inputs with the extensions
-/// it names.
-fn check(section: &str) {
-    let fixtures = read("tiptap-inline");
-    let records = records(&fixtures, section);
-    let configured = configured(records);
-    let mut failures = Vec::new();
-    for record in records {
-        let mut expected = record.clone();
-        let fields = expected.as_object_mut().expect("a record");
-        let name = fields.shift_remove("extensions").expect("a configuration");
-        let given: Map = inputs(section)
-            .iter()
-            .filter_map(|input| Some(((*input).into(), fields.shift_remove(input)?)))
-            .collect();
-        let configuration = configured
-            .iter()
-            .find(|configured| configured.name == name)
-            .expect("the configuration");
-        let actual = run(section, configuration, &given);
-        if !same(&expected, &actual) {
-            failures.push(format!(
-                "{name}: {}\n  Tiptap: {expected}\n  tarnish-tiptap: {actual}",
-                Value::Object(given)
-            ));
-        }
-    }
-    assert!(
-        failures.is_empty(),
-        "{} failures:\n\n{}",
-        failures.len(),
-        failures.join("\n\n")
-    );
+fn replay() -> Replay {
+    Replay::new("tiptap-inline", configuration)
 }
 
 #[test]
-fn builds_the_schemas_tiptap_does() {
-    own::check_schemas("tiptap-inline", |name| {
-        Converter::of(&configuration(name.expect("a configuration")))
-    });
-}
-
-/// The text serializers a record names.
-fn serializers(name: &str) -> HashMap<String, TextSerializer> {
-    assert_eq!(name, "places", "no serializers {name}");
-    let paragraph: TextSerializer = Arc::new(|props| {
-        let name = props.node.node_type().name();
-        Ok(format!("[{name} {} {}]", props.pos, props.index))
-    });
-    let chip: TextSerializer = Arc::new(|props| {
-        let label = node_attr(props.node, "label").to_js_string()?;
-        Ok(format!("({label})"))
-    });
-    HashMap::from([("paragraph".into(), paragraph), ("chip".into(), chip)])
+fn converts_as_tiptap_does() {
+    replay().check();
 }
 
 #[test]
-fn generates_text_as_tiptap_does() {
-    check("generatesText");
-}
-
-#[test]
-fn generates_unique_ids_as_tiptap_does() {
-    check("generatesUniqueIds");
-}
-
-#[test]
-fn parses_markdown_as_tiptap_does() {
-    check("parsesMarkdown");
-}
-
-#[test]
-fn serializes_markdown_as_tiptap_does() {
-    check("serializesMarkdown");
-}
-
-#[test]
-fn parses_html_as_tiptap_does() {
-    check("parsesHTML");
-}
-
-#[test]
-fn serializes_html_as_tiptap_does() {
-    check("serializesHTML");
+fn converts_what_nests_as_deeply_as_memory_allows() {
+    replay().check_nested(&NESTED);
 }
 
 const DOCUMENTS: usize = 20_000;
 const PARSES: usize = 2_000;
 const INLINES: usize = 500;
-
-/// An input nested `depth` deep, and what the conversion a `section` records makes of it, which
-/// the test folds from the depths below and holds to Tiptap's at the depths
-/// `harness/record-tiptap-inline.mjs` records, with the `deep` extensions.
-struct Nested {
-    what: &'static str,
-    section: &'static str,
-    depth: usize,
-    input: fn(usize) -> Value,
-    output: fn(usize) -> Value,
-}
 
 /// The alignment of the box `level` deep, from 1.
 fn alignment(level: usize) -> &'static str {
@@ -549,6 +401,7 @@ fn bold_in_link(depth: usize) -> Vec<Value> {
 const NESTED: [Nested; 8] = [
     Nested {
         what: "spans with a font size in a link",
+        configuration: "deep",
         section: "parsesHTML",
         depth: PARSES,
         input: |depth| {
@@ -567,6 +420,7 @@ const NESTED: [Nested; 8] = [
     },
     Nested {
         what: "divs with an id and an alignment",
+        configuration: "deep",
         section: "parsesHTML",
         depth: PARSES,
         input: |depth| {
@@ -586,6 +440,7 @@ const NESTED: [Nested; 8] = [
     },
     Nested {
         what: "HTML of boxes with an id and an alignment",
+        configuration: "deep",
         section: "serializesHTML",
         depth: DOCUMENTS,
         input: |depth| {
@@ -605,6 +460,7 @@ const NESTED: [Nested; 8] = [
     },
     Nested {
         what: "text of boxes",
+        configuration: "deep",
         section: "generatesText",
         depth: DOCUMENTS,
         input: |depth| {
@@ -615,6 +471,7 @@ const NESTED: [Nested; 8] = [
     },
     Nested {
         what: "ids of boxes",
+        configuration: "deep",
         section: "generatesUniqueIds",
         depth: PARSES,
         input: |depth| {
@@ -637,6 +494,7 @@ const NESTED: [Nested; 8] = [
     // The manager renders a node of any type it has a renderer for, a mark's among them.
     Nested {
         what: "Markdown of links",
+        configuration: "deep",
         section: "serializesMarkdown",
         depth: DOCUMENTS,
         input: |depth| {
@@ -650,6 +508,7 @@ const NESTED: [Nested; 8] = [
     },
     Nested {
         what: "strong in a link",
+        configuration: "deep",
         section: "parsesMarkdown",
         depth: INLINES,
         input: |depth| {
@@ -664,6 +523,7 @@ const NESTED: [Nested; 8] = [
     // Without an extension for blockquotes, the manager parses a blockquote's content.
     Nested {
         what: "a mention in blockquotes",
+        configuration: "deep",
         section: "parsesMarkdown",
         depth: PARSES,
         input: |depth| json!(">".repeat(depth) + " [@ id=\"x\"]"),
@@ -674,50 +534,3 @@ const NESTED: [Nested; 8] = [
         },
     },
 ];
-
-/// The input of a record that `nested` converts.
-fn given(section: &str, input: Value) -> Map {
-    let mut given = Map::new();
-    given.insert(inputs(section)[0].into(), input);
-    given
-}
-
-#[test]
-fn converts_what_nests_as_deeply_as_memory_allows() {
-    let fixtures = read("tiptap-inline");
-    for nested in &NESTED {
-        for depth in 1..=3 {
-            let given = given(nested.section, (nested.input)(depth));
-            let record = records(&fixtures, nested.section).iter().find(|record| {
-                let inputs = inputs(nested.section);
-                let input = |fields: &Map, input| fields.get(input).cloned();
-                let fields = record.as_object().expect("a record");
-                record["extensions"] == "deep"
-                    && inputs.iter().all(|name| {
-                        let (recorded, given) = (input(fields, name), input(&given, name));
-                        recorded.is_none() && given.is_none()
-                            || recorded.zip(given).is_some_and(|(a, b)| same(&a, &b))
-                    })
-            });
-            let record = record.unwrap_or_else(|| panic!("no record of {}", nested.what));
-            let mut skipped = inputs(nested.section).to_vec();
-            skipped.push("extensions");
-            expect(record, &skipped, (nested.output)(depth));
-        }
-    }
-    on_dirty_scheduler_stack(|| {
-        let extensions = configuration("deep");
-        let converter = Converter::of(&extensions);
-        let configured = Configured {
-            name: "deep".into(),
-            extensions,
-            converter,
-        };
-        for nested in &NESTED {
-            let given = given(nested.section, (nested.input)(nested.depth));
-            let converted = run(nested.section, &configured, &given);
-            let expected = (nested.output)(nested.depth);
-            assert!(same(&expected, &converted), "{}", nested.what);
-        }
-    });
-}
