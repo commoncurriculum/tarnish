@@ -26,8 +26,8 @@ use tarnish_tiptap::extensions::table::{
 };
 use tarnish_tiptap::extensions::text::text;
 use tarnish_tiptap::{
-    DomSpec, Extension, ExtensionAttribute, GlobalAttributes, MarkExtension, ParseHtml,
-    PlainExtension,
+    DomSpec, Extension, ExtensionAttribute, GlobalAttributes, GlobalTypes, MarkExtension,
+    ParseHtml, PlainExtension,
 };
 
 /// An application's code mark, which parses marked's code spans.
@@ -98,7 +98,7 @@ fn style() -> PlainExtension {
             _ => Ok(()),
         });
     PlainExtension::create("style").add_global_attributes(vec![GlobalAttributes {
-        types: &["table", "tableCell", "tableHeader"],
+        types: GlobalTypes::Named(&["table", "tableCell", "tableHeader"]),
         attributes: vec![style],
     }])
 }

@@ -2,7 +2,7 @@
 //! `data-toc-id` of each anchor, a heading by default. The plugin that gives anchors their ids
 //! as the document changes runs in an editor.
 
-use crate::{ExtensionAttribute, GlobalAttributes, PlainExtension};
+use crate::{ExtensionAttribute, GlobalAttributes, GlobalTypes, PlainExtension};
 use tarnish_js::json::Value;
 
 pub struct TableOfContentsOptions {
@@ -32,7 +32,7 @@ pub fn table_of_contents(options: TableOfContentsOptions) -> PlainExtension {
             })
     };
     PlainExtension::create("tableOfContents").add_global_attributes(vec![GlobalAttributes {
-        types: options.anchor_types,
+        types: GlobalTypes::Named(options.anchor_types),
         attributes: vec![attribute("id"), attribute("data-toc-id")],
     }])
 }

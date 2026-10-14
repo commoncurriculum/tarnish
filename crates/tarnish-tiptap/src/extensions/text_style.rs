@@ -8,7 +8,7 @@ use tarnish_js::value::nullable_string;
 
 use crate::DomSpec;
 use crate::{
-    ExtensionAttribute, GlobalAttributes, MarkExtension, ParseHtml, PlainExtension,
+    ExtensionAttribute, GlobalAttributes, GlobalTypes, MarkExtension, ParseHtml, PlainExtension,
     get_style_property,
 };
 
@@ -27,7 +27,7 @@ pub fn text_style() -> MarkExtension {
 
 pub fn color() -> PlainExtension {
     PlainExtension::create("color").add_global_attributes(vec![GlobalAttributes {
-        types: &["textStyle"],
+        types: GlobalTypes::Named(&["textStyle"]),
         attributes: vec![
             ExtensionAttribute::new("color", Value::Null)
                 .parse_html(|element| {

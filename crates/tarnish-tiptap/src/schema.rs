@@ -26,15 +26,22 @@ pub struct TiptapSchema {
 /// order, and each type's attributes those `addGlobalAttributes` gives it, then its own.
 pub fn get_schema(extensions: &[Extension]) -> Result<TiptapSchema> {
     let extensions = sort_extensions(extensions);
+    let names = |of: fn(&Kind) -> bool| -> Vec<&'static str> {
+        let typed = extensions.iter().filter(|extension| of(&extension.kind));
+        typed.map(|extension| extension.name).collect()
+    };
+    let nodes = names(|kind| matches!(kind, Kind::Node(_)));
+    let marks = names(|kind| matches!(kind, Kind::Mark(_)));
     let globals: Vec<(&'static str, &ExtensionAttribute)> = extensions
         .iter()
         .flat_map(|extension| &extension.global_attributes)
         .flat_map(|global| {
-            global.types.iter().flat_map(|name| {
+            let types = global.types.resolve(&nodes, &marks);
+            types.into_iter().flat_map(|name| {
                 global
                     .attributes
                     .iter()
-                    .map(move |attribute| (*name, attribute))
+                    .map(move |attribute| (name, attribute))
             })
         })
         .collect();

@@ -42,7 +42,7 @@ mod utilities;
 mod web_url;
 
 pub use attributes::{
-    ExtensionAttribute, GlobalAttributes, ParseAttribute, RenderAttribute, Rendered,
+    ExtensionAttribute, GlobalAttributes, GlobalTypes, ParseAttribute, RenderAttribute, Rendered,
 };
 pub use extension::{
     ExtendNodeSchema, Extension, Kind, MarkConfig, MarkExtension, NodeConfig, NodeExtension,
