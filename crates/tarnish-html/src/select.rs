@@ -140,6 +140,24 @@ pub(crate) fn query(tree: &Tree, root: NodeId, selectors: &Selectors) -> Option<
     })
 }
 
+/// `querySelectorAll`: the elements inside `root` that match, in tree order.
+pub(crate) fn query_all(tree: &Tree, root: NodeId, selectors: &Selectors) -> Vec<NodeId> {
+    selectors.room(tree, || {
+        let mut found = Vec::new();
+        let mut stack: Vec<NodeId> = tree.children(root).collect();
+        stack.reverse();
+        while let Some(node) = stack.pop() {
+            if matches_here(tree, node, selectors, root) {
+                found.push(node);
+            }
+            let start = stack.len();
+            stack.extend(tree.children(node));
+            stack[start..].reverse();
+        }
+        found
+    })
+}
+
 /// `closest`: the element, or the nearest element above it, that matches.
 pub(crate) fn closest(tree: &Tree, element: NodeId, selectors: &Selectors) -> Option<NodeId> {
     selectors.room(tree, || {

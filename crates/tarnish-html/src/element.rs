@@ -92,6 +92,13 @@ impl HtmlNode {
         self.dom.query_selector(self, selector)
     }
 
+    /// `querySelectorAll`: the elements inside this one that match the selector, in tree order.
+    pub fn query_selector_all(&self, selector: &str) -> Result<Vec<HtmlNode>> {
+        let selectors = self.dom.selectors(selector)?;
+        let found = select::query_all(&self.dom.tree(), self.id, &selectors);
+        Ok(found.into_iter().map(|id| self.dom.node(id)).collect())
+    }
+
     /// `closest`: this element or the nearest one above it that matches the selector.
     pub fn closest(&self, selector: &str) -> Result<Option<HtmlNode>> {
         let selectors = self.dom.selectors(selector)?;
