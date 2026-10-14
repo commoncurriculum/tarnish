@@ -2,12 +2,18 @@
 
 use crate::DomSpec;
 use crate::markdown::{RenderContext, RenderHelpers};
-use crate::{GetAttrsResult, MarkExtension, ParseHtml};
+use crate::merge_attributes::merge_configured;
+use crate::{GetAttrsResult, MarkExtension, ParseHtml, element_attrs, rendered_object};
 use tarnish_js::Error;
 use tarnish_js::json::Map;
 use tarnish_js::json::Value;
 
-pub fn bold() -> MarkExtension {
+#[derive(Default)]
+pub struct BoldOptions {
+    pub html_attributes: Map,
+}
+
+pub fn bold(options: BoldOptions) -> MarkExtension {
     MarkExtension::create("bold")
         .parse_html([
             ParseHtml::Tag(ParseHtml::tag("strong")),
@@ -24,7 +30,16 @@ pub fn bold() -> MarkExtension {
                 })
             })),
         ])
-        .render_html(|_, html| Ok(DomSpec::wrapping("strong", html)))
+        .render_html(move |_, html| {
+            let mut html = merge_configured(&options.html_attributes, html)?;
+            // The JSX runtime takes `children` for the element's content.
+            if html.get("children").is_some() {
+                let mut object = rendered_object(&html);
+                object.shift_remove("children");
+                html = element_attrs(object)?;
+            }
+            Ok(DomSpec::wrapping("strong", html))
+        })
         .markdown_token_name("strong")
         .html_reopen("<strong>", "</strong>")
         .parse_markdown(|token, helpers| {

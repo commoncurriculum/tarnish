@@ -41,12 +41,12 @@ use tarnish_tiptap::{Extension, TextOptions, generate_text};
 fn base() -> Vec<Extension> {
     vec![
         document().into(),
-        paragraph().into(),
+        paragraph(Default::default()).into(),
         text().into(),
         heading(HeadingOptions::default()).into(),
-        hard_break().into(),
-        bold().into(),
-        italic().into(),
+        hard_break(Default::default()).into(),
+        bold(Default::default()).into(),
+        italic(Default::default()).into(),
     ]
 }
 

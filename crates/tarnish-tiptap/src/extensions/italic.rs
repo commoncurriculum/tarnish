@@ -2,12 +2,18 @@
 
 use crate::DomSpec;
 use crate::markdown::{RenderContext, RenderHelpers};
+use crate::merge_attributes::merge_configured;
 use crate::{MarkExtension, ParseHtml};
 use tarnish_js::Error;
 use tarnish_js::json::Map;
 use tarnish_js::json::Value;
 
-pub fn italic() -> MarkExtension {
+#[derive(Default)]
+pub struct ItalicOptions {
+    pub html_attributes: Map,
+}
+
+pub fn italic(options: ItalicOptions) -> MarkExtension {
     MarkExtension::create("italic")
         .parse_html([
             ParseHtml::Tag(ParseHtml::tag("em")),
@@ -18,7 +24,10 @@ pub fn italic() -> MarkExtension {
             ParseHtml::Style(ParseHtml::style("font-style=normal").clears_mark()),
             ParseHtml::Style(ParseHtml::style("font-style=italic")),
         ])
-        .render_html(|_, html| Ok(DomSpec::wrapping("em", html)))
+        .render_html(move |_, html| {
+            let html = merge_configured(&options.html_attributes, html)?;
+            Ok(DomSpec::wrapping("em", html))
+        })
         .markdown_token_name("em")
         .html_reopen("<em>", "</em>")
         .parse_markdown(|token, helpers| {

@@ -11,20 +11,20 @@ use tarnish_fixtures::{outcome, read, records, same};
 use tarnish_js::Error;
 use tarnish_markdown::marked::Marked;
 use tarnish_markdown::marked_more_lists::more_lists;
-use tarnish_tiptap::extensions::bold::bold;
+use tarnish_tiptap::extensions::bold::{BoldOptions, bold};
 use tarnish_tiptap::extensions::document::document;
-use tarnish_tiptap::extensions::hard_break::hard_break;
+use tarnish_tiptap::extensions::hard_break::{HardBreakOptions, hard_break};
 use tarnish_tiptap::extensions::heading::{HeadingOptions, heading};
 use tarnish_tiptap::extensions::highlight::{HighlightOptions, highlight};
 use tarnish_tiptap::extensions::image::{ImageOptions, image};
-use tarnish_tiptap::extensions::italic::italic;
-use tarnish_tiptap::extensions::paragraph::paragraph;
-use tarnish_tiptap::extensions::strike::strike;
-use tarnish_tiptap::extensions::subscript::subscript;
-use tarnish_tiptap::extensions::superscript::superscript;
+use tarnish_tiptap::extensions::italic::{ItalicOptions, italic};
+use tarnish_tiptap::extensions::paragraph::{ParagraphOptions, paragraph};
+use tarnish_tiptap::extensions::strike::{StrikeOptions, strike};
+use tarnish_tiptap::extensions::subscript::{SubscriptOptions, subscript};
+use tarnish_tiptap::extensions::superscript::{SuperscriptOptions, superscript};
 use tarnish_tiptap::extensions::text::text;
 use tarnish_tiptap::extensions::text_style::{ColorOptions, TextStyleOptions, color, text_style};
-use tarnish_tiptap::extensions::underline::underline;
+use tarnish_tiptap::extensions::underline::{UnderlineOptions, underline};
 use tarnish_tiptap::markdown::MarkdownManager;
 use tarnish_tiptap::{
     DomSpec, Extension, ExtensionAttribute, MarkExtension, NodeExtension, ParseHtml, TiptapSchema,
@@ -35,23 +35,23 @@ use tarnish_tiptap::{
 fn own_but_highlight() -> Vec<Extension> {
     vec![
         document().into(),
-        paragraph().into(),
+        paragraph(ParagraphOptions::default()).into(),
         text().into(),
         heading(HeadingOptions::default()).into(),
         image(ImageOptions::default()).into(),
-        hard_break().into(),
-        bold().into(),
-        italic().into(),
-        strike().into(),
-        underline().into(),
-        subscript().into(),
-        superscript().into(),
+        hard_break(HardBreakOptions::default()).into(),
+        bold(BoldOptions::default()).into(),
+        italic(ItalicOptions::default()).into(),
+        strike(StrikeOptions::default()).into(),
+        underline(UnderlineOptions::default()).into(),
+        subscript(SubscriptOptions::default()).into(),
+        superscript(SuperscriptOptions::default()).into(),
     ]
 }
 
 pub fn extensions() -> Vec<Extension> {
     let mut own = own_but_highlight();
-    own.push(highlight(HighlightOptions { multicolor: false }).into());
+    own.push(highlight(HighlightOptions::default()).into());
     own.push(text_style(TextStyleOptions::default()).into());
     own
 }
@@ -60,7 +60,11 @@ pub fn extensions() -> Vec<Extension> {
 fn colors() -> Vec<Extension> {
     let mut colors = own_but_highlight();
     colors.push(text_style(TextStyleOptions::default()).into());
-    colors.push(highlight(HighlightOptions { multicolor: true }).into());
+    let highlight_options = HighlightOptions {
+        multicolor: true,
+        ..HighlightOptions::default()
+    };
+    colors.push(highlight(highlight_options).into());
     colors.push(color(ColorOptions::default()).into());
     colors
 }
@@ -93,7 +97,7 @@ fn code() -> Vec<Extension> {
         ]);
     vec![
         document().into(),
-        paragraph().into(),
+        paragraph(ParagraphOptions::default()).into(),
         text().into(),
         code.into(),
         block.into(),

@@ -47,11 +47,11 @@ fn code() -> MarkExtension {
 fn inline() -> Vec<Extension> {
     vec![
         document().into(),
-        paragraph().into(),
+        paragraph(Default::default()).into(),
         text().into(),
-        hard_break().into(),
-        bold().into(),
-        italic().into(),
+        hard_break(Default::default()).into(),
+        bold(Default::default()).into(),
+        italic(Default::default()).into(),
         heading(HeadingOptions::default()).into(),
         code().into(),
     ]
@@ -162,7 +162,7 @@ fn configuration(name: &str) -> Vec<Extension> {
         }
         "partial" => vec![
             document().into(),
-            paragraph().into(),
+            paragraph(Default::default()).into(),
             text().into(),
             table_row(TableRowOptions::default()).into(),
             table_cell(TableCellOptions::default()).into(),

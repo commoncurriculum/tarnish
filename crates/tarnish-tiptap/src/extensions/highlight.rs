@@ -4,16 +4,20 @@ use std::sync::LazyLock;
 
 use crate::DomSpec;
 use crate::markdown::{RenderContext, RenderHelpers};
+use crate::merge_attributes::merge_configured;
 use crate::{ExtensionAttribute, MarkExtension, ParseHtml, get_style_property};
 use tarnish_js::Error;
-use tarnish_js::json::Value;
+use tarnish_js::json::{Map, Value};
 use tarnish_js::regexp::RegExp;
 use tarnish_js::units::Units;
 use tarnish_js::utf16;
 use tarnish_markdown::marked::{Lexer, Token};
 
+#[derive(Default)]
 pub struct HighlightOptions {
+    /// Whether a highlight has a color.
     pub multicolor: bool,
+    pub html_attributes: Map,
 }
 
 pub fn highlight(options: HighlightOptions) -> MarkExtension {
@@ -22,10 +26,14 @@ pub fn highlight(options: HighlightOptions) -> MarkExtension {
     } else {
         Vec::new()
     };
+    let configured = options.html_attributes;
     MarkExtension::create("highlight")
         .add_attributes(attributes)
         .parse_html([ParseHtml::tag("mark")])
-        .render_html(|_, html| Ok(DomSpec::wrapping("mark", html)))
+        .render_html(move |_, html| {
+            let html = merge_configured(&configured, html)?;
+            Ok(DomSpec::wrapping("mark", html))
+        })
         .render_markdown(render_markdown)
         .parse_markdown(|token, helpers| {
             let content = helpers.parse_inline(token.tokens.as_deref().unwrap_or_default())?;

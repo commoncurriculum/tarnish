@@ -2,12 +2,18 @@
 
 use crate::DomSpec;
 use crate::markdown::{RenderContext, RenderHelpers};
+use crate::merge_attributes::merge_configured;
 use crate::{GetAttrsResult, MarkExtension, ParseHtml};
 use tarnish_js::Error;
 use tarnish_js::json::Map;
 use tarnish_js::json::Value;
 
-pub fn strike() -> MarkExtension {
+#[derive(Default)]
+pub struct StrikeOptions {
+    pub html_attributes: Map,
+}
+
+pub fn strike(options: StrikeOptions) -> MarkExtension {
     MarkExtension::create("strike")
         .parse_html([
             ParseHtml::Tag(ParseHtml::tag("s")),
@@ -25,7 +31,10 @@ pub fn strike() -> MarkExtension {
                     }),
             ),
         ])
-        .render_html(|_, html| Ok(DomSpec::wrapping("s", html)))
+        .render_html(move |_, html| {
+            let html = merge_configured(&options.html_attributes, html)?;
+            Ok(DomSpec::wrapping("s", html))
+        })
         .markdown_token_name("del")
         .parse_markdown(|token, helpers| {
             let content = helpers.parse_inline(token.tokens.as_deref().unwrap_or_default())?;

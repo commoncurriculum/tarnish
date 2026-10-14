@@ -64,7 +64,11 @@ fn globals() -> PlainExtension {
 
 /// Document, Paragraph and Text, and `others`.
 fn with(others: impl IntoIterator<Item = Extension>) -> Vec<Extension> {
-    let base: [Extension; 3] = [document().into(), paragraph().into(), text().into()];
+    let base: [Extension; 3] = [
+        document().into(),
+        paragraph(Default::default()).into(),
+        text().into(),
+    ];
     base.into_iter().chain(others).collect()
 }
 
@@ -151,7 +155,10 @@ fn ids(name: &str) -> UniqueIdOptions {
 
 /// Document, Paragraph, Text, Heading and Bold, and the extensions of a `TextStyleKit`.
 fn kit(options: TextStyleKitOptions) -> Vec<Extension> {
-    let base = with([heading(HeadingOptions::default()).into(), bold().into()]);
+    let base = with([
+        heading(HeadingOptions::default()).into(),
+        bold(Default::default()).into(),
+    ]);
     base.into_iter().chain(text_style_kit(options)).collect()
 }
 
@@ -272,7 +279,7 @@ fn configuration(name: &str) -> Vec<Extension> {
         }
         "deep" => {
             let others: [Extension; 8] = [
-                bold().into(),
+                bold(Default::default()).into(),
                 boxes().into(),
                 text_style(TextStyleOptions::default()).into(),
                 font_size(StyleOptions::default()).into(),
@@ -310,12 +317,12 @@ fn configuration(name: &str) -> Vec<Extension> {
         }),
         "globals" => vec![
             document().into(),
-            paragraph().into(),
+            paragraph(Default::default()).into(),
             text().into(),
             heading(HeadingOptions::default()).into(),
-            hard_break().into(),
-            bold().into(),
-            italic().into(),
+            hard_break(Default::default()).into(),
+            bold(Default::default()).into(),
+            italic(Default::default()).into(),
             globals().into(),
         ],
         other => panic!("no configuration {other}"),

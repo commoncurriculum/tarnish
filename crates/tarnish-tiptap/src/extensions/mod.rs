@@ -48,15 +48,15 @@ mod tests {
     use super::highlight::{HighlightOptions, highlight};
     use super::mathematics::inline_math;
     use super::mention::{MentionOptions, mention};
-    use super::underline::underline;
+    use super::underline::{UnderlineOptions, underline};
     use crate::Extension;
     use crate::markdown::MarkdownManager;
 
     #[test]
     fn tokenizers_match_only_at_their_starts() {
         let extensions: [Extension; 4] = [
-            underline().into(),
-            highlight(HighlightOptions { multicolor: false }).into(),
+            underline(UnderlineOptions::default()).into(),
+            highlight(HighlightOptions::default()).into(),
             inline_math().into(),
             mention(MentionOptions::default()).into(),
         ];

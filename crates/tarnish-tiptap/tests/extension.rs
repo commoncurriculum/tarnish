@@ -17,7 +17,7 @@ use tarnish_tiptap::{
 fn with(figure: NodeExtension) -> Vec<Extension> {
     vec![
         document().into(),
-        paragraph().into(),
+        paragraph(Default::default()).into(),
         text().into(),
         figure.group("block").into(),
     ]

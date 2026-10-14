@@ -2,21 +2,25 @@
 
 use crate::DomSpec;
 use crate::markdown::{ParseHelpers, Parsed, RenderContext, RenderHelpers};
+use crate::merge_attributes::merge_configured;
 use crate::{ExtensionAttribute, NodeExtension, ParseHtml};
 use tarnish_js::json::{Map, Value, json};
 use tarnish_js::{self as js, Error, utf16, value};
 use tarnish_markdown::marked::Token;
 
+/// Image's options but `resize`, which only its node view reads.
 #[derive(Default)]
 pub struct ImageOptions {
     pub inline: bool,
     /// Whether an `img` whose `src` is a `data:` URL is an image.
     pub allow_base64: bool,
+    pub html_attributes: Map,
 }
 
 pub fn image(options: ImageOptions) -> NodeExtension {
     let attributes = ["src", "alt", "title", "width", "height"]
         .map(|name| ExtensionAttribute::new(name, Value::Null));
+    let configured = options.html_attributes;
     NodeExtension::create("image")
         .inline(options.inline)
         .group(if options.inline { "inline" } else { "block" })
@@ -27,7 +31,10 @@ pub fn image(options: ImageOptions) -> NodeExtension {
         } else {
             r#"img[src]:not([src^="data:"])"#
         })])
-        .render_html(|_, html| Ok(DomSpec::element("img", html, Vec::new())))
+        .render_html(move |_, html| {
+            let html = merge_configured(&configured, html)?;
+            Ok(DomSpec::element("img", html, Vec::new()))
+        })
         .parse_markdown(parse_markdown)
         .render_markdown(render_markdown)
 }

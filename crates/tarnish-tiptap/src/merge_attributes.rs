@@ -61,6 +61,18 @@ pub fn merge_objects<'m>(objects: impl IntoIterator<Item = &'m Map>) -> Result<M
     Ok(merged)
 }
 
+/// `mergeAttributes(this.options.HTMLAttributes, HTMLAttributes)` of an `HTMLAttributes` option
+/// whose values are any JSON, as [`merge_objects`] merges them.
+pub(crate) fn merge_configured<'a>(
+    configured: &Map,
+    html: SpecAttrs<'a>,
+) -> Result<SpecAttrs<'a>, Error> {
+    if configured.is_empty() {
+        return Ok(html);
+    }
+    element_attrs(merge_objects([configured, &rendered_object(&html)])?)
+}
+
 /// An extension's `HTMLAttributes` option as an object.
 pub fn html_attributes_object(options: &[(String, String)]) -> Map {
     options

@@ -121,7 +121,7 @@ pub fn configuration(name: &str) -> Option<(Vec<Extension>, Option<Indentation>)
         "flat" => {
             let mut flat: Vec<Extension> = vec![
                 document().into(),
-                paragraph().into(),
+                paragraph(Default::default()).into(),
                 text().into(),
                 flat_list_core().into(),
                 flat_list_ordered().into(),

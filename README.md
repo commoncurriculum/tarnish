@@ -184,8 +184,12 @@ use tarnish_tiptap::extensions::{bold::bold, document::document, paragraph::para
 use tarnish_tiptap::markdown::MarkdownManager;
 use tarnish_tiptap::{Extension, get_schema, html};
 
-let extensions: Vec<Extension> =
-    vec![document().into(), paragraph().into(), text().into(), bold().into()];
+let extensions: Vec<Extension> = vec![
+    document().into(),
+    paragraph(Default::default()).into(),
+    text().into(),
+    bold(Default::default()).into(),
+];
 let schema = get_schema(&extensions)?;
 
 let doc = html::parse(&schema, "<p>Hello <b>world</b></p>")?;

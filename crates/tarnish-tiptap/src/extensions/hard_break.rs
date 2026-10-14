@@ -2,11 +2,18 @@
 
 use crate::DomSpec;
 use crate::markdown::{Parsed, RenderContext, RenderHelpers};
+use crate::merge_attributes::merge_configured;
 use crate::{NodeExtension, ParseHtml};
 use tarnish_js::Error;
-use tarnish_js::json::{Value, json};
+use tarnish_js::json::{Map, Value, json};
 
-pub fn hard_break() -> NodeExtension {
+/// HardBreak's options but `keepMarks`, which only its command reads.
+#[derive(Default)]
+pub struct HardBreakOptions {
+    pub html_attributes: Map,
+}
+
+pub fn hard_break(options: HardBreakOptions) -> NodeExtension {
     NodeExtension::create("hardBreak")
         .markdown_token_name("br")
         .inline(true)
@@ -14,7 +21,10 @@ pub fn hard_break() -> NodeExtension {
         .selectable(false)
         .linebreak_replacement()
         .parse_html([ParseHtml::tag("br")])
-        .render_html(|_, html| Ok(DomSpec::element("br", html, Vec::new())))
+        .render_html(move |_, html| {
+            let html = merge_configured(&options.html_attributes, html)?;
+            Ok(DomSpec::element("br", html, Vec::new()))
+        })
         .render_text(|_| Ok("\n".to_owned()))
         .render_markdown(render_markdown)
         .parse_markdown(|_, _| Ok(Parsed::Node(json!({ "type": "hardBreak" }))))

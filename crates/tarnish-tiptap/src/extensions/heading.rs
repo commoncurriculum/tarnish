@@ -1,26 +1,35 @@
 //! `@tiptap/extension-heading`.
 
+use std::borrow::Cow;
+
 use crate::DomSpec;
 use crate::markdown::{ParseHelpers, Parsed, RenderContext, RenderHelpers};
-use crate::{ExtensionAttribute, NodeExtension, ParseHtml};
-use tarnish_js::json::{Value, json, object};
+use crate::{ExtensionAttribute, NodeExtension, ParseHtml, merge_objects, rendered_object};
+use tarnish_js::json::{Map, Value, json, object};
 use tarnish_js::{self as js, Error, value};
 use tarnish_markdown::marked::Token;
 
 pub struct HeadingOptions {
+    /// The levels an element is parsed as and a heading renders as, the first for a heading of
+    /// any other level.
     pub levels: &'static [u8],
+    pub html_attributes: Map,
 }
 
 impl Default for HeadingOptions {
     fn default() -> Self {
         HeadingOptions {
             levels: &[1, 2, 3, 4, 5, 6],
+            html_attributes: Map::new(),
         }
     }
 }
 
 pub fn heading(options: HeadingOptions) -> NodeExtension {
-    let levels = options.levels;
+    let HeadingOptions {
+        levels,
+        html_attributes,
+    } = options;
     NodeExtension::create("heading")
         .content("inline*")
         .group("block")
@@ -39,14 +48,23 @@ pub fn heading(options: HeadingOptions) -> NodeExtension {
                 .get("level")
                 .and_then(|level| level.as_f64())
                 .filter(|level| levels.iter().any(|allowed| f64::from(*allowed) == *level))
-                .map_or(levels[0], |level| level as u8);
-            Ok(DomSpec::wrapping(TAGS[usize::from(level) - 1], html))
+                .map(|level| level as u8)
+                .or_else(|| levels.first().copied());
+            // `h${level}`, where `this.options.levels[0]` is `undefined` without levels.
+            let tag = level.map_or_else(|| "hundefined".to_owned(), |level| format!("h{level}"));
+            let attrs = merge_objects([&html_attributes, &rendered_object(&html)])?;
+            Ok(DomSpec::Array {
+                items: vec![
+                    DomSpec::Text(Cow::Owned(tag)),
+                    DomSpec::Value(Value::Object(attrs)),
+                    DomSpec::Hole,
+                ],
+                origin: None,
+            })
         })
         .parse_markdown(parse_markdown)
         .render_markdown(render_markdown)
 }
-
-const TAGS: [&str; 6] = ["h1", "h2", "h3", "h4", "h5", "h6"];
 
 fn parse_markdown(token: &Token, helpers: &ParseHelpers) -> Result<Parsed, Error> {
     let level = token.depth().filter(|&depth| depth != 0).unwrap_or(1);
