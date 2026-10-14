@@ -1,59 +1,24 @@
-// Records what Tiptap's inline extensions, and the extensions that give other types attributes,
-// make of documents, to fixtures/tiptap-inline.json, for tarnish-tiptap's tests/inline.rs to
-// expect. Each record names the configuration of extensions it's of in `extensions`:
-// - `schemas` records each configuration's schema, as harness/fixture.mjs's schemaRecord writes it.
-// - `generatesText` records the text `generateText` makes of documents, with a `blockSeparator`
-//   and the text serializers it names in `serializers`, where the record has them.
-// - `generatesUniqueIds` records the document `generateUniqueIds` gives ids, in `ids`.
-// - `parsesMarkdown`, `serializesMarkdown`, `parsesHTML` and `serializesHTML` record what
-//   harness/record-tiptap.mjs records, of each configuration.
-import { readFileSync } from "node:fs"
-import { Extension, Mark, Node as TiptapNode, generateText, getSchema, splitExtensions } from "@tiptap/core"
+// Records Tiptap's inline extensions, and the extensions that give other types attributes, to
+// fixtures/tiptap-inline.json, as harness/tiptap.mjs records them. TextStyle's attributes,
+// TextAlign, UniqueID and Global attributes have no Markdown hooks, and Mention's Markdown reads
+// none of its options.
+import { Extension, Mark, Node as TiptapNode, splitExtensions } from "@tiptap/core"
 import { Bold } from "@tiptap/extension-bold"
+import { Color } from "@tiptap/extension-color"
 import { Document } from "@tiptap/extension-document"
+import { FontFamily } from "@tiptap/extension-font-family"
 import { HardBreak } from "@tiptap/extension-hard-break"
 import { Heading } from "@tiptap/extension-heading"
-import { Highlight } from "@tiptap/extension-highlight"
-import { Image } from "@tiptap/extension-image"
 import { Italic } from "@tiptap/extension-italic"
 import { Link } from "@tiptap/extension-link"
 import { Mention } from "@tiptap/extension-mention"
 import { Paragraph } from "@tiptap/extension-paragraph"
-import { Strike } from "@tiptap/extension-strike"
-import { Subscript } from "@tiptap/extension-subscript"
-import { Superscript } from "@tiptap/extension-superscript"
 import { Text } from "@tiptap/extension-text"
-import { Color } from "@tiptap/extension-color"
-import { FontFamily } from "@tiptap/extension-font-family"
+import { TextAlign } from "@tiptap/extension-text-align"
 import * as textStyles from "@tiptap/extension-text-style"
 import { BackgroundColor, FontSize, LineHeight, TextStyle, TextStyleKit } from "@tiptap/extension-text-style"
-import { TextAlign } from "@tiptap/extension-text-align"
-import { Underline } from "@tiptap/extension-underline"
-import { UniqueID, generateUniqueIds } from "@tiptap/extension-unique-id"
-import { MarkdownManager } from "@tiptap/markdown"
-import { DOMParser, DOMSerializer, Node } from "@tiptap/pm/model"
-import { parseHTML } from "linkedom"
-import { Marked } from "marked"
-import moreLists from "marked-more-lists"
-import { outcome, schemaRecord, writeFixture } from "./fixture.mjs"
-
-// Tiptap's own extensions, as harness/record-tiptap.mjs gives them.
-const own = [
-  Document,
-  Paragraph,
-  Text,
-  Heading,
-  Image,
-  HardBreak,
-  Bold,
-  Italic,
-  Strike,
-  Underline,
-  Subscript,
-  Superscript,
-  Highlight,
-  TextStyle,
-]
+import { UniqueID } from "@tiptap/extension-unique-id"
+import { doc, domInputs, fixture, markedInputs, own, paragraph, record, text, unique, withParsed } from "./tiptap.mjs"
 
 // Global attributes for each kind of `types`: `'*'`, `'nodes'`, `'marks'`, an array that names a
 // type twice and one there isn't, and an array an extension makes of the node extensions it's given.
@@ -103,163 +68,10 @@ if (Color !== textStyles.Color || FontFamily !== textStyles.FontFamily) {
 }
 const styles = [BackgroundColor, Color, FontFamily, FontSize, LineHeight]
 
-const configurations = {
-  own,
-  globals: [Document, Paragraph, Text, Heading, HardBreak, Bold, Italic, Globals],
-  specs: [Document, Paragraph, Text, Chip, Rule, Tag, Free],
-  styles: [...own, ...styles],
-  kit: [Document, Paragraph, Text, Heading, Bold, TextStyleKit],
-  kitOptions: [
-    Document,
-    Paragraph,
-    Text,
-    Heading,
-    Bold,
-    TextStyleKit.configure({
-      backgroundColor: false,
-      lineHeight: false,
-      color: { types: ["textStyle", "heading"] },
-      fontSize: { types: ["paragraph"] },
-      textStyle: {
-        HTMLAttributes: { class: "styled", style: "font-weight: bold; color: black", "data-x": null, "data-n": 0 },
-        mergeNestedSpanStyles: false,
-      },
-    }),
-  ],
-  textAlignNone: [...own, TextAlign],
-  textAlign: [...own, TextAlign.configure({ types: ["heading", "paragraph"] })],
-  // An alignment's style joins a font size's, which goes first.
-  textAlignOptions: [
-    ...own,
-    FontSize.configure({ types: ["paragraph"] }),
-    TextAlign.configure({
-      types: ["paragraph", "missing"],
-      alignments: ["left", "right", "start"],
-      defaultAlignment: "left",
-    }),
-  ],
-  link: [...own, Link],
-  linkOptions: [
-    ...own,
-    Link.configure({
-      autolink: false,
-      protocols: ["ftp", "git", { scheme: "web+x", optionalSlashes: true }, { scheme: "" }, "", "a|b", "C.D"],
-      HTMLAttributes: { target: null, rel: "noopener", class: "link", "data-x": "y" },
-    }),
-  ],
-  linkAllowed: [
-    ...own,
-    Link.configure({
-      defaultProtocol: "https",
-      protocols: ["web+y"],
-      isAllowedUri: (url, ctx) =>
-        (typeof url === "string" && url.startsWith("./")) ||
-        url === `${ctx.defaultProtocol}:${ctx.protocols.length}` ||
-        (url !== "https://rejected.example" && ctx.defaultValidate(url)),
-    }),
-  ],
-  // A class that isn't a string, which mergeAttributes can't split.
-  linkClass: [...own, Link.configure({ HTMLAttributes: { class: 5 } })],
-  mention: [...own, Mention],
-  mentionOptions: [
-    ...own,
-    Mention.configure({
-      HTMLAttributes: { class: "mention", style: "color: red", "data-x": 1 },
-      suggestions: [{ char: "#" }, { char: "@" }, {}, { char: "++" }],
-    }),
-  ],
-  mentionSuggestion: [...own, Mention.configure({ suggestion: { char: "+" } })],
-  mentionRender: [
-    ...own,
-    Mention.configure({
-      renderText: ({ node, suggestion }) => `${suggestion.char}text:${node.attrs.id}`,
-      renderHTML: ({ options, node, suggestion }) => [
-        "b",
-        options.HTMLAttributes,
-        `${suggestion.char}${node.attrs.label}`,
-      ],
-    }),
-  ],
-  mentionString: [...own, Mention.configure({ renderHTML: ({ node }) => `<${node.attrs.id}>` })],
-  mentionLabel: [
-    ...own,
-    Mention.configure({
-      HTMLAttributes: { class: "l" },
-      renderLabel: ({ node, suggestion }) => `${suggestion.char}${node.attrs.label}!`,
-    }),
-  ],
-  uniqueIdNone: [...own, UniqueID],
-  uniqueId: [
-    ...own,
-    UniqueID.configure({ types: ["paragraph", "heading"], generateID: ({ node, pos }) => `${node.type.name}-${pos}` }),
-  ],
-  // UniqueID's id and Mention's own, of the same name.
-  uniqueIdAll: [
-    ...own,
-    Mention,
-    UniqueID.configure({ types: "all", generateID: ({ node, pos }) => (node.isInline ? pos : { at: pos }) }),
-  ],
-  uniqueIdName: [...own, UniqueID.configure({ types: ["paragraph"], attributeName: "uid", generateID: () => "" })],
-  // Blocks that nest, with an alignment and an id, and spans, links and mentions inside them.
-  deep: [
-    Document,
-    Paragraph,
-    Text,
-    Bold,
-    Box,
-    TextStyle,
-    FontSize,
-    Link,
-    Mention,
-    TextAlign.configure({ types: ["box", "paragraph"] }),
-    UniqueID.configure({ types: ["box"], generateID: ({ node, pos }) => `${node.type.name}-${pos}` }),
-  ],
-}
-
-const converters = Object.fromEntries(
-  Object.entries(configurations).map(([name, extensions]) => {
-    const marked = new Marked()
-    marked.use(moreLists())
-    const schema = getSchema(extensions)
-    const parser = DOMParser.fromSchema(schema)
-    const serializer = DOMSerializer.fromSchema(schema)
-    return [name, { extensions, manager: new MarkdownManager({ extensions, marked }), schema, parser, serializer }]
-  }),
-)
 // Mention warns that renderLabel is deprecated each time it renders with it.
 const warn = console.warn
 console.warn = (...args) => String(args[0]).startsWith("renderLabel is deprecated") || warn(...args)
-const { document } = parseHTML("<!DOCTYPE html><html><body></body></html>")
-const fixture = name => JSON.parse(readFileSync(new URL(`../fixtures/${name}.json`, import.meta.url), "utf8"))
-const unique = values => [...new Set(values)]
-// The inputs of each configuration in `inputs`, each once.
-const each = inputs => Object.entries(inputs).flatMap(([name, list]) => unique(list).map(input => [name, input]))
-const paragraph = (...content) => ({ type: "doc", content: [{ type: "paragraph", content }] })
-
-const schemas = Object.entries(converters).map(([name, { schema }]) => ({ extensions: name, ...schemaRecord(schema) }))
-
-// The inputs html5ever builds another tree from than the fork's parse5 does, which tarnish-html's
-// tests/recorded.rs holds to html5ever's tree, as harness/record-tiptap.mjs leaves them out.
-const otherTrees = new Set([
-  "<select><option>a<b>x</b></option></select>",
-  "<select><option>a<p>b</p></select>",
-  "<p><span>a<isindex>b</span>c</p>",
-  "<math><mi><![CDATA[x<y]]></mi></math>",
-  "<math><mi><![CDATA[x]]></mi></math>",
-  "<svg><desc><![CDATA[x]]></desc></svg>",
-  "<svg><foreignObject><![CDATA[x]]></foreignObject></svg>",
-  "<math><annotation-xml encoding=text/html><![CDATA[x]]></annotation-xml></math>",
-])
-// fixtures/dom.json's HTML that `pattern` matches.
-const domHTML = pattern =>
-  fixture("dom")
-    .parses.map(record => record.html)
-    .filter(html => !otherTrees.has(html) && pattern.test(html))
-// fixtures/marked.json's Markdown that `pattern` matches.
-const markedMarkdown = pattern =>
-  fixture("marked")
-    .lexed.map(record => record.input)
-    .filter(markdown => pattern.test(markdown))
+const inParagraph = (...content) => doc(paragraph(...content))
 
 const styleHTML = [
   '<p><span style="color: red; background-color: #FF0; font-family: Georgia, serif; font-size: 12px; line-height: 1.5">x</span></p>',
@@ -275,26 +87,19 @@ const styleHTML = [
 ]
 const styleDocs = [
   ...["red", "", null, 0, 1, "'a'", { an: "object" }].map(value =>
-    paragraph({
-      type: "text",
-      text: "x",
-      marks: [
-        {
-          type: "textStyle",
-          attrs: { backgroundColor: value, color: value, fontFamily: value, fontSize: value, lineHeight: value },
-        },
-      ],
-    }),
+    inParagraph(
+      text("x", {
+        type: "textStyle",
+        attrs: { backgroundColor: value, color: value, fontFamily: value, fontSize: value, lineHeight: value },
+      }),
+    ),
   ),
-  paragraph({ type: "text", text: "x", marks: [{ type: "textStyle" }] }),
-  paragraph({ type: "text", text: "x", marks: [{ type: "textStyle", attrs: { fontSize: "1px" } }, { type: "bold" }] }),
-  {
-    type: "doc",
-    content: [
-      { type: "heading", attrs: { level: 1, color: "red" }, content: [{ type: "text", text: "h" }] },
-      { type: "paragraph", attrs: { fontSize: "2px" }, content: [{ type: "text", text: "p" }] },
-    ],
-  },
+  inParagraph(text("x", "textStyle")),
+  inParagraph(text("x", { type: "textStyle", attrs: { fontSize: "1px" } }, "bold")),
+  doc(
+    { type: "heading", attrs: { level: 1, color: "red" }, content: [text("h")] },
+    { type: "paragraph", attrs: { fontSize: "2px" }, content: [text("p")] },
+  ),
 ]
 
 const alignHTML = [
@@ -305,22 +110,18 @@ const alignHTML = [
   '<h1 style="text-align:center">h</h1><p>none</p><span style="text-align: right">loose</span>',
 ]
 const alignDocs = [
-  {
-    type: "doc",
-    content: ["center", "", null, 0, 1, "bogus", { an: "object" }, [1, 2]].map(textAlign => ({
+  doc(
+    ...["center", "", null, 0, 1, "bogus", { an: "object" }, [1, 2]].map(textAlign => ({
       type: "paragraph",
       attrs: { textAlign },
-      content: [{ type: "text", text: "x" }],
+      content: [text("x")],
     })),
-  },
-  {
-    type: "doc",
-    content: [
-      { type: "heading", attrs: { level: 3, textAlign: "right" }, content: [{ type: "text", text: "h" }] },
-      { type: "paragraph", attrs: { textAlign: "left", fontSize: "3px" } },
-      { type: "paragraph" },
-    ],
-  },
+  ),
+  doc(
+    { type: "heading", attrs: { level: 3, textAlign: "right" }, content: [text("h")] },
+    { type: "paragraph", attrs: { textAlign: "left", fontSize: "3px" } },
+    { type: "paragraph" },
+  ),
 ]
 
 // Each href in a link of its own.
@@ -363,14 +164,19 @@ const hrefs = [
   "https://rejected.example",
   "",
 ]
+// Links with a class, without one and with an empty one, where the default class an option
+// gives goes.
+const classHTML = [
+  '<p><a href="https://x" target="_self" rel="nofollow" class="c d" title="T">all</a></p>',
+  '<p><a href="x" target="" rel="" class="" title="">empties</a></p>',
+  '<p><a href="x"><b>bold</b> and <span style="color: red">red</span></a></p>',
+]
 const linkHTML = [
   `<p>${hrefs.map(href => `<a href="${href}">${href || "empty"}</a>`).join(" ")}</p>`,
   ...hrefs.map(href => `<p><a href="${href}">a</a></p>`),
   "<p><a>no href</a><a href>bare</a><a name=x>named</a></p>",
-  '<p><a href="https://x" target="_self" rel="nofollow" class="c d" title="T">all</a></p>',
+  ...classHTML,
   '<p><a href="x" target="1" rel="true" class="-2.5" title="false">strings</a></p>',
-  '<p><a href="x" target="" rel="" class="" title="">empties</a></p>',
-  '<p><a href="x"><b>bold</b> and <span style="color: red">red</span></a></p>',
   '<p><a href="1">a<a href="2">b</a>c</a></p>',
   '<p><a href="x" HREF="y" href="z">duplicates</a></p>',
   '<h1><a href="x">heading</a></h1><a href="loose">loose</a>',
@@ -388,27 +194,24 @@ const linkMarkdown = [
   "[`code`](u) [a  \nb](u)",
   "[x](https://a.b/%20c?d=%3C) [y](<a b>)",
 ]
+const linked = attrs => inParagraph(text("x", { type: "link", ...(attrs === undefined ? {} : { attrs }) }))
+const classDocs = [
+  linked({ href: "u" }),
+  linked({ href: "u", target: null, rel: "me", class: "a b", title: "t" }),
+  linked({ href: "u", target: 0, class: 7 }),
+  linked(),
+]
 const linkDocs = [
-  ...["u", "javascript:x", "", null, 5, true, {}, [], ["a"]].map(href =>
-    paragraph({ type: "text", text: "x", marks: [{ type: "link", attrs: { href } }] }),
+  ...["u", "javascript:x", "", null, 5, true, {}, [], ["a"]].map(href => linked({ href })),
+  ...["t", "", null, 0, 1, 'a"b'].map(title => linked({ href: "u", title })),
+  ...classDocs,
+  inParagraph(
+    text("a", { type: "link", attrs: { href: "u" } }),
+    text("b", "bold", { type: "link", attrs: { href: "u" } }),
+    text("c", { type: "link", attrs: { href: "v" } }),
+    text(" d"),
   ),
-  ...["t", "", null, 0, 1, 'a"b'].map(title =>
-    paragraph({ type: "text", text: "x", marks: [{ type: "link", attrs: { href: "u", title } }] }),
-  ),
-  paragraph({
-    type: "text",
-    text: "x",
-    marks: [{ type: "link", attrs: { href: "u", target: null, rel: "me", class: "a b", title: "t" } }],
-  }),
-  paragraph({ type: "text", text: "x", marks: [{ type: "link", attrs: { href: "u", target: 0, class: 7 } }] }),
-  paragraph({ type: "text", text: "x", marks: [{ type: "link" }] }),
-  paragraph(
-    { type: "text", text: "a", marks: [{ type: "link", attrs: { href: "u" } }] },
-    { type: "text", text: "b", marks: [{ type: "bold" }, { type: "link", attrs: { href: "u" } }] },
-    { type: "text", text: "c", marks: [{ type: "link", attrs: { href: "v" } }] },
-    { type: "text", text: " d" },
-  ),
-  paragraph({ type: "text", text: "*a* [b]", marks: [{ type: "link", attrs: { href: "(u)", title: "T" } }] }),
+  inParagraph(text("*a* [b]", { type: "link", attrs: { href: "(u)", title: "T" } })),
 ]
 
 const mentionHTML = [
@@ -432,8 +235,9 @@ const mentionMarkdown = [
   '[@ id=\'one"quote\'] [@ id="two\'quote"] [@ id=""]',
 ]
 const mention = attrs => ({ type: "mention", ...(attrs === undefined ? {} : { attrs }) })
-const mentionDocs = [
-  paragraph(
+// Mentions of each attribute, and one in bold text.
+const mentioned = [
+  inParagraph(
     ...[
       undefined,
       { id: "a" },
@@ -450,15 +254,14 @@ const mentionDocs = [
       { id: 'a"b', label: "<l>" },
     ].map(mention),
   ),
-  paragraph(
-    { type: "text", text: "a " },
-    { type: "mention", attrs: { id: "m" }, marks: [{ type: "bold" }] },
-    { type: "text", text: " b", marks: [{ type: "bold" }] },
-  ),
+  inParagraph(text("a "), { type: "mention", attrs: { id: "m" }, marks: [{ type: "bold" }] }, text(" b", "bold")),
+]
+const mentionDocs = [
+  ...mentioned,
   // What the Markdown makes of a mention whose attributes or content JSON makes anything.
-  ...["abc", 5, [1], null, {}, true].map(attrs => paragraph({ type: "mention", attrs })),
-  ...["xy", [null], [{ type: "text", text: "t" }, 5], { length: 1 }, { length: "0" }, 5, ""].map(content =>
-    paragraph({ type: "mention", attrs: { id: "c" }, content }),
+  ...["abc", 5, [1], null, {}, true].map(attrs => inParagraph({ type: "mention", attrs })),
+  ...["xy", [null], [text("t"), 5], { length: 1 }, { length: "0" }, 5, ""].map(content =>
+    inParagraph({ type: "mention", attrs: { id: "c" }, content }),
   ),
 ]
 
@@ -467,41 +270,40 @@ const idHTML = [
   '<p data-uid="u" data-id="d">both</p><img src="a.png" data-id="img"><p DATA-ID="caps">c</p>',
 ]
 const idDocs = [
-  {
-    type: "doc",
-    content: [
-      { type: "paragraph", attrs: { id: "a" }, content: [{ type: "text", text: "x" }] },
-      { type: "paragraph", attrs: { id: "" } },
-      { type: "paragraph", attrs: { id: 0 } },
-      { type: "paragraph", attrs: { id: 5 } },
-      { type: "paragraph" },
-      { type: "heading", attrs: { level: 2, id: { an: "object" } }, content: [{ type: "text", text: "h" }] },
-      { type: "heading", attrs: { level: 3 } },
-      { type: "image", attrs: { src: "a.png" } },
-      { type: "paragraph", attrs: { uid: "u" } },
-    ],
-  },
+  doc(
+    { type: "paragraph", attrs: { id: "a" }, content: [text("x")] },
+    { type: "paragraph", attrs: { id: "" } },
+    { type: "paragraph", attrs: { id: 0 } },
+    { type: "paragraph", attrs: { id: 5 } },
+    { type: "paragraph" },
+    { type: "heading", attrs: { level: 2, id: { an: "object" } }, content: [text("h")] },
+    { type: "heading", attrs: { level: 3 } },
+    { type: "image", attrs: { src: "a.png" } },
+    { type: "paragraph", attrs: { uid: "u" } },
+  ),
   // Content that isn't valid, which an attribute step fails on in the node it sets or its parent.
-  {
-    type: "doc",
-    content: [
-      {
-        type: "heading",
-        attrs: { level: 1, id: "h", uid: "u" },
-        content: [{ type: "paragraph", attrs: { id: "p", uid: "u" } }],
-      },
-    ],
-  },
-  {
-    type: "doc",
-    content: [{ type: "heading", attrs: { level: 1 }, content: [{ type: "paragraph", attrs: { id: "p", uid: "u" } }] }],
-  },
-  { type: "doc", content: [{ type: "heading", attrs: { level: 1, id: "h" }, content: [{ type: "paragraph" }] }] },
-  { type: "doc", content: [{ type: "paragraph" }, { type: "text", text: "loose" }] },
-  { type: "doc", content: [{ type: "paragraph", attrs: { id: "p", uid: "u" } }, { type: "mention" }] },
+  doc({ type: "heading", attrs: { level: 1, id: "h", uid: "u" }, content: [{ type: "paragraph", attrs: { id: "p", uid: "u" } }] }),
+  doc({ type: "heading", attrs: { level: 1 }, content: [{ type: "paragraph", attrs: { id: "p", uid: "u" } }] }),
+  doc({ type: "heading", attrs: { level: 1, id: "h" }, content: [{ type: "paragraph" }] }),
+  doc({ type: "paragraph" }, text("loose")),
+  doc({ type: "paragraph", attrs: { id: "p", uid: "u" } }, { type: "mention" }),
+]
+// The documents tiptap.json serializes to HTML with Tiptap's own extensions.
+const tiptapDocs = unique(
+  fixture("tiptap")
+    .serializesHTML.filter(record => record.extensions === "own" && record.html !== undefined)
+    .map(record => JSON.stringify(record.doc)),
+).map(text => JSON.parse(text))
+// The documents UniqueID gives ids: of each kind of attribute, those of Tiptap's own that hold a
+// heading among paragraphs, and one of a type the schema hasn't.
+const idsDocs = [
+  ...idDocs,
+  ...tiptapDocs.filter(doc => JSON.stringify(doc).includes('"type":"heading"')),
+  doc({ type: "paragraph", attrs: { id: "x" } }, { type: "unknown" }),
 ]
 
-// Nesting one to three deep, which tests/inline.rs folds into the conversions of any depth.
+// Nesting one to three deep, which tests/recorded/inline.rs folds into the conversions of any
+// depth.
 const depths = [1, 2, 3]
 const levels = depth => Array.from({ length: depth }, (_, index) => index + 1)
 const alignment = level => ["left", "center", "right"][level % 3]
@@ -516,21 +318,14 @@ const deepHTML = depths.flatMap(depth => [
 // A paragraph of text and a mention inside boxes `depth` deep, with the attributes `attrs` gives
 // each level.
 const boxed = (depth, attrs) => {
-  let node = {
-    type: "paragraph",
-    content: [
-      { type: "text", text: "x" },
-      { type: "mention", attrs: { id: "m" } },
-    ],
-  }
-  for (const level of levels(depth).reverse())
-    node = { type: "box", ...(attrs ? { attrs: attrs(level) } : {}), content: [node] }
-  return { type: "doc", content: [node] }
+  let node = paragraph(text("x"), mention({ id: "m" }))
+  for (const level of levels(depth).reverse()) node = { type: "box", ...(attrs ? { attrs: attrs(level) } : {}), content: [node] }
+  return doc(node)
 }
-const linked = depth => {
-  let node = { type: "text", text: "x" }
+const linkedDeep = depth => {
+  let node = text("x")
   for (let level = 0; level < depth; level++) node = { type: "link", attrs: { href: "u" }, content: [node] }
-  return { type: "doc", content: [node] }
+  return doc(node)
 }
 const delimited = (open, close, depth) => open.repeat(depth) + "x" + close.repeat(depth)
 const deepMarkdown = depths.flatMap(depth => [
@@ -539,223 +334,210 @@ const deepMarkdown = depths.flatMap(depth => [
 ])
 const deepDocs = depths.flatMap(depth => [
   boxed(depth, level => ({ id: `b${level}`, textAlign: alignment(level) })),
-  linked(depth),
+  linkedDeep(depth),
 ])
+const boxes = depths.map(depth => boxed(depth))
 
-const parsesMarkdown = each({
-  globals: ["plain **bold**"],
-  styles: ['<span style="color: red">x</span>', "plain *em*"],
-  link: [...linkMarkdown, ...markedMarkdown(/\[|<|https?:|www\.|@|ftp:/)],
-  linkOptions: linkMarkdown,
-  mention: [...mentionMarkdown, ...markedMarkdown(/\[|@/)],
-  mentionOptions: mentionMarkdown,
-  deep: deepMarkdown,
-}).map(([name, markdown]) => ({
-  extensions: name,
-  markdown,
-  ...outcome(() => ({ doc: converters[name].manager.parse(markdown) })),
-}))
-
-const parsesHTML = each({
-  globals: [
-    "<p>plain</p>",
-    '<p every="x" node="1" named="true" made="1.5">a<strong every="" mark="false" named="-2">b</strong></p>',
-    '<h2 every node="+.5" named="1e3">x</h2><p named="0x1"><br every="y" node="2."></p>',
-  ],
-  styles: [...styleHTML, ...domHTML(/style|<span/i)],
-  kit: styleHTML,
-  kitOptions: styleHTML,
-  textAlignNone: alignHTML,
-  textAlign: [...alignHTML, ...domHTML(/style|align/i)],
-  textAlignOptions: alignHTML,
-  link: [...linkHTML, ...domHTML(/<a\b/i)],
-  linkOptions: linkHTML,
-  linkAllowed: linkHTML,
-  linkClass: linkHTML.slice(0, 3),
-  mention: [...mentionHTML, ...domHTML(/data-|<span/i)],
-  mentionOptions: mentionHTML,
-  mentionSuggestion: mentionHTML,
-  mentionRender: mentionHTML,
-  mentionString: mentionHTML,
-  mentionLabel: mentionHTML,
-  uniqueIdNone: idHTML,
-  uniqueId: idHTML,
-  uniqueIdAll: [...idHTML, ...mentionHTML],
-  uniqueIdName: idHTML,
-  deep: deepHTML,
-}).map(([name, html]) => ({
-  extensions: name,
-  html,
-  ...outcome(() => {
-    const { document } = parseHTML(`<!DOCTYPE html><html><body>${html}</body></html>`)
-    return { doc: converters[name].parser.parse(document.body).toJSON() }
-  }),
-}))
-
-// The documents the parses of each configuration make, each read from its JSON text, as the tests
-// read it, and those `docs` gives.
-const documents = docs =>
-  Object.keys(converters).flatMap(name => {
-    const parsed = [...parsesMarkdown, ...parsesHTML]
-      .filter(record => record.extensions === name && record.doc)
-      .map(record => record.doc)
-    return unique([...(docs[name] ?? []), ...parsed].map(doc => JSON.stringify(doc))).map(text => [
-      name,
-      JSON.parse(text),
-    ])
-  })
-
-const docs = {
-  globals: [
-    {
-      type: "doc",
-      content: [
-        { type: "paragraph", attrs: { every: null, node: 0, named: "", made: "not rendered" }, content: [] },
-        { type: "heading", attrs: { level: 1, every: { an: "object" }, node: [1, 2] } },
-      ],
-    },
-    paragraph({ type: "text", text: "x", marks: [{ type: "bold", attrs: { every: 1, mark: "m", named: true } }] }),
-  ],
-  styles: styleDocs,
-  kit: styleDocs,
-  kitOptions: styleDocs,
-  textAlignNone: alignDocs,
-  textAlign: alignDocs,
-  textAlignOptions: alignDocs,
-  link: linkDocs,
-  linkOptions: linkDocs,
-  linkAllowed: linkDocs,
-  linkClass: linkDocs.slice(0, 3),
-  mention: mentionDocs,
-  mentionOptions: mentionDocs,
-  mentionSuggestion: mentionDocs,
-  mentionRender: mentionDocs,
-  mentionString: mentionDocs,
-  mentionLabel: mentionDocs,
-  uniqueIdNone: idDocs,
-  uniqueId: idDocs,
-  uniqueIdAll: [...idDocs, ...mentionDocs.slice(0, 2)],
-  uniqueIdName: idDocs,
-  deep: deepDocs,
-}
-
-const serializesMarkdown = documents(docs).map(([name, doc]) => ({
-  extensions: name,
-  doc,
-  ...outcome(() => ({ markdown: converters[name].manager.serialize(doc) })),
-}))
-
-const serializesHTML = documents(docs).map(([name, doc]) => ({
-  extensions: name,
-  doc,
-  ...outcome(() => {
-    const { schema, serializer } = converters[name]
-    const container = document.createElement("div")
-    serializer.serializeFragment(Node.fromJSON(schema, doc).content, { document }, container)
-    return { html: container.innerHTML }
-  }),
-}))
-
-// Text serializers that name the nodes they're given and where.
-const serializers = {
-  places: {
-    paragraph: ({ node, pos, index }) => `[${node.type.name} ${pos} ${index}]`,
-    chip: ({ node }) => `(${node.attrs.label})`,
-  },
-}
-const mentionTextDocs = mentionDocs.slice(0, 2)
-const textDocs = {
-  mention: mentionTextDocs,
-  mentionOptions: mentionTextDocs,
-  mentionSuggestion: mentionTextDocs,
-  mentionRender: mentionTextDocs,
-  mentionString: mentionTextDocs,
-  mentionLabel: mentionTextDocs,
-  deep: depths.map(depth => boxed(depth)),
-  own: [
-    {
-      type: "doc",
-      content: [
-        {
-          type: "paragraph",
-          content: [{ type: "text", text: "a" }, { type: "hardBreak" }, { type: "text", text: "b" }],
-        },
-        { type: "paragraph" },
-        { type: "heading", attrs: { level: 2 }, content: [{ type: "text", text: "c", marks: [{ type: "bold" }] }] },
-        { type: "image", attrs: { src: "x.png" } },
-        { type: "paragraph", content: [{ type: "text", text: "d" }] },
-      ],
-    },
-    { type: "doc", content: [{ type: "unknown" }] },
-    { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "" }] }] },
-  ],
-  specs: [
-    {
-      type: "doc",
-      content: [
-        {
-          type: "paragraph",
-          content: [{ type: "chip" }, { type: "text", text: "a" }, { type: "chip", attrs: { label: 5 } }],
-        },
-        { type: "rule" },
-        {
-          type: "paragraph",
-          content: [
-            { type: "text", text: "b" },
-            { type: "chip", attrs: { label: null } },
-          ],
-        },
-      ],
-    },
-  ],
-}
-// The documents tiptap.json serializes to HTML with Tiptap's own extensions, with the default
-// options, and those above with each.
-const tiptapDocs = fixture("tiptap")
-  .serializesHTML.filter(record => record.extensions === "own" && record.html !== undefined)
-  .map(record => JSON.stringify(record.doc))
+// generateText with each of its options.
 const textOptions = [{}, { blockSeparator: "\n" }, { blockSeparator: "" }, { serializers: "places" }]
-const generatesText = [
-  ...unique(tiptapDocs).map(text => ["own", JSON.parse(text), {}]),
-  ...Object.entries(textDocs).flatMap(([name, docs]) =>
-    docs.flatMap(doc => textOptions.map(options => [name, doc, options])),
+const withTextOptions = docs => docs.flatMap(doc => textOptions.map(options => ({ doc, ...options })))
+const ownTextDocs = [
+  doc(
+    paragraph(text("a"), { type: "hardBreak" }, text("b")),
+    { type: "paragraph" },
+    { type: "heading", attrs: { level: 2 }, content: [text("c", "bold")] },
+    { type: "image", attrs: { src: "x.png" } },
+    paragraph(text("d")),
   ),
-].map(([name, doc, { blockSeparator, serializers: named }]) => ({
-  extensions: name,
-  doc,
-  ...(blockSeparator === undefined ? {} : { blockSeparator }),
-  ...(named === undefined ? {} : { serializers: named }),
-  ...outcome(() => ({
-    text: generateText(doc, converters[name].extensions, {
-      blockSeparator,
-      textSerializers: named && serializers[named],
-    }),
-  })),
-}))
-
-const idsDocs = [
-  ...idDocs,
-  ...unique(tiptapDocs)
-    .slice(0, 30)
-    .map(text => JSON.parse(text)),
-  { type: "doc", content: [{ type: "paragraph", attrs: { id: "x" } }, { type: "unknown" }] },
+  doc({ type: "unknown" }),
+  inParagraph(text("")),
 ]
-const generatesUniqueIds = [
-  ...["uniqueIdNone", "uniqueId", "uniqueIdName"].flatMap(name => idsDocs.map(doc => [name, doc])),
-  ...[...idsDocs, ...mentionDocs.slice(0, 2)].map(doc => ["uniqueIdAll", doc]),
-  ...depths.map(depth => ["deep", boxed(depth)]),
-].map(([name, doc]) => ({
-  extensions: name,
-  doc,
-  ...outcome(() => ({ ids: generateUniqueIds(doc, converters[name].extensions) })),
-}))
+const specsTextDocs = [
+  doc(
+    paragraph({ type: "chip" }, text("a"), { type: "chip", attrs: { label: 5 } }),
+    { type: "rule" },
+    paragraph(text("b"), { type: "chip", attrs: { label: null } }),
+  ),
+]
+const globalsHTML = [
+  "<p>plain</p>",
+  '<p every="x" node="1" named="true" made="1.5">a<strong every="" mark="false" named="-2">b</strong></p>',
+  '<h2 every node="+.5" named="1e3">x</h2><p named="0x1"><br every="y" node="2."></p>',
+]
+const globalsDocs = [
+  doc(
+    { type: "paragraph", attrs: { every: null, node: 0, named: "", made: "not rendered" }, content: [] },
+    { type: "heading", attrs: { level: 1, every: { an: "object" }, node: [1, 2] } },
+  ),
+  inParagraph(text("x", { type: "bold", attrs: { every: 1, mark: "m", named: true } })),
+]
 
-writeFixture("tiptap-inline", {
-  schemas,
-  generatesText,
-  generatesUniqueIds,
-  parsesMarkdown,
-  serializesMarkdown,
-  parsesHTML,
-  serializesHTML,
+const typeAndPosition = ({ node, pos }) => `${node.type.name}-${pos}`
+// Mention with an option that reaches its renderHTML and renderText.
+const mentionWith = options => ({
+  extensions: [...own, Mention.configure(options)],
+  serializesHTML: mentionDocs,
+  generatesText: withTextOptions(mentioned),
+})
+// UniqueID, whose ids reach the parse rules and renderHTML of its types.
+const uniqueIds = (extensions, docs = []) => ({
+  extensions,
+  parsesHTML: idHTML,
+  serializesHTML: withParsed(idDocs),
+  generatesUniqueIds: [...idsDocs, ...docs],
+})
+
+record("tiptap-inline", {
+  own: { extensions: own, generatesText: [...tiptapDocs.map(doc => ({ doc })), ...withTextOptions(ownTextDocs)] },
+  globals: {
+    extensions: [Document, Paragraph, Text, Heading, HardBreak, Bold, Italic, Globals],
+    parsesHTML: globalsHTML,
+    serializesHTML: withParsed(globalsDocs),
+  },
+  specs: { extensions: [Document, Paragraph, Text, Chip, Rule, Tag, Free], generatesText: withTextOptions(specsTextDocs) },
+  styles: {
+    extensions: [...own, ...styles],
+    parsesHTML: [...styleHTML, ...domInputs(/style|<span/i)],
+    serializesHTML: withParsed(styleDocs),
+  },
+  // The kit's extensions are those of `styles`.
+  kit: { extensions: [Document, Paragraph, Text, Heading, Bold, TextStyleKit] },
+  kitOptions: {
+    extensions: [
+      Document,
+      Paragraph,
+      Text,
+      Heading,
+      Bold,
+      TextStyleKit.configure({
+        backgroundColor: false,
+        lineHeight: false,
+        color: { types: ["textStyle", "heading"] },
+        fontSize: { types: ["paragraph"] },
+        textStyle: {
+          HTMLAttributes: { class: "styled", style: "font-weight: bold; color: black", "data-x": null, "data-n": 0 },
+          mergeNestedSpanStyles: false,
+        },
+      }),
+    ],
+    parsesHTML: styleHTML,
+    serializesHTML: withParsed(styleDocs),
+  },
+  textAlignNone: { extensions: [...own, TextAlign], parsesHTML: alignHTML, serializesHTML: withParsed(alignDocs) },
+  textAlign: {
+    extensions: [...own, TextAlign.configure({ types: ["heading", "paragraph"] })],
+    parsesHTML: [...alignHTML, ...domInputs(/style|align/i)],
+    serializesHTML: withParsed(alignDocs),
+  },
+  // An alignment's style joins a font size's, which goes first.
+  textAlignOptions: {
+    extensions: [
+      ...own,
+      FontSize.configure({ types: ["paragraph"] }),
+      TextAlign.configure({ types: ["paragraph", "missing"], alignments: ["left", "right", "start"], defaultAlignment: "left" }),
+    ],
+    parsesHTML: alignHTML,
+    serializesHTML: withParsed(alignDocs),
+  },
+  link: {
+    extensions: [...own, Link],
+    parsesMarkdown: [...linkMarkdown, ...markedInputs(/\[|<|https?:|www\.|@|ftp:/)],
+    parsesHTML: [...linkHTML, ...domInputs(/<a\b/i)],
+    serializesMarkdown: withParsed(linkDocs),
+    serializesHTML: withParsed(linkDocs),
+  },
+  // Link's options reach its parse rule and renderHTML.
+  linkOptions: {
+    extensions: [
+      ...own,
+      Link.configure({
+        autolink: false,
+        protocols: ["ftp", "git", { scheme: "web+x", optionalSlashes: true }, { scheme: "" }, "", "a|b", "C.D"],
+        HTMLAttributes: { target: null, rel: "noopener", class: "link", "data-x": "y" },
+      }),
+    ],
+    parsesHTML: linkHTML,
+    serializesHTML: withParsed(linkDocs),
+  },
+  linkAllowed: {
+    extensions: [
+      ...own,
+      Link.configure({
+        defaultProtocol: "https",
+        protocols: ["web+y"],
+        isAllowedUri: (url, ctx) =>
+          (typeof url === "string" && url.startsWith("./")) ||
+          url === `${ctx.defaultProtocol}:${ctx.protocols.length}` ||
+          (url !== "https://rejected.example" && ctx.defaultValidate(url)),
+      }),
+    ],
+    parsesHTML: linkHTML,
+    serializesHTML: withParsed(linkDocs),
+  },
+  // A class that isn't a string, which mergeAttributes can't split.
+  linkClass: {
+    extensions: [...own, Link.configure({ HTMLAttributes: { class: 5 } })],
+    parsesHTML: classHTML,
+    serializesHTML: withParsed(classDocs),
+  },
+  mention: {
+    extensions: [...own, Mention],
+    parsesMarkdown: [...mentionMarkdown, ...markedInputs(/\[|@/)],
+    parsesHTML: [...mentionHTML, ...domInputs(/data-|<span/i)],
+    serializesMarkdown: withParsed(mentionDocs),
+    serializesHTML: withParsed(mentionDocs),
+    generatesText: withTextOptions(mentioned),
+  },
+  mentionOptions: mentionWith({
+    HTMLAttributes: { class: "mention", style: "color: red", "data-x": 1 },
+    suggestions: [{ char: "#" }, { char: "@" }, {}, { char: "++" }],
+  }),
+  mentionSuggestion: mentionWith({ suggestion: { char: "+" } }),
+  mentionRender: mentionWith({
+    renderText: ({ node, suggestion }) => `${suggestion.char}text:${node.attrs.id}`,
+    renderHTML: ({ options, node, suggestion }) => ["b", options.HTMLAttributes, `${suggestion.char}${node.attrs.label}`],
+  }),
+  // A renderHTML that gives a string reaches only the HTML.
+  mentionString: {
+    extensions: [...own, Mention.configure({ renderHTML: ({ node }) => `<${node.attrs.id}>` })],
+    serializesHTML: mentionDocs,
+  },
+  mentionLabel: mentionWith({
+    HTMLAttributes: { class: "l" },
+    renderLabel: ({ node, suggestion }) => `${suggestion.char}${node.attrs.label}!`,
+  }),
+  uniqueIdNone: uniqueIds([...own, UniqueID]),
+  uniqueId: uniqueIds([...own, UniqueID.configure({ types: ["paragraph", "heading"], generateID: typeAndPosition })]),
+  // UniqueID's id and Mention's own, of the same name.
+  uniqueIdAll: {
+    ...uniqueIds(
+      [...own, Mention, UniqueID.configure({ types: "all", generateID: ({ node, pos }) => (node.isInline ? pos : { at: pos }) })],
+      mentioned,
+    ),
+    parsesHTML: [...idHTML, ...mentionHTML],
+    serializesHTML: withParsed([...idDocs, ...mentioned]),
+  },
+  uniqueIdName: uniqueIds([...own, UniqueID.configure({ types: ["paragraph"], attributeName: "uid", generateID: () => "" })]),
+  // Blocks that nest, with an alignment and an id, and spans, links and mentions inside them.
+  deep: {
+    extensions: [
+      Document,
+      Paragraph,
+      Text,
+      Bold,
+      Box,
+      TextStyle,
+      FontSize,
+      Link,
+      Mention,
+      TextAlign.configure({ types: ["box", "paragraph"] }),
+      UniqueID.configure({ types: ["box"], generateID: typeAndPosition }),
+    ],
+    parsesMarkdown: deepMarkdown,
+    parsesHTML: deepHTML,
+    serializesMarkdown: withParsed(deepDocs),
+    serializesHTML: withParsed(deepDocs),
+    generatesText: withTextOptions(boxes),
+    generatesUniqueIds: boxes,
+  },
 })

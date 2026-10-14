@@ -91,8 +91,7 @@ fn style() -> PlainExtension {
 
 fn configuration(name: &str) -> Configuration {
     match name {
-        // Table's other options change only an editor's plugins and node view.
-        "tables" | "resizable" => with_table(TableOptions::default()),
+        "tables" => with_table(TableOptions::default()),
         "attributes" => tables(
             TableOptions {
                 html_attributes: object!({"class": "t", "style": "color: red; min-width: 1px"}),

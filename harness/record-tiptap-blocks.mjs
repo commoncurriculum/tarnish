@@ -1,24 +1,12 @@
-// Records what @tiptap/markdown's MarkdownManager and ProseMirror's DOMParser and DOMSerializer do
-// with Tiptap's block and embed extensions, to fixtures/tiptap-blocks.json, for tarnish-tiptap's
-// tests/blocks.rs to expect. Each record names the configuration it's of in `extensions`: the
-// extension with its default options, or with the options that change what it makes, beside
-// Document, Paragraph, Text, Heading, HardBreak, Bold and Italic; `all` has every extension here,
-// and `attributeValues` every one with HTMLAttributes, given values that aren't strings, which
-// only render, so it records no Markdown.
-// - schemas: each configuration's schema, as harness/fixture.mjs's schemaRecord writes it.
-// - parsesMarkdown: the document the manager parses each Markdown input to.
-// - serializesMarkdown: the Markdown the manager serializes each document to, the parses' among
-//   them, and documents whose attributes or content are of types the JS reads otherwise.
-// - parsesHTML: the document DOMParser parses the body of a linkedom document holding each input
-//   to: the embeds' sources run `new URL` through their edge inputs.
-// - serializesHTML: the innerHTML of an element DOMSerializer fills in linkedom.
-// - generatesText: the text `generateText` makes of documents with emojis.
-// - attributes: what `parseAttributes` makes of each string, and `serializeAttributes` of each
-//   object.
-// RubyText's parse rule makes its content element with the page's global `document`, which is
-// linkedom's here, as a browser's would be its own.
-import { readFileSync } from "node:fs"
-import { generateText, getSchema, parseAttributes, serializeAttributes } from "@tiptap/core"
+// Records Tiptap's block and embed extensions to fixtures/tiptap-blocks.json, as
+// harness/tiptap.mjs records them, beside Document, Paragraph, Text, Heading, HardBreak, Bold and
+// Italic: `blocks` has every extension here, each as it comes; the others each have an extension
+// with the options that change what it makes, and `attributeValues` every one with
+// HTMLAttributes, given values that aren't strings. The documents serialized hold attributes and
+// content of the types the JS reads otherwise, and the embeds' sources run `new URL` through its
+// edge inputs. `attributes` records what `parseAttributes` makes of each string, and
+// `serializeAttributes` of each object.
+import { parseAttributes, serializeAttributes } from "@tiptap/core"
 import { Audio } from "@tiptap/extension-audio"
 import { Blockquote } from "@tiptap/extension-blockquote"
 import { Bold } from "@tiptap/extension-bold"
@@ -39,13 +27,9 @@ import { TableOfContents } from "@tiptap/extension-table-of-contents"
 import { Text } from "@tiptap/extension-text"
 import { Twitch } from "@tiptap/extension-twitch"
 import { Youtube } from "@tiptap/extension-youtube"
-import { MarkdownManager } from "@tiptap/markdown"
-import { DOMParser, DOMSerializer, Node } from "@tiptap/pm/model"
-import { parseHTML } from "linkedom"
 import { common, createLowlight } from "lowlight"
-import { Marked } from "marked"
-import moreLists from "marked-more-lists"
-import { otherAttributes, outcome, schemaRecord, writeFixture } from "./fixture.mjs"
+import { otherAttributes, outcome } from "./fixture.mjs"
+import { doc, domInputs, markedInputs, paragraph as p, record, text, withParsed } from "./tiptap.mjs"
 
 const base = [Document, Paragraph, Text, Heading, HardBreak, Bold, Italic]
 const details = [Details, DetailsSummary, DetailsContent]
@@ -59,139 +43,9 @@ const emojis = [
   { name: "bare", shortcodes: [], tags: [] },
   { name: "empty", emoji: "", shortcodes: ["empty_code"], tags: [], fallbackImage: "" },
 ]
-const configurations = {
-  all: [
-    ...base,
-    Blockquote,
-    Code,
-    CodeBlock,
-    HorizontalRule,
-    ...details,
-    Mathematics,
-    Emoji.configure({ emojis }),
-    Youtube,
-    Twitch,
-    Audio,
-    TableOfContents,
-    RubyText,
-  ],
-  blockquote: [...base, Blockquote],
-  blockquoteOptions: [...base, Blockquote.configure({ HTMLAttributes: html })],
-  code: [...base, Code, CodeBlock],
-  codeOptions: [
-    ...base,
-    Code.configure({ HTMLAttributes: html }),
-    CodeBlock.configure({ languageClassPrefix: "lang-", defaultLanguage: "plain", HTMLAttributes: html }),
-  ],
-  codeNullPrefix: [...base, Code, CodeBlock.configure({ languageClassPrefix: null })],
-  codeEmptyPrefix: [...base, Code, CodeBlock.configure({ languageClassPrefix: "" })],
-  lowlight: [...base, Code, CodeBlockLowlight.configure({ lowlight: createLowlight(common) })],
-  horizontalRule: [...base, HorizontalRule],
-  horizontalRuleOptions: [...base, HorizontalRule.configure({ HTMLAttributes: html })],
-  details: [...base, ...details],
-  detailsOptions: [
-    ...base,
-    Details.configure({ persist: true, HTMLAttributes: html }),
-    DetailsSummary.configure({ HTMLAttributes: { class: "summary" } }),
-    DetailsContent.configure({ HTMLAttributes: { class: "content", "data-type": "given" } }),
-  ],
-  mathematics: [...base, Mathematics],
-  emoji: [...base, Emoji.configure({ emojis })],
-  emojiOptions: [...base, Emoji.configure({ emojis, forceFallbackImages: true, HTMLAttributes: html })],
-  youtube: [...base, Youtube],
-  youtubeOptions: [
-    ...base,
-    Youtube.configure({
-      allowFullscreen: false,
-      autoplay: true,
-      ccLanguage: "es",
-      ccLoadPolicy: true,
-      controls: false,
-      disableKBcontrols: true,
-      enableIFrameApi: true,
-      endTime: 90,
-      height: "50%",
-      interfaceLanguage: "fr",
-      ivLoadPolicy: 3,
-      loop: true,
-      modestBranding: true,
-      HTMLAttributes: html,
-      nocookie: true,
-      origin: "https://o.test",
-      playlist: "a,b",
-      progressBarColor: "white",
-      width: 320.5,
-      rel: 0,
-    }),
-  ],
-  youtubeInline: [...base, Youtube.configure({ inline: true, rel: undefined })],
-  twitch: [...base, Twitch],
-  twitchOptions: [
-    ...base,
-    Twitch.configure({
-      allowFullscreen: false,
-      autoplay: true,
-      muted: true,
-      time: "1h2m3s",
-      parent: "a b&c=d.test",
-      height: "50%",
-      width: 320,
-      HTMLAttributes: html,
-    }),
-  ],
-  twitchInline: [...base, Twitch.configure({ inline: true, parent: "" })],
-  audio: [...base, Audio],
-  audioOptions: [
-    ...base,
-    Audio.configure({
-      allowBase64: true,
-      autoplay: true,
-      controls: false,
-      loop: true,
-      muted: true,
-      preload: null,
-      controlslist: "nodownload",
-      crossorigin: "anonymous",
-      disableRemotePlayback: true,
-      HTMLAttributes: html,
-    }),
-  ],
-  audioInline: [...base, Audio.configure({ inline: true, preload: "auto" })],
-  tableOfContents: [...base, TableOfContents],
-  tableOfContentsAnchors: [...base, TableOfContents.configure({ anchorTypes: ["paragraph", "heading"] })],
-  rubyText: [...base, RubyText],
-  rubyTextOptions: [...base, RubyText.configure({ HTMLAttributes: html })],
-  attributeValues: [
-    ...base,
-    ...[Blockquote, Code, CodeBlock, HorizontalRule, ...details, Youtube, Twitch, Audio, RubyText].map(extension =>
-      extension.configure({ HTMLAttributes: otherAttributes }),
-    ),
-    Emoji.configure({ emojis, HTMLAttributes: otherAttributes }),
-  ],
-}
-const converters = Object.fromEntries(
-  Object.entries(configurations).map(([name, extensions]) => {
-    const marked = new Marked()
-    marked.use(moreLists())
-    const schema = getSchema(extensions)
-    const parser = DOMParser.fromSchema(schema)
-    const serializer = DOMSerializer.fromSchema(schema)
-    return [name, { manager: new MarkdownManager({ extensions, marked }), schema, parser, serializer }]
-  }),
-)
-const { document } = parseHTML("<!DOCTYPE html><html><body></body></html>")
-globalThis.document = document
-const fixture = name => JSON.parse(readFileSync(new URL(`../fixtures/${name}.json`, import.meta.url), "utf8"))
-const unique = values => [...new Set(values)]
-
-const schemas = Object.entries(converters).map(([name, { schema }]) => ({ extensions: name, ...schemaRecord(schema) }))
-
-const doc = (...content) => ({ type: "doc", content })
-const p = (...content) => ({ type: "paragraph", content })
-const text = (text, ...marks) => (marks.length ? { type: "text", text, marks } : { type: "text", text })
 const x = p(text("x"))
 
-// Blockquotes and details nested one to three deep, which tests/blocks.rs folds into the
+// Blockquotes and details nested one to three deep, which tests/recorded/blocks.rs folds into the
 // conversions of any depth.
 const depths = [1, 2, 3]
 const quoted = depth => (depth === 0 ? x : { type: "blockquote", content: [quoted(depth - 1)] })
@@ -471,23 +325,36 @@ const audioSources = [
   "",
 ]
 const frame = (wrapper, src, rest = "") => `<div ${wrapper}><iframe src="${src}"${rest}></iframe></div>`
-htmlInputs.youtube = [
-  ...youtubeSources.map(src => frame("data-youtube-video", src)),
-  ...['width="320" height="240"', 'width=" 12 "', 'width=""', 'width="abc"', 'width="12px"', 'width="0x10"', 'width="1e2"', 'width="-5"', 'width="Infinity"', 'height="  "'].map(
-    rest => frame("data-youtube-video", "https://www.youtube.com/embed/abc", " " + rest),
-  ),
+// Each embed with a width or a height of its own, which an option's default fills in where it
+// has none, and each without a source, outside its wrapper and inside a paragraph, which the
+// `inline` option places.
+const youtubeSizes = [
+  'width="320" height="240"',
+  'width=" 12 "',
+  'width=""',
+  'width="abc"',
+  'width="12px"',
+  'width="0x10"',
+  'width="1e2"',
+  'width="-5"',
+  'width="Infinity"',
+  'height="  "',
+].map(rest => frame("data-youtube-video", "https://www.youtube.com/embed/abc", " " + rest))
+const youtubeShapes = [
   '<div data-youtube-video><iframe src=""></iframe></div>',
   "<div data-youtube-video><iframe></iframe></div>",
   '<iframe src="https://www.youtube.com/embed/abc"></iframe>',
   '<p>a<div data-youtube-video><iframe src="https://www.youtube.com/embed/abc"></iframe></div>b</p>',
 ]
-htmlInputs.twitch = [
-  ...twitchSources.map(src => frame("data-twitch-video", src)),
-  ...['width="100px" height="50"', 'width="abc"', 'width=""', 'width=" 7"'].map(rest =>
-    frame("data-twitch-video", "https://player.twitch.tv/?video=1", " " + rest),
-  ),
+const twitchSizes = ['width="100px" height="50"', 'width="abc"', 'width=""', 'width=" 7"'].map(rest =>
+  frame("data-twitch-video", "https://player.twitch.tv/?video=1", " " + rest),
+)
+const twitchShapes = [
   "<div data-twitch-video><iframe></iframe></div>",
+  '<p>a<div data-twitch-video><iframe src="https://player.twitch.tv/?video=1"></iframe></div>b</p>',
 ]
+htmlInputs.youtube = [...youtubeSources.map(src => frame("data-youtube-video", src)), ...youtubeSizes, ...youtubeShapes]
+htmlInputs.twitch = [...twitchSources.map(src => frame("data-twitch-video", src)), ...twitchSizes, ...twitchShapes]
 htmlInputs.audio = [
   ...audioSources.map(src => `<audio src="${src}"></audio>`),
   "<audio src='a.mp3' controls autoplay loop muted preload='none' controlslist='nodownload' crossorigin='anonymous' disableremoteplayback></audio>",
@@ -496,92 +363,6 @@ htmlInputs.audio = [
   "<p>a<audio src='a.mp3'></audio>b</p>",
 ]
 
-// The inputs html5ever builds another tree from than the fork's parse5 does, which tarnish-html's
-// tests/recorded.rs holds to html5ever's tree.
-const otherTrees = new Set([
-  "<select><option>a<b>x</b></option></select>",
-  "<select><option>a<p>b</p></select>",
-  "<p><span>a<isindex>b</span>c</p>",
-  "<math><mi><![CDATA[x<y]]></mi></math>",
-  "<math><mi><![CDATA[x]]></mi></math>",
-  "<svg><desc><![CDATA[x]]></desc></svg>",
-  "<svg><foreignObject><![CDATA[x]]></foreignObject></svg>",
-  "<math><annotation-xml encoding=text/html><![CDATA[x]]></annotation-xml></math>",
-])
-const parsedHere = (name, markdowns, htmls) => [
-  ...markdowns.map(markdown => ({ name, markdown })),
-  ...htmls.map(html => ({ name, html })),
-]
-const inputs = [
-  ...["blockquote", "blockquoteOptions"].flatMap(name => parsedHere(name, markdown.blockquote, htmlInputs.blockquote)),
-  ...["code", "codeOptions", "codeNullPrefix", "codeEmptyPrefix", "lowlight"].flatMap(name =>
-    parsedHere(name, name === "code" ? markdown.code : markdown.code.filter(input => input.includes("```")), htmlInputs.code),
-  ),
-  ...["horizontalRule", "horizontalRuleOptions"].flatMap(name =>
-    parsedHere(name, markdown.horizontalRule, htmlInputs.horizontalRule),
-  ),
-  ...["details", "detailsOptions"].flatMap(name => parsedHere(name, markdown.details, htmlInputs.details)),
-  ...parsedHere("mathematics", markdown.mathematics, htmlInputs.mathematics),
-  ...["emoji", "emojiOptions"].flatMap(name => parsedHere(name, markdown.emoji, htmlInputs.emoji)),
-  ...["youtube", "youtubeOptions", "youtubeInline"].flatMap(name =>
-    parsedHere(name, name === "youtube" ? markdown.embeds : [], name === "youtube" ? htmlInputs.youtube : htmlInputs.youtube.slice(-6)),
-  ),
-  ...["twitch", "twitchOptions", "twitchInline"].flatMap(name =>
-    parsedHere(name, name === "twitch" ? markdown.embeds : [], name === "twitch" ? htmlInputs.twitch : htmlInputs.twitch.slice(-6)),
-  ),
-  ...["audio", "audioOptions", "audioInline"].flatMap(name => parsedHere(name, name === "audio" ? markdown.embeds : [], htmlInputs.audio)),
-  ...["tableOfContents", "tableOfContentsAnchors"].flatMap(name =>
-    parsedHere(name, ["# Intro\n\npara"], htmlInputs.tableOfContents),
-  ),
-  ...["rubyText", "rubyTextOptions"].flatMap(name => parsedHere(name, ["text"], htmlInputs.rubyText)),
-  ...parsedHere(
-    "all",
-    unique([...Object.values(markdown).flat(), ...fixture("marked").lexed.map(record => record.input), ...deepMarkdown]),
-    unique([
-      ...Object.values(htmlInputs).flat(),
-      ...fixture("dom")
-        .parses.map(record => record.html)
-        .filter(html => !otherTrees.has(html)),
-      ...deepHTML,
-    ]),
-  ),
-  ...parsedHere("attributeValues", [], [
-    ...htmlInputs.blockquote,
-    ...htmlInputs.code,
-    ...htmlInputs.horizontalRule,
-    ...htmlInputs.details,
-    ...htmlInputs.emoji,
-    ...htmlInputs.youtube.slice(-6),
-    ...htmlInputs.twitch.slice(-6),
-    ...htmlInputs.audio,
-    ...htmlInputs.rubyText,
-  ]),
-]
-
-const parsesMarkdown = inputs
-  .filter(input => "markdown" in input)
-  .map(({ name, markdown }) => ({
-    extensions: name,
-    markdown,
-    ...outcome(() => ({ doc: converters[name].manager.parse(markdown) })),
-  }))
-const parsesHTML = inputs
-  .filter(input => "html" in input)
-  .map(({ name, html }) => ({
-    extensions: name,
-    html,
-    ...outcome(() => {
-      const { document } = parseHTML(`<!DOCTYPE html><html><body>${html}</body></html>`)
-      return { doc: converters[name].parser.parse(document.body).toJSON() }
-    }),
-  }))
-
-// Documents of each configuration: those its parses make, each read from its JSON text, as the
-// tests read it, and the documents given here.
-const parsed = name =>
-  [...parsesMarkdown, ...parsesHTML].filter(record => record.extensions === name && record.doc).map(record => record.doc)
-const documents = (name, docs) =>
-  unique([...docs, ...parsed(name)].map(doc => JSON.stringify(doc))).map(text => [name, JSON.parse(text)])
 
 const node = (type, attrs, content) => ({ type, ...(attrs === undefined ? {} : { attrs }), ...(content === undefined ? {} : { content }) })
 const docs = {
@@ -738,65 +519,6 @@ const docs = {
     doc(p(text("x", { type: "rubyText" }))),
   ],
 }
-const docsOf = {
-  all: [...Object.values(docs).flat(), ...deepDocs],
-  blockquote: docs.blockquote,
-  blockquoteOptions: docs.blockquote,
-  code: docs.code,
-  codeOptions: docs.code,
-  codeNullPrefix: docs.code,
-  codeEmptyPrefix: docs.code,
-  lowlight: docs.code,
-  horizontalRule: docs.horizontalRule,
-  horizontalRuleOptions: docs.horizontalRule,
-  details: docs.details,
-  detailsOptions: docs.details,
-  mathematics: docs.mathematics,
-  emoji: docs.emoji,
-  emojiOptions: docs.emoji,
-  youtube: docs.youtube,
-  youtubeOptions: docs.youtube,
-  youtubeInline: docs.youtube,
-  twitch: docs.twitch,
-  twitchOptions: docs.twitch,
-  twitchInline: docs.twitch,
-  audio: docs.audio,
-  audioOptions: docs.audio,
-  audioInline: docs.audio,
-  tableOfContents: docs.tableOfContents,
-  tableOfContentsAnchors: docs.tableOfContents,
-  rubyText: docs.rubyText,
-  rubyTextOptions: docs.rubyText,
-  attributeValues: [
-    ...docs.blockquote,
-    ...docs.code,
-    ...docs.horizontalRule,
-    ...docs.details,
-    ...docs.emoji,
-    ...docs.youtube,
-    ...docs.twitch,
-    ...docs.audio,
-    ...docs.rubyText,
-  ],
-}
-const allDocuments = Object.keys(configurations).flatMap(name => documents(name, docsOf[name]))
-
-const serializesMarkdown = allDocuments.filter(([name]) => name !== "attributeValues").map(([name, doc]) => ({
-  extensions: name,
-  doc,
-  ...outcome(() => ({ markdown: converters[name].manager.serialize(doc) })),
-}))
-const serializesHTML = allDocuments.map(([name, doc]) => ({
-  extensions: name,
-  doc,
-  ...outcome(() => {
-    const { schema, serializer } = converters[name]
-    const container = document.createElement("div")
-    serializer.serializeFragment(Node.fromJSON(schema, doc).content, { document }, container)
-    return { html: container.innerHTML }
-  }),
-}))
-
 // Emojis of each name, and of names that aren't strings, in blocks beside other text.
 const emojiTexts = [
   ...docs.emoji,
@@ -806,13 +528,6 @@ const emojiTexts = [
     p(text("x"), node("emoji", { name: "glow" })),
   ),
 ]
-const generatesText = ["emoji", "emojiOptions"].flatMap(name =>
-  emojiTexts.map(doc => ({
-    extensions: name,
-    doc,
-    ...outcome(() => ({ text: generateText(doc, configurations[name]) })),
-  })),
-)
 
 const attributeStrings = [
   "",
@@ -862,17 +577,167 @@ const attributeObjects = [
   5,
   true,
 ]
-const attributes = [
-  ...attributeStrings.map(input => ({ parse: input, ...outcome(() => ({ attributes: parseAttributes(input) })) })),
-  ...attributeObjects.map(input => ({ serialize: input, ...outcome(() => ({ string: serializeAttributes(input) })) })),
-]
 
-writeFixture("tiptap-blocks", {
-  schemas,
-  parsesMarkdown,
-  serializesMarkdown,
-  parsesHTML,
-  serializesHTML,
-  generatesText,
-  attributes,
+// An extension with HTMLAttributes, which reach only renderHTML.
+const attributed = (extension, docs) => ({ extensions: [...base, extension.configure({ HTMLAttributes: html })], serializesHTML: docs })
+// An extension with options that reach its parse rules and renderHTML.
+const optioned = (extensions, inputs, docs) => ({
+  extensions: [...base, ...extensions],
+  parsesHTML: inputs,
+  serializesHTML: withParsed(docs),
 })
+
+record(
+  "tiptap-blocks",
+  {
+    blocks: {
+      extensions: [
+        ...base,
+        Blockquote,
+        Code,
+        CodeBlock,
+        HorizontalRule,
+        ...details,
+        Mathematics,
+        Emoji.configure({ emojis }),
+        Youtube,
+        Twitch,
+        Audio,
+        TableOfContents,
+        RubyText,
+      ],
+      parsesMarkdown: [...Object.values(markdown).flat(), ...markedInputs(), ...deepMarkdown],
+      parsesHTML: [...Object.values(htmlInputs).flat(), ...domInputs(), ...deepHTML],
+      serializesMarkdown: withParsed([...Object.values(docs).flat(), ...deepDocs]),
+      serializesHTML: withParsed([...Object.values(docs).flat(), ...deepDocs]),
+      generatesText: emojiTexts.map(doc => ({ doc })),
+    },
+    blockquoteOptions: attributed(Blockquote, docs.blockquote),
+    codeOptions: optioned(
+      [
+        Code.configure({ HTMLAttributes: html }),
+        CodeBlock.configure({ languageClassPrefix: "lang-", defaultLanguage: "plain", HTMLAttributes: html }),
+      ],
+      htmlInputs.code,
+      docs.code,
+    ),
+    codeNullPrefix: optioned([Code, CodeBlock.configure({ languageClassPrefix: null })], htmlInputs.code, docs.code),
+    codeEmptyPrefix: optioned([Code, CodeBlock.configure({ languageClassPrefix: "" })], htmlInputs.code, docs.code),
+    // CodeBlockLowlight is CodeBlock with a plugin that decorates the code it highlights.
+    lowlight: {
+      extensions: [...base, Code, CodeBlockLowlight.configure({ lowlight: createLowlight(common) })],
+      parsesHTML: ["<pre><code class='language-js'>x</code></pre>"],
+    },
+    horizontalRuleOptions: attributed(HorizontalRule, docs.horizontalRule),
+    detailsOptions: optioned(
+      [
+        Details.configure({ persist: true, HTMLAttributes: html }),
+        DetailsSummary.configure({ HTMLAttributes: { class: "summary" } }),
+        DetailsContent.configure({ HTMLAttributes: { class: "content", "data-type": "given" } }),
+      ],
+      htmlInputs.details,
+      docs.details,
+    ),
+    emojiOptions: {
+      extensions: [...base, Emoji.configure({ emojis, forceFallbackImages: true, HTMLAttributes: html })],
+      serializesHTML: docs.emoji,
+    },
+    youtubeOptions: optioned(
+      [
+        Youtube.configure({
+          allowFullscreen: false,
+          autoplay: true,
+          ccLanguage: "es",
+          ccLoadPolicy: true,
+          controls: false,
+          disableKBcontrols: true,
+          enableIFrameApi: true,
+          endTime: 90,
+          height: "50%",
+          interfaceLanguage: "fr",
+          ivLoadPolicy: 3,
+          loop: true,
+          modestBranding: true,
+          HTMLAttributes: html,
+          nocookie: true,
+          origin: "https://o.test",
+          playlist: "a,b",
+          progressBarColor: "white",
+          width: 320.5,
+          rel: 0,
+        }),
+      ],
+      [...youtubeSizes, ...youtubeShapes],
+      docs.youtube,
+    ),
+    youtubeInline: optioned([Youtube.configure({ inline: true, rel: undefined })], [...youtubeSizes, ...youtubeShapes], docs.youtube),
+    twitchOptions: optioned(
+      [
+        Twitch.configure({
+          allowFullscreen: false,
+          autoplay: true,
+          muted: true,
+          time: "1h2m3s",
+          parent: "a b&c=d.test",
+          height: "50%",
+          width: 320,
+          HTMLAttributes: html,
+        }),
+      ],
+      [...twitchSizes, ...twitchShapes],
+      docs.twitch,
+    ),
+    twitchInline: optioned([Twitch.configure({ inline: true, parent: "" })], [...twitchSizes, ...twitchShapes], docs.twitch),
+    audioOptions: optioned(
+      [
+        Audio.configure({
+          allowBase64: true,
+          autoplay: true,
+          controls: false,
+          loop: true,
+          muted: true,
+          preload: null,
+          controlslist: "nodownload",
+          crossorigin: "anonymous",
+          disableRemotePlayback: true,
+          HTMLAttributes: html,
+        }),
+      ],
+      htmlInputs.audio,
+      docs.audio,
+    ),
+    audioInline: optioned([Audio.configure({ inline: true, preload: "auto" })], htmlInputs.audio, docs.audio),
+    tableOfContentsAnchors: optioned(
+      [TableOfContents.configure({ anchorTypes: ["paragraph", "heading"] })],
+      htmlInputs.tableOfContents,
+      docs.tableOfContents,
+    ),
+    rubyTextOptions: attributed(RubyText, docs.rubyText),
+    attributeValues: {
+      extensions: [
+        ...base,
+        ...[Blockquote, Code, CodeBlock, HorizontalRule, ...details, Youtube, Twitch, Audio, RubyText].map(extension =>
+          extension.configure({ HTMLAttributes: otherAttributes }),
+        ),
+        Emoji.configure({ emojis, HTMLAttributes: otherAttributes }),
+      ],
+      serializesHTML: [
+        ...docs.blockquote,
+        ...docs.code,
+        ...docs.horizontalRule,
+        ...docs.details,
+        ...docs.emoji,
+        ...docs.youtube,
+        ...docs.twitch,
+        ...docs.audio,
+        ...docs.rubyText,
+      ],
+    },
+  },
+  {
+    attributes: [
+      ...attributeStrings.map(input => ({ parse: input, ...outcome(() => ({ attributes: parseAttributes(input) })) })),
+      ...attributeObjects.map(input => ({ serialize: input, ...outcome(() => ({ string: serializeAttributes(input) })) })),
+    ],
+  },
+)

@@ -1,134 +1,30 @@
-// Records what @tiptap/markdown's MarkdownManager and ProseMirror's DOMParser and DOMSerializer do
-// with @tiptap/extension-list's BulletList, OrderedList, ListItem, TaskList and TaskItem, to
-// fixtures/tiptap-lists.json, for tarnish-tiptap's tests/lists.rs to expect, in the record shapes
-// harness/record-tiptap.mjs writes:
-// - Each configuration records its schema, but `tabs`, whose is `lists`'.
-// - Each Markdown input records the document the manager parses it to: every input of
-//   fixtures/marked.json, and each list form the extensions' tokenizers and parsers read.
-// - Each document records the Markdown the manager serializes it to: the documents the parses
-//   make, and lists with each attribute and shape the renderers read.
-// - Each HTML input records the document DOMParser parses the body of a linkedom document holding
-//   it to: fixtures/dom.json's, and each element, attribute and style the parse rules read.
-// - Each document records the innerHTML of an element DOMSerializer fills in linkedom.
-// Each record names its configuration in `extensions`: `lists`, Tiptap's own extensions with the
-// five lists; `nested`, with TaskItem's `nested`; `attributes`, with each list's HTMLAttributes;
-// `attributeValues`, with HTMLAttributes that aren't strings, which only render, so it records
-// no Markdown; `bullets`, `ordered` and `tasks`, with only those lists; `paragraphs`, lists of
-// paragraphs;
-// `flat`, the lists beside tiptap-extension-flat-list's items, without the items' parse rules,
-// which tarnish leaves to the application; and `tabs`, the lists with a manager that indents with
-// tabs.
-import { readFileSync } from "node:fs"
-import { getSchema } from "@tiptap/core"
-import { Bold } from "@tiptap/extension-bold"
-import { Document } from "@tiptap/extension-document"
-import { HardBreak } from "@tiptap/extension-hard-break"
-import { Heading } from "@tiptap/extension-heading"
-import { Highlight } from "@tiptap/extension-highlight"
-import { Image } from "@tiptap/extension-image"
-import { Italic } from "@tiptap/extension-italic"
+// Records @tiptap/extension-list's BulletList, OrderedList, ListItem, TaskList and TaskItem to
+// fixtures/tiptap-lists.json, as harness/tiptap.mjs records them: `lists`, Tiptap's own
+// extensions with the five lists; `nested`, with TaskItem's `nested`; `attributes` and
+// `attributeValues`, with each list's HTMLAttributes, of strings and of other values; `bullets`,
+// `ordered` and `tasks`, with only those lists; `paragraphs`, lists of paragraphs; `flat`, the
+// lists beside tiptap-extension-flat-list's items, without the items' parse rules, which tarnish
+// leaves to the application; and `tabs`, the lists with a manager that indents with tabs.
 import { BulletList, ListItem, OrderedList, TaskItem, TaskList } from "@tiptap/extension-list"
+import { Document } from "@tiptap/extension-document"
 import { Paragraph } from "@tiptap/extension-paragraph"
-import { Strike } from "@tiptap/extension-strike"
-import { Subscript } from "@tiptap/extension-subscript"
-import { Superscript } from "@tiptap/extension-superscript"
 import { Text } from "@tiptap/extension-text"
-import { TextStyle } from "@tiptap/extension-text-style"
-import { Underline } from "@tiptap/extension-underline"
-import { MarkdownManager } from "@tiptap/markdown"
-import { DOMParser, DOMSerializer, Node } from "@tiptap/pm/model"
-import { parseHTML } from "linkedom"
-import { Marked } from "marked"
-import moreLists from "marked-more-lists"
 import { FlatListCore, FlatListOrdered, FlatListTask, FlatListUnordered } from "tiptap-extension-flat-list"
-import { otherAttributes, outcome, schemaRecord, writeFixture } from "./fixture.mjs"
+import { otherAttributes } from "./fixture.mjs"
+import { doc, domInputs, markedInputs, own, paragraph, record, rendered, text, withParsed } from "./tiptap.mjs"
 
-const own = [
-  Document,
-  Paragraph,
-  Text,
-  Heading,
-  Image,
-  HardBreak,
-  Bold,
-  Italic,
-  Strike,
-  Underline,
-  Subscript,
-  Superscript,
-  Highlight,
-  TextStyle,
-]
 const lists = [BulletList, OrderedList, ListItem, TaskList, TaskItem]
 const withoutParseRules = extension => extension.extend({ parseHTML: () => [] })
-const configurations = {
-  lists: { extensions: [...own, ...lists] },
-  nested: { extensions: [...own, BulletList, OrderedList, ListItem, TaskList, TaskItem.configure({ nested: true })] },
-  attributes: {
-    extensions: [
-      ...own,
-      BulletList.configure({ HTMLAttributes: { class: "bullets", "data-list": "bullet" } }),
-      OrderedList.configure({ HTMLAttributes: { class: "numbers", start: "9", type: "A", style: "color: red" } }),
-      ListItem.configure({ HTMLAttributes: { class: "item" } }),
-      TaskList.configure({ HTMLAttributes: { class: "tasks", "data-type": "mine" } }),
-      TaskItem.configure({ HTMLAttributes: { class: "task", "data-checked": "maybe", style: "color: blue" } }),
-    ],
-  },
-  attributeValues: {
-    extensions: [...own, ...lists.map(extension => extension.configure({ HTMLAttributes: otherAttributes }))],
-  },
-  bullets: { extensions: [...own, BulletList, ListItem] },
-  ordered: { extensions: [...own, OrderedList, ListItem] },
-  tasks: { extensions: [...own, TaskList, TaskItem] },
-  paragraphs: {
-    extensions: [
-      ...own,
-      BulletList.configure({ itemTypeName: "paragraph" }),
-      OrderedList.configure({ itemTypeName: "paragraph" }),
-      TaskList.configure({ itemTypeName: "paragraph" }),
-    ],
-  },
-  flat: {
-    extensions: [
-      Document,
-      Paragraph,
-      Text,
-      FlatListCore,
-      withoutParseRules(FlatListOrdered),
-      withoutParseRules(FlatListUnordered),
-      withoutParseRules(FlatListTask),
-      ...lists,
-    ],
-  },
-  tabs: { extensions: [...own, ...lists], indentation: { style: "tab", size: 3 } },
-}
-const converters = Object.fromEntries(
-  Object.entries(configurations).map(([name, { extensions, indentation }]) => {
-    const marked = new Marked()
-    marked.use(moreLists())
-    const schema = getSchema(extensions)
-    const parser = DOMParser.fromSchema(schema)
-    const serializer = DOMSerializer.fromSchema(schema)
-    const manager = new MarkdownManager({ extensions, marked, ...(indentation ? { indentation } : {}) })
-    return [name, { manager, schema, parser, serializer }]
-  }),
-)
-const { document } = parseHTML("<!DOCTYPE html><html><body></body></html>")
-const fixture = name => JSON.parse(readFileSync(new URL(`../fixtures/${name}.json`, import.meta.url), "utf8"))
-const unique = values => [...new Set(values)]
-const named = (names, inputs) => names.flatMap(name => unique(inputs).map(input => [name, input]))
 
-const text = (value, ...marks) => ({ type: "text", text: value, ...(marks.length ? { marks } : {}) })
-const paragraph = (...content) => ({ type: "paragraph", content })
 const p = value => paragraph(text(value))
-const doc = (...content) => ({ type: "doc", content })
 const item = (...content) => ({ type: "listItem", content })
 const bullets = (...items) => ({ type: "bulletList", content: items })
 const numbers = (attrs, ...items) => ({ type: "orderedList", ...(attrs ? { attrs } : {}), content: items })
 const task = (checked, ...content) => ({ type: "taskItem", attrs: { checked }, content })
 const tasks = (...items) => ({ type: "taskList", content: items })
 
-// Lists nested one to three deep, which tests/lists.rs folds into the conversions of any depth:
+// Lists nested one to three deep, which tests/recorded/lists.rs folds into the conversions of any
+// depth:
 // each item holding the list inside it first, or after a paragraph.
 const depths = [1, 2, 3]
 const nestedFirst = (list, item, depth) => {
@@ -361,10 +257,6 @@ const listMarkdown = [
   ...deepMarkdown,
 ]
 
-// fixtures/dom.json's inputs that hold an element the lists' parse rules read.
-const domLists = fixture("dom")
-  .parses.map(record => record.html)
-  .filter(html => /<\/?(?:ul|ol|li|input|label)\b/i.test(html))
 const checkbox = checked => `<label><input type="checkbox"${checked ? ' checked="checked"' : ""}><span></span></label>`
 const taskItemHTML = (checked, content) =>
   `<li data-type="taskItem" data-checked="${checked}">${checkbox(checked)}<div>${content}</div></li>`
@@ -449,14 +341,6 @@ const generatedMarkdown = Array.from({ length: 300 }, () =>
     pick(["\n", "\n", "\n\n"]),
   ),
 )
-const parsesMarkdown = [
-  ...named(["lists"], [...fixture("marked").lexed.map(record => record.input), ...listMarkdown, ...generatedMarkdown]),
-  ...named(["nested", "bullets", "ordered", "tasks", "paragraphs", "flat"], listMarkdown),
-].map(([name, markdown]) => ({
-  extensions: name,
-  markdown,
-  ...outcome(() => ({ doc: converters[name].manager.parse(markdown) })),
-}))
 
 const ordered = (start, type) => doc(numbers({ start, type }, item(p("a")), item(p("b"))))
 const starts = [1, 0, -2, 3, 26, 27, 702, 703, 3999, 1.5, "3", "x", null, true, [], [5], {}]
@@ -533,70 +417,81 @@ const flatDocs = [
     bullets(item(p("a"))),
     { type: "flatListItemTask", attrs: { checked: true }, content: [text("task")] },
   ),
+  doc({ type: "flatListItemOrdered", attrs: { indent: 2, counter: 3 }, content: [text("ordered")] }, { type: "flatListItemTask" }),
 ]
-// The documents each configuration serializes, besides those its parses make.
-const docsOf = {
-  lists: [...docs, ...orderedDocs, ...markDocs, ...deepDocs],
-  tabs: [...docs, ...deepDocs],
-  attributes: [...docs, ...orderedDocs],
-  flat: [...docs, ...flatDocs],
-}
-const docsFor = name => docsOf[name] ?? docs
 
-// The documents the parses of each configuration make, each read from its JSON text, as the tests
-// read it.
-const parsed = (records, name) => records.filter(record => record.extensions === name && record.doc).map(record => record.doc)
-const documents = (name, docs, records) =>
-  unique([...docs, ...parsed(records, name)].map(doc => JSON.stringify(doc))).map(text => [name, JSON.parse(text)])
-const names = Object.keys(configurations)
-// The configurations whose schemas differ: `tabs` has the schema `lists` has.
-const schemas = names.filter(name => name !== "tabs")
-const serializeHTML = (name, doc) =>
-  outcome(() => {
-    const { schema, serializer } = converters[name]
-    const container = document.createElement("div")
-    serializer.serializeFragment(Node.fromJSON(schema, doc).content, { document }, container)
-    return { html: container.innerHTML }
-  })
+const fiveLists = [...own, ...lists]
+const listsDocs = [...docs, ...orderedDocs, ...markDocs, ...deepDocs]
+// Tiptap's own extensions with only some of the lists, which reach what the Markdown and HTML of
+// lists parse to, and what the others' documents serialize to.
+const some = extensions => ({
+  extensions: [...own, ...extensions],
+  parsesMarkdown: listMarkdown,
+  parsesHTML: listHTML,
+  serializesMarkdown: docs,
+  serializesHTML: docs,
+})
 
-const htmlInputs = [
-  ...named(["lists"], [...domLists, ...listHTML]),
-  ...named(["nested", "bullets", "ordered", "tasks", "paragraphs", "flat"], listHTML),
-]
-// Tiptap's own HTML for each document, parsed back.
-const roundTrips = schemas.flatMap(name =>
-  docsFor(name).flatMap(doc => {
-    const { html } = serializeHTML(name, doc)
-    return html ? [[name, html]] : []
-  }),
-)
-const parsesHTML = unique([...htmlInputs, ...roundTrips].map(entry => JSON.stringify(entry)))
-  .map(entry => JSON.parse(entry))
-  .map(([name, html]) => ({
-    extensions: name,
-    html,
-    ...outcome(() => {
-      const { document } = parseHTML(`<!DOCTYPE html><html><body>${html}</body></html>`)
-      return { doc: converters[name].parser.parse(document.body).toJSON() }
-    }),
-  }))
-
-// The parses whose documents a configuration serializes: `lists` serializes those of its Markdown
-// and its HTML, and the others those of their HTML, whose Markdown makes much what `lists`' does.
-const serialized = name => (name === "lists" ? [...parsesMarkdown, ...parsesHTML] : parsesHTML)
-const serializesMarkdown = names
-  .filter(name => name !== "attributeValues")
-  .flatMap(name => documents(name, docsFor(name), serialized(name)))
-  .map(([name, doc]) => ({ extensions: name, doc, ...outcome(() => ({ markdown: converters[name].manager.serialize(doc) })) }))
-
-const serializesHTML = schemas
-  .flatMap(name => documents(name, docsFor(name), serialized(name)))
-  .map(([name, doc]) => ({ extensions: name, doc, ...serializeHTML(name, doc) }))
-
-writeFixture("tiptap-lists", {
-  schemas: schemas.map(name => ({ extensions: name, ...schemaRecord(converters[name].schema) })),
-  parsesMarkdown,
-  serializesMarkdown,
-  parsesHTML,
-  serializesHTML,
+record("tiptap-lists", {
+  lists: {
+    extensions: fiveLists,
+    parsesMarkdown: [...markedInputs(), ...listMarkdown, ...generatedMarkdown],
+    // Tiptap's own HTML for each document is parsed back.
+    parsesHTML: [...domInputs(/<\/?(?:ul|ol|li|input|label)\b/i), ...listHTML, ...rendered(fiveLists, listsDocs)],
+    serializesMarkdown: withParsed(listsDocs),
+    serializesHTML: withParsed(listsDocs),
+  },
+  // `nested` lets a task item hold blocks after its paragraph, which only its parse rule reads.
+  nested: {
+    extensions: [...own, BulletList, OrderedList, ListItem, TaskList, TaskItem.configure({ nested: true })],
+    parsesHTML: listHTML.filter(html => /taskItem/i.test(html)),
+  },
+  // HTMLAttributes reach only renderHTML.
+  attributes: {
+    extensions: [
+      ...own,
+      BulletList.configure({ HTMLAttributes: { class: "bullets", "data-list": "bullet" } }),
+      OrderedList.configure({ HTMLAttributes: { class: "numbers", start: "9", type: "A", style: "color: red" } }),
+      ListItem.configure({ HTMLAttributes: { class: "item" } }),
+      TaskList.configure({ HTMLAttributes: { class: "tasks", "data-type": "mine" } }),
+      TaskItem.configure({ HTMLAttributes: { class: "task", "data-checked": "maybe", style: "color: blue" } }),
+    ],
+    serializesHTML: [...docs, ...orderedDocs],
+  },
+  attributeValues: {
+    extensions: [...own, ...lists.map(extension => extension.configure({ HTMLAttributes: otherAttributes }))],
+    serializesHTML: docs,
+  },
+  bullets: some([BulletList, ListItem]),
+  ordered: some([OrderedList, ListItem]),
+  tasks: some([TaskList, TaskItem]),
+  paragraphs: {
+    extensions: [
+      ...own,
+      BulletList.configure({ itemTypeName: "paragraph" }),
+      OrderedList.configure({ itemTypeName: "paragraph" }),
+      TaskList.configure({ itemTypeName: "paragraph" }),
+    ],
+    parsesMarkdown: listMarkdown,
+    parsesHTML: listHTML,
+    serializesMarkdown: withParsed(docs),
+    serializesHTML: withParsed(docs),
+  },
+  // The flat items have no parse rules here, and no Markdown hooks.
+  flat: {
+    extensions: [
+      Document,
+      Paragraph,
+      Text,
+      FlatListCore,
+      withoutParseRules(FlatListOrdered),
+      withoutParseRules(FlatListUnordered),
+      withoutParseRules(FlatListTask),
+      ...lists,
+    ],
+    serializesMarkdown: flatDocs,
+    serializesHTML: flatDocs,
+  },
+  // The indentation reaches only the Markdown lists serialize to.
+  tabs: { extensions: fiveLists, indentation: { style: "tab", size: 3 }, serializesMarkdown: [...docs, ...deepDocs] },
 })

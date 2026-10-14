@@ -93,20 +93,20 @@ fn details_trio(options: DetailsOptions, summary: Map, content: Map) -> Vec<Exte
 /// The extensions of the configuration the recorder names, after the base ones.
 fn added(name: &str) -> Vec<Extension> {
     match name {
-        "all" => {
-            let mut all = vec![
+        "blocks" => {
+            let mut blocks = vec![
                 blockquote(BlockquoteOptions::default()).into(),
                 code(CodeOptions::default()).into(),
                 code_block(CodeBlockOptions::default()).into(),
                 horizontal_rule(HorizontalRuleOptions::default()).into(),
             ];
-            all.extend(details_trio(
+            blocks.extend(details_trio(
                 DetailsOptions::default(),
                 Map::new(),
                 Map::new(),
             ));
-            all.extend(mathematics());
-            all.extend([
+            blocks.extend(mathematics());
+            blocks.extend([
                 emoji(EmojiOptions {
                     emojis: emojis(),
                     ..EmojiOptions::default()
@@ -118,18 +118,13 @@ fn added(name: &str) -> Vec<Extension> {
                 table_of_contents(TableOfContentsOptions::default()).into(),
                 ruby_text(RubyTextOptions::default()).into(),
             ]);
-            all
+            blocks
         }
-        "blockquote" => vec![blockquote(BlockquoteOptions::default()).into()],
         "blockquoteOptions" => vec![
             blockquote(BlockquoteOptions {
                 html_attributes: given(),
             })
             .into(),
-        ],
-        "code" => vec![
-            code(CodeOptions::default()).into(),
-            code_block(CodeBlockOptions::default()).into(),
         ],
         "codeOptions" => vec![
             code(CodeOptions {
@@ -163,14 +158,12 @@ fn added(name: &str) -> Vec<Extension> {
             code(CodeOptions::default()).into(),
             code_block_lowlight(CodeBlockOptions::default()).into(),
         ],
-        "horizontalRule" => vec![horizontal_rule(HorizontalRuleOptions::default()).into()],
         "horizontalRuleOptions" => vec![
             horizontal_rule(HorizontalRuleOptions {
                 html_attributes: given(),
             })
             .into(),
         ],
-        "details" => details_trio(DetailsOptions::default(), Map::new(), Map::new()),
         "detailsOptions" => details_trio(
             DetailsOptions {
                 persist: true,
@@ -179,14 +172,6 @@ fn added(name: &str) -> Vec<Extension> {
             object!({"class": "summary"}),
             object!({"class": "content", "data-type": "given"}),
         ),
-        "mathematics" => mathematics(),
-        "emoji" => vec![
-            emoji(EmojiOptions {
-                emojis: emojis(),
-                ..EmojiOptions::default()
-            })
-            .into(),
-        ],
         "emojiOptions" => vec![
             emoji(EmojiOptions {
                 emojis: emojis(),
@@ -195,7 +180,6 @@ fn added(name: &str) -> Vec<Extension> {
             })
             .into(),
         ],
-        "youtube" => vec![youtube(YoutubeOptions::default()).into()],
         "youtubeOptions" => vec![
             youtube(YoutubeOptions {
                 allow_fullscreen: false,
@@ -230,7 +214,6 @@ fn added(name: &str) -> Vec<Extension> {
             })
             .into(),
         ],
-        "twitch" => vec![twitch(TwitchOptions::default()).into()],
         "twitchOptions" => vec![
             twitch(TwitchOptions {
                 allow_fullscreen: false,
@@ -253,7 +236,6 @@ fn added(name: &str) -> Vec<Extension> {
             })
             .into(),
         ],
-        "audio" => vec![audio(AudioOptions::default()).into()],
         "audioOptions" => vec![
             audio(AudioOptions {
                 allow_base64: true,
@@ -278,14 +260,12 @@ fn added(name: &str) -> Vec<Extension> {
             })
             .into(),
         ],
-        "tableOfContents" => vec![table_of_contents(TableOfContentsOptions::default()).into()],
         "tableOfContentsAnchors" => vec![
             table_of_contents(TableOfContentsOptions {
                 anchor_types: &["paragraph", "heading"],
             })
             .into(),
         ],
-        "rubyText" => vec![ruby_text(RubyTextOptions::default()).into()],
         "rubyTextOptions" => vec![
             ruby_text(RubyTextOptions {
                 html_attributes: given(),
@@ -430,7 +410,7 @@ fn doc(node: Value) -> Value {
 const NESTED: [Nested; 9] = [
     Nested {
         what: "HTML of blockquotes",
-        configuration: "all",
+        configuration: "blocks",
         section: "serializesHTML",
         depth: DOCUMENTS,
         input: |depth| doc(quoted(depth)),
@@ -441,7 +421,7 @@ const NESTED: [Nested; 9] = [
     },
     Nested {
         what: "HTML of details",
-        configuration: "all",
+        configuration: "blocks",
         section: "serializesHTML",
         depth: DOCUMENTS,
         input: |depth| doc(nested_details(depth)),
@@ -450,7 +430,7 @@ const NESTED: [Nested; 9] = [
     // Each blockquote puts `> ` ahead of each line its child renders.
     Nested {
         what: "Markdown of blockquotes",
-        configuration: "all",
+        configuration: "blocks",
         section: "serializesMarkdown",
         depth: DOCUMENTS,
         input: |depth| doc(quoted(depth)),
@@ -458,7 +438,7 @@ const NESTED: [Nested; 9] = [
     },
     Nested {
         what: "Markdown of details",
-        configuration: "all",
+        configuration: "blocks",
         section: "serializesMarkdown",
         depth: DOCUMENTS / 5,
         input: |depth| doc(nested_details(depth)),
@@ -466,7 +446,7 @@ const NESTED: [Nested; 9] = [
     },
     Nested {
         what: "<blockquote>",
-        configuration: "all",
+        configuration: "blocks",
         section: "parsesHTML",
         depth: PARSES,
         input: |depth| Value::String("<blockquote>".repeat(depth) + "x"),
@@ -474,7 +454,7 @@ const NESTED: [Nested; 9] = [
     },
     Nested {
         what: "<details>",
-        configuration: "all",
+        configuration: "blocks",
         section: "parsesHTML",
         depth: PARSES,
         input: |depth| Value::String(details_html(depth)),
@@ -482,7 +462,7 @@ const NESTED: [Nested; 9] = [
     },
     Nested {
         what: "spaced blockquotes",
-        configuration: "all",
+        configuration: "blocks",
         section: "parsesMarkdown",
         depth: PARSES,
         input: |depth| Value::String("> ".repeat(depth) + "x"),
@@ -490,7 +470,7 @@ const NESTED: [Nested; 9] = [
     },
     Nested {
         what: "blockquotes",
-        configuration: "all",
+        configuration: "blocks",
         section: "parsesMarkdown",
         depth: PARSES,
         input: |depth| Value::String(">".repeat(depth) + " x"),
@@ -498,7 +478,7 @@ const NESTED: [Nested; 9] = [
     },
     Nested {
         what: "Markdown details",
-        configuration: "all",
+        configuration: "blocks",
         section: "parsesMarkdown",
         depth: DETAILS,
         input: |depth| Value::String(details_markdown(depth)),

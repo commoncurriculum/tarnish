@@ -1,20 +1,14 @@
-// Records what @tiptap/extension-table's Table, TableRow, TableCell and TableHeader make with
-// @tiptap/markdown's MarkdownManager and ProseMirror's DOMParser and DOMSerializer, to
-// fixtures/tiptap-tables.json, for tarnish-tiptap's tests/tables.rs to expect. Its records are
-// record-tiptap.mjs's, each naming in `extensions` the configuration it's of:
-// - `tables`: Document, Paragraph, Text, HardBreak, Bold, Italic, Heading, an application's code
-//   mark that parses marked's code spans, and the four table extensions as they come;
-// - `attributes`, `attributeValues`, `wrapper`, `minWidth`, `zero` and `resizable`: the same with
-//   options set, `attributeValues` with HTMLAttributes that aren't strings;
-// - `global`: with an application's global `style` attribute on tables and cells, and `both`
-//   with Table's `HTMLAttributes` too;
-// - `kit`: TableKit, with a minimum cell width;
-// - `partial`: rows and cells, with no Table.
-// `schemas` records each configuration's schema, as harness/fixture.mjs's schemaRecord writes it,
-// and `queries` the `width` of each element each table's `querySelectorAll("colgroup > col")`
-// finds, which TableCell's colwidth reads when the cell has none of its own.
-import { readFileSync } from "node:fs"
-import { Extension, Mark, getSchema } from "@tiptap/core"
+// Records @tiptap/extension-table's Table, TableRow, TableCell and TableHeader to
+// fixtures/tiptap-tables.json, as harness/tiptap.mjs records them: `tables`, as they come beside
+// Document, Paragraph, Text, HardBreak, Bold, Italic, Heading and an application's code mark that
+// parses marked's code spans; `attributes`, `attributeValues`, `wrapper`, `minWidth` and `zero`,
+// the same with an option of their renderHTML set; `global`, with an application's global `style`
+// attribute on tables and cells, and `both`, with Table's `HTMLAttributes` too; `kit`, TableKit
+// with a minimum cell width; and `partial`, rows and cells with no Table. Table's other options
+// reach only an editor's plugins and node view. `queries` records the `width` of each element
+// each table's `querySelectorAll("colgroup > col")` finds, which TableCell's colwidth reads when
+// the cell has none of its own.
+import { Extension, Mark } from "@tiptap/core"
 import { Bold } from "@tiptap/extension-bold"
 import { Document } from "@tiptap/extension-document"
 import { HardBreak } from "@tiptap/extension-hard-break"
@@ -23,12 +17,8 @@ import { Italic } from "@tiptap/extension-italic"
 import { Paragraph } from "@tiptap/extension-paragraph"
 import { Table, TableCell, TableHeader, TableKit, TableRow } from "@tiptap/extension-table"
 import { Text } from "@tiptap/extension-text"
-import { MarkdownManager } from "@tiptap/markdown"
-import { DOMParser, DOMSerializer, Node } from "@tiptap/pm/model"
-import { parseHTML } from "linkedom"
-import { Marked } from "marked"
-import moreLists from "marked-more-lists"
-import { otherAttributes, outcome, schemaRecord, writeFixture } from "./fixture.mjs"
+import { otherAttributes } from "./fixture.mjs"
+import { body, doc, domInputs, markedInputs, paragraph, record, text, unique, withParsed } from "./tiptap.mjs"
 
 const Code = Mark.create({
   name: "code",
@@ -62,57 +52,17 @@ const Style = Extension.create({
     },
   ],
 })
-const configurations = {
-  tables: tables(),
-  attributes: tables(
-    Table.configure({ HTMLAttributes: { class: "t", style: "color: red; min-width: 1px" } }),
-    TableRow.configure({ HTMLAttributes: { class: "r" } }),
-    TableCell.configure({ HTMLAttributes: { class: "c", style: "padding: 1px" } }),
-    TableHeader.configure({ HTMLAttributes: { class: "h", "data-x": "y" } }),
-  ),
-  attributeValues: tables(
-    Table.configure({ HTMLAttributes: otherAttributes }),
-    TableRow.configure({ HTMLAttributes: otherAttributes }),
-    TableCell.configure({ HTMLAttributes: otherAttributes }),
-    TableHeader.configure({ HTMLAttributes: otherAttributes }),
-  ),
-  wrapper: tables(Table.configure({ renderWrapper: true })),
-  minWidth: tables(Table.configure({ cellMinWidth: 12.5 })),
-  zero: tables(Table.configure({ cellMinWidth: 0 })),
-  resizable: tables(
-    Table.configure({ resizable: true, handleWidth: 10, lastColumnResizable: false, allowTableNodeSelection: true, View: null }),
-  ),
-  global: [...tables(), Style],
-  both: [...tables(Table.configure({ HTMLAttributes: { class: "b", style: "color: red; width: 9px" } })), Style],
-  kit: [...inline, TableKit.configure({ table: { cellMinWidth: 30 } })],
-  partial: [Document, Paragraph, Text, TableRow, TableCell, TableHeader],
-}
-const converters = Object.fromEntries(
-  Object.entries(configurations).map(([name, extensions]) => {
-    const marked = new Marked()
-    marked.use(moreLists())
-    const schema = getSchema(extensions)
-    const parser = DOMParser.fromSchema(schema)
-    const serializer = DOMSerializer.fromSchema(schema)
-    return [name, { manager: new MarkdownManager({ extensions, marked }), schema, parser, serializer }]
-  }),
-)
-const { document } = parseHTML("<!DOCTYPE html><html><body></body></html>")
-const fixture = name => JSON.parse(readFileSync(new URL(`../fixtures/${name}.json`, import.meta.url), "utf8"))
-const unique = values => [...new Set(values)]
-const body = html => parseHTML(`<!DOCTYPE html><html><body>${html}</body></html>`).document.body
-
-const schemas = Object.entries(converters).map(([name, { schema }]) => ({ extensions: name, ...schemaRecord(schema) }))
 
 // A table `depth` deep in a cell of a table, around a paragraph's text.
 const nestedTable = depth => {
-  let node = { type: "paragraph", content: [{ type: "text", text: "x" }] }
+  let node = paragraph(text("x"))
   for (let level = 0; level < depth; level++) {
     node = { type: "table", content: [{ type: "tableRow", content: [{ type: "tableCell", content: [node] }] }] }
   }
-  return { type: "doc", content: [node] }
+  return doc(node)
 }
-// Nesting one to three deep, which tests/tables.rs folds into the conversions of any depth.
+// Nesting one to three deep, which tests/recorded/tables.rs folds into the conversions of any
+// depth.
 const depths = [1, 2, 3]
 const deepMarkdown = depths.flatMap(depth => [
   "> ".repeat(depth) + "| a |\n" + "> ".repeat(depth) + "| - |",
@@ -182,35 +132,7 @@ const markdownTables = [
   "x <td>y</td> z",
   "    | a |\n    | - |",
 ]
-const parsesMarkdown = [
-  ...unique([
-    "",
-    "plain",
-    ...markdownTables,
-    ...fixture("marked").lexed.map(record => record.input),
-    ...deepMarkdown,
-  ]).map(markdown => ["tables", markdown]),
-  ...["| a | b |\n| - | - |\n| 1 | 2 |", "| `a|b` |\n| - |", "a|b|c\n-|-"].flatMap(markdown =>
-    ["kit", "partial"].map(name => [name, markdown]),
-  ),
-].map(([name, markdown]) => ({
-  extensions: name,
-  markdown,
-  ...outcome(() => ({ doc: converters[name].manager.parse(markdown) })),
-}))
 
-// The inputs html5ever builds another tree from than the fork's parse5 does, as in
-// record-tiptap.mjs.
-const otherTrees = new Set([
-  "<select><option>a<b>x</b></option></select>",
-  "<select><option>a<p>b</p></select>",
-  "<p><span>a<isindex>b</span>c</p>",
-  "<math><mi><![CDATA[x<y]]></mi></math>",
-  "<math><mi><![CDATA[x]]></mi></math>",
-  "<svg><desc><![CDATA[x]]></desc></svg>",
-  "<svg><foreignObject><![CDATA[x]]></foreignObject></svg>",
-  "<math><annotation-xml encoding=text/html><![CDATA[x]]></annotation-xml></math>",
-])
 const row = (...cells) => `<tr>${cells.join("")}</tr>`
 const table = (...rows) => `<table>${rows.join("")}</table>`
 const htmlTables = [
@@ -274,45 +196,7 @@ const htmlTables = [
   "<template><table><tr><td>t</td></tr></table></template><p>after</p>",
   "<figure><table><tr><td>fig</td></tr></table></figure>",
 ]
-const parsesHTML = [
-  ...unique([
-    "<p>plain</p>",
-    ...htmlTables,
-    ...fixture("dom")
-      .parses.map(record => record.html)
-      .filter(html => !otherTrees.has(html)),
-    ...deepHTML,
-  ]).map(html => ["tables", html]),
-  ...[
-    table(row('<td style="color: red; text-align: center">a</td>', '<th style="padding: 1px">b</th>')),
-    '<table style="width: 10px"><tr><td>a</td></tr></table>',
-    table(row('<td style="">a</td>')),
-  ].map(html => ["global", html]),
-  ...[table(row("<td>a</td>", "<th>b</th>")), "<table></table>"].map(html => ["kit", html]),
-  ...[table(row("<td>a</td>", "<th></th>")), "<tr><td>x</td></tr>", "<p>p</p>"].map(html => ["partial", html]),
-].map(([name, html]) => ({
-  extensions: name,
-  html,
-  ...outcome(() => ({ doc: converters[name].parser.parse(body(html)).toJSON() })),
-}))
 
-const queries = unique(htmlTables).map(html => {
-  const tables = [...body(html).querySelectorAll("table")]
-  return {
-    html,
-    tables: tables.map(table => [...table.querySelectorAll("colgroup > col")].map(col => col.getAttribute("width"))),
-  }
-})
-
-// The documents the parses of each configuration make, each read from its JSON text, as the tests
-// read it.
-const parsed = name =>
-  [...parsesMarkdown, ...parsesHTML].filter(record => record.extensions === name && record.doc).map(record => record.doc)
-const documents = (name, docs) =>
-  unique([...docs, ...parsed(name)].map(doc => JSON.stringify(doc))).map(text => [name, JSON.parse(text)])
-
-const text = (text, ...marks) => ({ type: "text", text, ...(marks.length ? { marks: marks.map(type => ({ type })) } : {}) })
-const paragraph = (...content) => ({ type: "paragraph", content })
 const cellOf = type => (attrs, ...content) => ({
   type,
   ...(attrs ? { attrs } : {}),
@@ -321,9 +205,14 @@ const cellOf = type => (attrs, ...content) => ({
 const cell = cellOf("tableCell")
 const header = cellOf("tableHeader")
 const tableRow = (...cells) => ({ type: "tableRow", content: cells })
-const doc = (...content) => ({ type: "doc", content })
 const tableOf = (...rows) => doc({ type: "table", content: rows })
 const firstRow = (...cells) => tableOf(tableRow(...cells), tableRow(cell()))
+// A table with a header row, and one whose cells have widths.
+const headed = tableOf(
+  tableRow(header(null, paragraph(text("h"))), header()),
+  tableRow(cell(null, paragraph(text("a"))), cell()),
+)
+const sized = firstRow(cell({ colwidth: [100] }), cell({ colwidth: [50] }))
 // Every way a cell's colspan and colwidth read, JSON's every type among them.
 const widths = [
   [100],
@@ -353,8 +242,8 @@ const widths = [
 const spans = [1, 2, 0, -1, 2.5, "2", "abc", "", true, false, null, [2], [1, 2], {}, { toString: 1 }]
 const htmlDocs = [
   doc({ type: "paragraph" }),
-  tableOf(tableRow(header(null, paragraph(text("h"))), header()), tableRow(cell(null, paragraph(text("a"))), cell())),
-  firstRow(cell({ colwidth: [100] }), cell({ colwidth: [50] })),
+  headed,
+  sized,
   firstRow(cell({ colwidth: [100] }), cell()),
   firstRow(cell({ colspan: 2, colwidth: [100, 200] }), cell({ colwidth: [30] })),
   firstRow(cell({ colspan: 2, colwidth: [100] })),
@@ -362,9 +251,7 @@ const htmlDocs = [
   ...widths.map(colwidth => firstRow(cell({ colwidth }), cell({ colwidth: [40] }))),
   ...spans.map(colspan => firstRow(cell({ colspan, colwidth: [20, 30, 40] }), cell({ colwidth: [5] }))),
   tableOf(tableRow(cell({ colwidth: [100] })), tableRow(cell(), cell({ colwidth: [999] }))),
-  ...["left", "right", "center", "justify", "", null, 1, true].map(align =>
-    firstRow(cell({ align }), header({ align })),
-  ),
+  ...["left", "right", "center", "justify", "", null, 1, true].map(align => firstRow(cell({ align }), header({ align }))),
   firstRow(cell({ rowspan: 2, colspan: 1 }), cell({ rowspan: "3" })),
   tableOf(tableRow()),
   tableOf(tableRow(), tableRow(cell())),
@@ -378,9 +265,11 @@ const htmlDocs = [
   doc(paragraph(text("before")), tableOf(tableRow(cell())).content[0], paragraph(text("after"))),
   ...deepDocs,
 ]
+// A table of headers holding what Markdown has to fit on one line.
+const longerHeader = tableOf(tableRow(header(), header(null, paragraph(text("longer header")))), tableRow(cell(), cell()))
 // Cells holding what Markdown has to fit on one line, and tables of every shape.
 const markdownDocs = [
-  tableOf(tableRow(header(), header(null, paragraph(text("longer header")))), tableRow(cell(), cell())),
+  longerHeader,
   tableOf(tableRow(cell(), cell(null, paragraph(text("longer")))), tableRow(cell(), cell())),
   tableOf(tableRow(cell(), header()), tableRow(header(), cell())),
   tableOf(tableRow(cell()), tableRow(header(null, paragraph(text("late header"))))),
@@ -410,77 +299,105 @@ const markdownDocs = [
 ]
 // Tables that aren't of the schema's nodes, as the manager reads them.
 const malformedDocs = [
-  ...[
-    undefined,
-    null,
-    [],
-    "",
-    "abc",
-    0,
-    5,
-    true,
-    {},
-    { length: 0 },
-    [null],
-    [5],
-    ["row"],
-    [{}],
-    [{ content: null }],
-    [{ content: "abc" }],
-    [{ content: {} }],
-    [{ content: [] }],
-    [{ content: [null] }],
-    [{ content: [5] }],
-    [{ content: [{}] }],
-    [{ content: [{ content: "abc" }] }],
-    [{ content: [{ content: { type: "text", text: "obj" } }] }],
-    [{ content: [{ content: [text("t")] }] }],
-    [{ content: [{ content: [{ type: "paragraph", content: [text("a")] }, text("b")] }] }],
-    [{ content: [{ content: [5, null] }] }],
-    [{ content: [{ attrs: "left", content: [] }] }],
-    [{ content: [{ attrs: null, type: "tableHeader" }] }],
-    [{ content: [{ attrs: { align: "center" }, type: "tableHeader" }] }],
-  ].map(content => doc({ type: "table", ...(content === undefined ? {} : { content }) })),
+  undefined,
+  null,
+  [],
+  "",
+  "abc",
+  0,
+  5,
+  true,
+  {},
+  { length: 0 },
+  [null],
+  [5],
+  ["row"],
+  [{}],
+  [{ content: null }],
+  [{ content: "abc" }],
+  [{ content: {} }],
+  [{ content: [] }],
+  [{ content: [null] }],
+  [{ content: [5] }],
+  [{ content: [{}] }],
+  [{ content: [{ content: "abc" }] }],
+  [{ content: [{ content: { type: "text", text: "obj" } }] }],
+  [{ content: [{ content: [text("t")] }] }],
+  [{ content: [{ content: [{ type: "paragraph", content: [text("a")] }, text("b")] }] }],
+  [{ content: [{ content: [5, null] }] }],
+  [{ content: [{ attrs: "left", content: [] }] }],
+  [{ content: [{ attrs: null, type: "tableHeader" }] }],
+  [{ content: [{ attrs: { align: "center" }, type: "tableHeader" }] }],
+].map(content => doc({ type: "table", ...(content === undefined ? {} : { content }) }))
+// Tables and cells with an application's style.
+const styledHTML = [
+  table(row('<td style="color: red; text-align: center">a</td>', '<th style="padding: 1px">b</th>')),
+  '<table style="width: 10px"><tr><td>a</td></tr></table>',
+  table(row('<td style="">a</td>')),
 ]
-const serializesMarkdown = [
-  ...documents("tables", [...markdownDocs, ...malformedDocs, ...htmlDocs]),
-  ...documents("kit", [markdownDocs[0]]),
-  ...documents("partial", [markdownDocs[0]]),
-].map(([name, doc]) => ({ extensions: name, doc, ...outcome(() => ({ markdown: converters[name].manager.serialize(doc) })) }))
+const styledDocs = [
+  firstRow(cell({ style: "color: red" }), cell({ style: "text-align: left", align: "right" })),
+  firstRow(header({ style: "width: 5px; color: blue", colwidth: [80] })),
+  doc({ type: "table", attrs: { style: "width: 1px" }, content: [tableRow(cell({ colwidth: [80] }))] }),
+  doc({ type: "table", attrs: { style: "" }, content: [tableRow(cell({ colwidth: [80] }))] }),
+  doc({ type: "table", attrs: { style: 5 }, content: [tableRow(cell())] }),
+  doc({ type: "table", attrs: { style: "color: blue; min-width: 3px" }, content: [tableRow(cell())] }),
+]
 
-const serializesHTML = [
-  ...documents("tables", [...htmlDocs, ...markdownDocs]),
-  ...["attributes", "attributeValues", "wrapper", "minWidth", "zero", "resizable", "global"].flatMap(name =>
-    documents(name, htmlDocs),
-  ),
-  ...["global", "both"].flatMap(name =>
-    documents(name, [
-      firstRow(cell({ style: "color: red" }), cell({ style: "text-align: left", align: "right" })),
-      firstRow(header({ style: "width: 5px; color: blue", colwidth: [80] })),
-      doc({ type: "table", attrs: { style: "width: 1px" }, content: [tableRow(cell({ colwidth: [80] }))] }),
-      doc({ type: "table", attrs: { style: "" }, content: [tableRow(cell({ colwidth: [80] }))] }),
-      doc({ type: "table", attrs: { style: 5 }, content: [tableRow(cell())] }),
-      doc({ type: "table", attrs: { style: "color: blue; min-width: 3px" }, content: [tableRow(cell())] }),
-    ]),
-  ),
-  ...documents("kit", [htmlDocs[1], htmlDocs[2]]),
-  ...documents("partial", [doc(tableRow(cell(), header()))]),
-].map(([name, doc]) => ({
-  extensions: name,
-  doc,
-  ...outcome(() => {
-    const { schema, serializer } = converters[name]
-    const container = document.createElement("div")
-    serializer.serializeFragment(Node.fromJSON(schema, doc).content, { document }, container)
-    return { html: container.innerHTML }
-  }),
-}))
+// Table's options and HTMLAttributes, which reach only renderHTML.
+const rendering = extensions => ({ extensions, serializesHTML: htmlDocs })
 
-writeFixture("tiptap-tables", {
-  schemas,
-  parsesMarkdown,
-  serializesMarkdown,
-  parsesHTML,
-  serializesHTML,
-  queries,
-})
+record(
+  "tiptap-tables",
+  {
+    tables: {
+      extensions: tables(),
+      parsesMarkdown: ["", "plain", ...markdownTables, ...markedInputs(), ...deepMarkdown],
+      parsesHTML: ["<p>plain</p>", ...htmlTables, ...domInputs(), ...deepHTML],
+      serializesMarkdown: withParsed([...markdownDocs, ...malformedDocs, ...htmlDocs]),
+      serializesHTML: withParsed([...htmlDocs, ...markdownDocs]),
+    },
+    attributes: rendering(
+      tables(
+        Table.configure({ HTMLAttributes: { class: "t", style: "color: red; min-width: 1px" } }),
+        TableRow.configure({ HTMLAttributes: { class: "r" } }),
+        TableCell.configure({ HTMLAttributes: { class: "c", style: "padding: 1px" } }),
+        TableHeader.configure({ HTMLAttributes: { class: "h", "data-x": "y" } }),
+      ),
+    ),
+    attributeValues: rendering(
+      tables(
+        Table.configure({ HTMLAttributes: otherAttributes }),
+        TableRow.configure({ HTMLAttributes: otherAttributes }),
+        TableCell.configure({ HTMLAttributes: otherAttributes }),
+        TableHeader.configure({ HTMLAttributes: otherAttributes }),
+      ),
+    ),
+    wrapper: rendering(tables(Table.configure({ renderWrapper: true }))),
+    minWidth: rendering(tables(Table.configure({ cellMinWidth: 12.5 }))),
+    zero: rendering(tables(Table.configure({ cellMinWidth: 0 }))),
+    // The style reaches only the tables and cells that have one.
+    global: { extensions: [...tables(), Style], parsesHTML: styledHTML, serializesHTML: withParsed(styledDocs) },
+    both: {
+      extensions: [...tables(Table.configure({ HTMLAttributes: { class: "b", style: "color: red; width: 9px" } })), Style],
+      serializesHTML: styledDocs,
+    },
+    // The kit's minimum cell width reaches only renderHTML.
+    kit: { extensions: [...inline, TableKit.configure({ table: { cellMinWidth: 30 } })], serializesHTML: [headed, sized] },
+    partial: {
+      extensions: [Document, Paragraph, Text, TableRow, TableCell, TableHeader],
+      parsesMarkdown: ["| a | b |\n| - | - |\n| 1 | 2 |", "| `a|b` |\n| - |", "a|b|c\n-|-"],
+      parsesHTML: [table(row("<td>a</td>", "<th></th>")), "<tr><td>x</td></tr>", "<p>p</p>"],
+      serializesMarkdown: withParsed([longerHeader]),
+      serializesHTML: withParsed([doc(tableRow(cell(), header()))]),
+    },
+  },
+  {
+    queries: unique(htmlTables).map(html => ({
+      html,
+      tables: [...body(html).querySelectorAll("table")].map(table =>
+        [...table.querySelectorAll("colgroup > col")].map(col => col.getAttribute("width")),
+      ),
+    })),
+  },
+)
