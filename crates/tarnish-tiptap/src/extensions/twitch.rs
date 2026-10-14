@@ -3,6 +3,7 @@
 
 use std::sync::LazyLock;
 
+use crate::attributes::option_default;
 use crate::web_url::{WebUrl, with_search_params};
 use crate::{
     AttrValue, DomSpec, ExtensionAttribute, HtmlNode, NodeExtension, ParseHtml, SpecAttrs,
@@ -44,10 +45,7 @@ impl Default for TwitchOptions {
 pub fn twitch(options: TwitchOptions) -> NodeExtension {
     let parsed =
         |key: &'static str| move |element: &HtmlNode| parsed_attributes(element)?.get(key).cloned();
-    let time = match &options.time {
-        Some(time) => ExtensionAttribute::new("time", json!(time)),
-        None => ExtensionAttribute::undefined("time"),
-    };
+    let time = ExtensionAttribute::new("time", option_default(&options.time));
     let attributes = vec![
         ExtensionAttribute::new("src", Value::Null).parse_html(parsed("src")),
         ExtensionAttribute::new("width", options.width.clone())

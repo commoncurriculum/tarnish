@@ -63,6 +63,7 @@ pub use utilities::{
 
 pub use tarnish::Whitespace;
 pub use tarnish::dom::{AttrValue, GetAttrsResult, PreserveWhitespace, SpecAttrs};
+pub use tarnish::model::AttributeDefault;
 pub use tarnish_html::HtmlNode;
 
 /// A `DOMOutputSpec` that a `renderHTML` returns, borrowing from its node or mark.

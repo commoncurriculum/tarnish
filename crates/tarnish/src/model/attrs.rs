@@ -22,7 +22,7 @@ pub struct AttributeSpec {
     pub validate: Option<Validate>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub enum AttributeDefault {
     /// No default: nodes and marks must be given the attribute.
     #[default]
@@ -32,6 +32,12 @@ pub enum AttributeDefault {
     /// `hasMarkup` sees the name.
     Undefined,
     Value(Value),
+}
+
+impl From<Value> for AttributeDefault {
+    fn from(value: Value) -> Self {
+        AttributeDefault::Value(value)
+    }
 }
 
 #[derive(Clone)]

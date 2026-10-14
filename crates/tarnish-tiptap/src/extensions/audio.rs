@@ -3,6 +3,7 @@
 
 use std::sync::LazyLock;
 
+use crate::attributes::option_default;
 use crate::web_url::WebUrl;
 use crate::{
     AttrValue, DomSpec, ExtensionAttribute, NodeExtension, ParseHtml, SpecAttrs, merge_attributes,
@@ -47,10 +48,6 @@ impl Default for AudioOptions {
 }
 
 pub fn audio(options: AudioOptions) -> NodeExtension {
-    let optional = |name, value: &Option<String>| match value {
-        Some(value) => ExtensionAttribute::new(name, json!(value)),
-        None => ExtensionAttribute::undefined(name),
-    };
     let attributes = vec![
         ExtensionAttribute::new("src", Value::Null),
         ExtensionAttribute::new("controls", json!(options.controls)),
@@ -58,8 +55,8 @@ pub fn audio(options: AudioOptions) -> NodeExtension {
         ExtensionAttribute::new("loop", json!(options.r#loop)),
         ExtensionAttribute::new("muted", json!(options.muted)),
         ExtensionAttribute::new("preload", options.preload.clone()),
-        optional("controlslist", &options.controlslist),
-        optional("crossorigin", &options.crossorigin),
+        ExtensionAttribute::new("controlslist", option_default(&options.controlslist)),
+        ExtensionAttribute::new("crossorigin", option_default(&options.crossorigin)),
         ExtensionAttribute::new(
             "disableremoteplayback",
             json!(options.disable_remote_playback),

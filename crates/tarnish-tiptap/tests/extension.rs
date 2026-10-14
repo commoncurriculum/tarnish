@@ -10,7 +10,8 @@ use tarnish_markdown::marked_more_lists::more_lists;
 use tarnish_tiptap::extensions::{document::document, paragraph::paragraph, text::text};
 use tarnish_tiptap::markdown::{MarkdownManager, Parsed};
 use tarnish_tiptap::{
-    DomSpec, Extension, ExtensionAttribute, NodeExtension, ParseHtml, get_schema, html,
+    AttributeDefault, DomSpec, Extension, ExtensionAttribute, NodeExtension, ParseHtml, get_schema,
+    html,
 };
 
 /// A document of paragraphs and `figure`s.
@@ -50,7 +51,10 @@ fn updates_an_attribute_where_it_is() {
         .collect();
     assert_eq!(
         attributes,
-        [("a", Some(json!(3)), false), ("b", Some(json!(2)), true)]
+        [
+            ("a", AttributeDefault::Value(json!(3)), false),
+            ("b", AttributeDefault::Value(json!(2)), true)
+        ]
     );
 }
 
@@ -62,7 +66,12 @@ fn updates_only_an_attribute_it_has() {
 
 #[test]
 fn an_attribute_without_a_default_is_required() -> tarnish::Result<()> {
-    for (default, required) in [(None, true), (Some(Value::Null), false)] {
+    let defaults = [
+        (AttributeDefault::Required, true),
+        (AttributeDefault::Undefined, false),
+        (AttributeDefault::Value(Value::Null), false),
+    ];
+    for (default, required) in defaults {
         let figure = figure().add_attributes(vec![ExtensionAttribute::new("src", default)]);
         let schema = get_schema(&with(figure))?.schema;
         let figure = schema.node_type("figure").expect("the figure type");

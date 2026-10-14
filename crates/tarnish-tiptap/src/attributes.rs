@@ -5,6 +5,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use tarnish::chunk::ValueRef;
+use tarnish::model::AttributeDefault;
 use tarnish_html::HtmlNode;
 use tarnish_js::Error;
 use tarnish_js::json::Value;
@@ -37,39 +38,29 @@ impl<'a> Rendered<'a> {
 #[derive(Clone)]
 pub struct ExtensionAttribute {
     pub name: &'static str,
-    /// `None` for a required attribute.
-    pub default: Option<Value>,
-    /// `default: undefined`, which leaves the attribute out of a node or mark not given it.
-    pub undefined: bool,
+    /// `default`: a value, `undefined`, which leaves the attribute out of a node or mark not
+    /// given it, or none, which makes it required.
+    pub default: AttributeDefault,
     pub rendered: bool,
     pub render_html: Option<RenderAttribute>,
     pub parse_html: Option<ParseAttribute>,
 }
 
 impl ExtensionAttribute {
-    /// `{ default }`, or a required attribute for `None`.
-    pub fn new(name: &'static str, default: impl Into<Option<Value>>) -> Self {
+    /// `{ default }`, of a value, [`AttributeDefault::Undefined`] or
+    /// [`AttributeDefault::Required`].
+    pub fn new(name: &'static str, default: impl Into<AttributeDefault>) -> Self {
         ExtensionAttribute {
             name,
             default: default.into(),
-            undefined: false,
             rendered: true,
             render_html: None,
             parse_html: None,
         }
     }
 
-    /// `{ default: undefined }`.
-    pub fn undefined(name: &'static str) -> Self {
-        ExtensionAttribute {
-            undefined: true,
-            ..ExtensionAttribute::new(name, None)
-        }
-    }
-
-    pub fn default(mut self, default: impl Into<Option<Value>>) -> Self {
+    pub fn default(mut self, default: impl Into<AttributeDefault>) -> Self {
         self.default = default.into();
-        self.undefined = false;
         self
     }
 
@@ -95,6 +86,14 @@ impl ExtensionAttribute {
     ) -> Self {
         self.parse_html = Some(Arc::new(parse));
         self
+    }
+}
+
+/// `default: this.options[name]` of an option that is `undefined` where it's `None`.
+pub(crate) fn option_default(option: &Option<String>) -> AttributeDefault {
+    match option {
+        Some(value) => Value::String(value.clone()).into(),
+        None => AttributeDefault::Undefined,
     }
 }
 
@@ -150,7 +149,11 @@ pub fn get_rendered_attributes<'a>(
             // An attribute left `undefined` gives the element nothing.
             None => match attrs.get(attribute.name) {
                 Some(value) => rendered.merge(attribute.name, value)?,
-                None => debug_assert!(attribute.undefined, "{} is left out", attribute.name),
+                None => debug_assert!(
+                    matches!(attribute.default, AttributeDefault::Undefined),
+                    "{} is left out",
+                    attribute.name
+                ),
             },
         }
     }

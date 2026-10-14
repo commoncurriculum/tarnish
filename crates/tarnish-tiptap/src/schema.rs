@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use tarnish::dom::{DomParser, DomSerializer, MarkToDom, NodeToDom, ParseRule};
-use tarnish::model::{AttributeDefault, AttributeSpec, MarkSpec, NodeSpec, Schema, SchemaSpec};
+use tarnish::model::{AttributeSpec, MarkSpec, NodeSpec, Schema, SchemaSpec};
 use tarnish_html::HtmlNode;
 use tarnish_js::Result;
 use tarnish_js::json::Map;
@@ -180,13 +180,8 @@ fn sort(extensions: &mut [&Extension]) {
 fn attribute_specs(attributes: &[ExtensionAttribute]) -> Vec<(String, AttributeSpec)> {
     let mut specs: Vec<(String, AttributeSpec)> = Vec::with_capacity(attributes.len());
     for attribute in attributes {
-        let default = match &attribute.default {
-            _ if attribute.undefined => AttributeDefault::Undefined,
-            Some(value) => AttributeDefault::Value(value.clone()),
-            None => AttributeDefault::Required,
-        };
         let spec = AttributeSpec {
-            default,
+            default: attribute.default.clone(),
             ..AttributeSpec::default()
         };
         match specs.iter_mut().find(|(name, _)| name == attribute.name) {
