@@ -12,10 +12,10 @@
 // A record is of Tiptap's own extensions, or names the others it's of in `extensions`: `colors`,
 // with Highlight's colors and Color's, or `code`, an application's code mark and code block, and
 // a figure whose attribute renders under a name it makes. Tiptap's own extensions with an option
-// set record the same inputs as they do: `htmlAttributes` and `htmlAttributeValues`, each with
-// HTMLAttributes and an application's attribute that renders some of the same ones; `levels` and
-// `noLevels`, with Heading's levels; `multicolor`, with Highlight's; and `inline` and `base64`,
-// with Image's.
+// set record their schemas and the HTML conversions of the inputs that hold what the option
+// changes: `htmlAttributes` and `htmlAttributeValues`, each with HTMLAttributes and an
+// application's attribute that renders some of the same ones; `levels` and `noLevels`, with
+// Heading's levels; `multicolor`, with Highlight's; and `inline` and `base64`, with Image's.
 import { readFileSync } from "node:fs"
 import { Extension, Mark, Node as TiptapNode, getSchema } from "@tiptap/core"
 import { Bold } from "@tiptap/extension-bold"
@@ -200,16 +200,25 @@ const deepMarkdown = depths.flatMap(depth => [
 const deepHTML = depths.flatMap(depth => ["div", "p", "b", "span style=color:red"].map(tag => `<${tag}>`.repeat(depth) + "x"))
 const deepDocs = depths.flatMap(depth => ["doc", "paragraph", "bold", "italic", "strike"].map(type => nested(type, depth)))
 
-// The configurations of Tiptap's own extensions with an option set, which record the inputs of
-// Tiptap's own, and `added` that the options change the conversions of, after the others' records.
-// Tiptap's own don't record `added`: harness/record-tiptap-inline.mjs reads their documents.
-const optioned = Object.keys(configurations).filter(name => !["own", "colors", "code"].includes(name))
-const everyOwn = (inputs, added = []) => [
-  inputs.map(input => ["own", input]),
-  optioned.flatMap(name => unique([...inputs, ...added]).map(input => [name, input])),
-]
-const [ownMarkdown, optionedMarkdown] = everyOwn(
-  unique([
+// The configurations with an option set, each with the HTML inputs and the type of the documents it
+// records: Tiptap's own hand-picked ones where `picked`. None records Markdown, since
+// MarkdownManager reads the schema only for HTML, which it keeps as text without a `window`.
+const optioned = {
+  // HTMLAttributes reach only renderHTML, of each type the hand-picked inputs hold.
+  htmlAttributes: { picked: true },
+  htmlAttributeValues: { picked: true },
+  // Levels reach Heading's parse rules and renderHTML; its Markdown hooks read a heading's level.
+  levels: { html: /<h[1-6]/i, type: "heading" },
+  noLevels: { html: /<h[1-6]/i, type: "heading" },
+  // multicolor adds the color a mark parses and renders, which Highlight's Markdown hooks never read.
+  multicolor: { html: /<mark/i, type: "highlight" },
+  // inline makes an image inline content; Image's and Paragraph's Markdown hooks read no schema.
+  inline: { html: /<img/i, type: "image" },
+  // allowBase64 reaches only Image's parse rule.
+  base64: { html: /<img/i, type: "image" },
+}
+const parsesMarkdown = [
+  ...unique([
     "",
     "plain",
     "**bold** *italic* ~~strike~~ `code`",
@@ -222,16 +231,12 @@ const [ownMarkdown, optionedMarkdown] = everyOwn(
     '![alt](a.png "title")\n\ntext ![](b.png) more',
     ...fixture("marked").lexed.map(record => record.input),
     ...deepMarkdown,
-  ]),
-)
-const parsesMarkdown = [
-  ...ownMarkdown,
+  ]).map(markdown => ["own", markdown]),
   ...["==high==", "==a **b** c==", "a ==b== ++==c==++", '<span style="color: red">x</span>'].map(markdown => [
     "colors",
     markdown,
   ]),
   ...["`*a* <b>` \\*c\\*\n\n```\n*d* <e>\n```", "`code` *em*", "```\nblock\n```"].map(markdown => ["code", markdown]),
-  ...optionedMarkdown,
 ].map(([name, markdown]) => ({
   ...named(name),
   markdown,
@@ -266,32 +271,41 @@ const marks = [
   '<p><mark style="background-color: red; background-color: blue">x</mark></p>',
   '<p><mark data-color="red"><span style="color: blue">x</span></mark></p>',
 ]
-const [ownHTML, optionedHTML] = everyOwn(
-  unique([
-    "<p>plain</p>",
-    "<p><strong>b</strong><b>b</b><em>i</em><i>i</i><s>s</s><del>d</del><u>u</u><sub>x</sub><sup>y</sup><mark>h</mark></p>",
-    "<p><span style='color: red'>c</span><span>none</span><br>z</p>",
-    "<p><b style='font-weight: normal'>not bold</b><i style='font-style: normal'>not italic</i></p>",
-    "<p><span style='font-weight: bold; font-style: italic; text-decoration: underline line-through'>styled</span></p>",
-    "<h1>heading</h1><ul><li>item</li></ul>",
-    "<h3>three</h3><h6>six</h6>",
-    "<img src='a.png' alt='A' title='T' width='10' height='5'><img alt='no src'><img src='data:image/png;base64,AA'>",
-    "loose text",
-    ...fixture("dom")
-      .parses.map(record => record.html)
-      .filter(html => !otherTrees.has(html)),
-    ...deepHTML,
-  ]),
-  [
-    "<h1>1</h1><h2>2</h2><h3>3</h3><h4>4</h4><h5>5</h5><h6>6</h6>",
-    '<p>a<img src="a.png">b</p>',
-    '<p><img src="data:image/png;base64,AA" alt="x">c</p>',
-    '<img src="DATA:image/png;base64,AA"><img src=" data:x"><img src="">',
-    ...marks,
-  ],
-)
+const pickedHTML = [
+  "<p>plain</p>",
+  "<p><strong>b</strong><b>b</b><em>i</em><i>i</i><s>s</s><del>d</del><u>u</u><sub>x</sub><sup>y</sup><mark>h</mark></p>",
+  "<p><span style='color: red'>c</span><span>none</span><br>z</p>",
+  "<p><b style='font-weight: normal'>not bold</b><i style='font-style: normal'>not italic</i></p>",
+  "<p><span style='font-weight: bold; font-style: italic; text-decoration: underline line-through'>styled</span></p>",
+  "<h1>heading</h1><ul><li>item</li></ul>",
+  "<h3>three</h3><h6>six</h6>",
+  "<img src='a.png' alt='A' title='T' width='10' height='5'><img alt='no src'><img src='data:image/png;base64,AA'>",
+  "loose text",
+]
+const ownHTML = unique([
+  ...pickedHTML,
+  ...fixture("dom")
+    .parses.map(record => record.html)
+    .filter(html => !otherTrees.has(html)),
+  ...deepHTML,
+])
+// The HTML inputs the options change the parses of, which Tiptap's own don't record:
+// harness/record-tiptap-inline.mjs reads the documents of theirs.
+const optionHTML = [
+  "<h1>1</h1><h2>2</h2><h3>3</h3><h4>4</h4><h5>5</h5><h6>6</h6>",
+  '<p>a<img src="a.png">b</p>',
+  '<p><img src="data:image/png;base64,AA" alt="x">c</p>',
+  '<img src="DATA:image/png;base64,AA"><img src=" data:x"><img src="">',
+  ...marks,
+]
+const optionedHTML = Object.entries(optioned).flatMap(([name, { picked, html }]) => {
+  const inputs = picked
+    ? unique([...pickedHTML, ...deepHTML, ...optionHTML])
+    : unique([...ownHTML, ...optionHTML]).filter(input => html.test(input))
+  return inputs.map(input => [name, input])
+})
 const parsesHTML = [
-  ...ownHTML,
+  ...ownHTML.map(html => ["own", html]),
   ...[
     ...marks,
     '<p><span style="color: red">x</span></p>',
@@ -425,9 +439,8 @@ const codeDocs = [
 
 const text = node => ({ type: "doc", content: [{ type: "paragraph", content: [{ type: "text", ...node }] }] })
 const values = [1, 0, 1.5, "x", 'a"b', "", true, false, null, {}, [], [1], { some: 1 }]
-const added = name => (name === "own" ? [] : optionDocs)
-const markdownDocs = name => [
-  ...documents(name, [...docs, ...deepDocs, ...added(name)]),
+const serializesMarkdown = [
+  ...documents("own", [...docs, ...deepDocs]),
   ...values
     .flatMap(value => [
       text({ text: "a", marks: { some: value } }),
@@ -435,28 +448,27 @@ const markdownDocs = name => [
       text({ text: "a", marks: [{ type: { localeCompare: value } }, { type: "unknown" }] }),
       text({ text: "a", marks: [{ type: "unknown" }, { type: { localeCompare: value } }] }),
     ])
-    .map(doc => [name, doc]),
+    .map(doc => ["own", doc]),
   ...[text({ text: "a", marks: { other: 1 } }), text({ text: { other: 1 } }), text({ text: [1] }), text({ text: 5 })].map(
-    doc => [name, doc],
+    doc => ["own", doc],
   ),
-]
-const serializesMarkdown = [
-  ...markdownDocs("own"),
   ...documents("colors", colorDocs),
   ...documents("code", codeDocs),
-  ...optioned.flatMap(markdownDocs),
 ].map(([name, doc]) => ({ ...named(name), doc, ...outcome(() => ({ markdown: converters[name].manager.serialize(doc) })) }))
 
-const htmlDocs = name => [
-  ...documents(name, [...docs, ...depths.map(depth => nested("paragraph", depth)), ...added(name)]),
-  // `doc` has no toDOM, so the serializer has nothing to call for a doc inside the doc.
-  [name, { type: "doc", content: [{ type: "doc" }] }],
-]
+const paragraphs = depths.map(depth => nested("paragraph", depth))
+// The documents of a configuration with an option set that hold its type.
+const optionedDocs = ([name, { type }]) =>
+  documents(name, [...docs, ...paragraphs, ...optionDocs]).filter(
+    ([, doc]) => !type || JSON.stringify(doc).includes(`"type":"${type}"`),
+  )
 const serializesHTML = [
-  ...htmlDocs("own"),
+  ...documents("own", [...docs, ...paragraphs]),
+  // `doc` has no toDOM, so the serializer has nothing to call for a doc inside the doc.
+  ["own", { type: "doc", content: [{ type: "doc" }] }],
   ...documents("colors", colorDocs),
   ...documents("code", codeDocs),
-  ...optioned.flatMap(htmlDocs),
+  ...Object.entries(optioned).flatMap(optionedDocs),
 ].map(([name, doc]) => ({
   ...named(name),
   doc,
