@@ -65,6 +65,7 @@ pub fn get_schema(extensions: &[Extension]) -> Result<TiptapSchema> {
                         linebreak_replacement: node.linebreak_replacement,
                         code: node.code,
                         isolating: node.isolating,
+                        defining: node.defining,
                         attrs,
                         extra: extra_node_fields(&extensions, extension),
                         ..NodeSpec::default()

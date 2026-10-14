@@ -75,6 +75,7 @@ pub struct NodeConfig {
     /// `code`: the node holds code, whose text Markdown keeps as it is.
     pub code: bool,
     pub isolating: bool,
+    pub defining: bool,
     pub render_html: Option<RenderNode>,
 }
 
@@ -98,6 +99,8 @@ pub(crate) struct Markdown {
     pub render: Option<RenderMarkdown>,
     /// `markdownOptions.htmlReopen`: the HTML that reopens the mark where Markdown can't.
     pub html_reopen: Option<(&'static str, &'static str)>,
+    /// `markdownOptions.indentsContent`: the node's children render a level deeper.
+    pub indents_content: bool,
 }
 
 impl<K: Default> Extension<K> {
@@ -268,6 +271,12 @@ impl<K> Extension<K> {
         self.markdown.html_reopen = Some((open, close));
         self
     }
+
+    /// `markdownOptions: { indentsContent: true }`.
+    pub fn indents_content(mut self) -> Self {
+        self.markdown.indents_content = true;
+        self
+    }
 }
 
 impl NodeExtension {
@@ -304,6 +313,11 @@ impl NodeExtension {
 
     pub fn isolating(mut self) -> Self {
         self.kind.isolating = true;
+        self
+    }
+
+    pub fn defining(mut self) -> Self {
+        self.kind.defining = true;
         self
     }
 

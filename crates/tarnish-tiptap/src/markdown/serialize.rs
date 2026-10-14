@@ -40,6 +40,8 @@ struct NodeHelpers<'a> {
     manager: &'a MarkdownManager,
     node: &'a Value,
     index: usize,
+    /// The level the node's children render at.
+    child_level: usize,
 }
 
 impl RenderHelpers for NodeHelpers<'_> {
@@ -51,12 +53,25 @@ impl RenderHelpers for NodeHelpers<'_> {
                 .unwrap_or(nodes),
         };
         self.manager
-            .render_nodes(nodes, self.node, separator, self.index)
+            .render_nodes(nodes, self.node, separator, self.index, self.child_level)
     }
 
     fn render_array(&self, nodes: &[Value], separator: &str) -> Result<String, Error> {
+        self.manager.render_nodes_with_mark_boundaries(
+            nodes,
+            self.node,
+            separator,
+            self.child_level,
+        )
+    }
+
+    fn render_child(&self, node: &Value, index: usize) -> Result<String, Error> {
         self.manager
-            .render_nodes_with_mark_boundaries(nodes, self.node, separator)
+            .render_node_to_markdown(node, self.node, index, self.child_level)
+    }
+
+    fn indent(&self, content: &str) -> String {
+        [self.manager.indent_string.as_str(), content].concat()
     }
 }
 
@@ -72,7 +87,18 @@ impl RenderHelpers for MarkHelpers {
     fn render_array(&self, _: &[Value], _: &str) -> Result<String, Error> {
         Ok(PLACEHOLDER.to_string())
     }
+
+    fn render_child(&self, _: &Value, _: usize) -> Result<String, Error> {
+        Ok(PLACEHOLDER.to_string())
+    }
+
+    fn indent(&self, content: &str) -> String {
+        content.to_string()
+    }
 }
+
+/// The `parentType` a mark renders with.
+static TEXT: LazyLock<Value> = LazyLock::new(|| json!("text"));
 
 impl MarkdownManager {
     /// `markdownManager.serialize(doc)`.
@@ -80,7 +106,7 @@ impl MarkdownManager {
         if !js::truthy(Some(doc)) {
             return Ok(String::new());
         }
-        let result = self.render_nodes(doc, doc, "", 0)?;
+        let result = self.render_nodes(doc, doc, "", 0, 0)?;
         Ok(if is_empty_output(&result) {
             String::new()
         } else {
@@ -88,34 +114,63 @@ impl MarkdownManager {
         })
     }
 
-    /// `renderNodes(nodeOrNodes, parentNode, separator, index)`.
+    /// `renderNodes(nodeOrNodes, parentNode, separator, index, level)`.
     fn render_nodes(
         &self,
         nodes: &Value,
         parent: &Value,
         separator: &str,
         index: usize,
+        level: usize,
     ) -> Result<String, Error> {
         match nodes {
-            Value::Array(nodes) => self.render_nodes_with_mark_boundaries(nodes, parent, separator),
+            Value::Array(nodes) => {
+                self.render_nodes_with_mark_boundaries(nodes, parent, separator, level)
+            }
             _ if js::truthy(value::get(Some(nodes), "type")?) => {
-                self.render_node(nodes, parent, index)
+                self.render_node(nodes, parent, index, level)
             }
             _ => Ok(String::new()),
         }
     }
 
+    /// `renderNodeToMarkdown(node, parentNode, index, level)`.
+    fn render_node_to_markdown(
+        &self,
+        node: &Value,
+        parent: &Value,
+        index: usize,
+        level: usize,
+    ) -> Result<String, Error> {
+        let kind = value::get(Some(node), "type")?;
+        if kind.is_some_and(|kind| kind == "text") {
+            return self.encode_text_for_markdown(node, parent);
+        }
+        if !js::truthy(kind) {
+            return Ok(String::new());
+        }
+        self.render_node(node, parent, index, level)
+    }
+
     /// `renderNodeToMarkdown`, for a node whose `type` the caller has read.
-    fn render_node(&self, node: &Value, parent: &Value, index: usize) -> Result<String, Error> {
+    fn render_node(
+        &self,
+        node: &Value,
+        parent: &Value,
+        index: usize,
+        level: usize,
+    ) -> Result<String, Error> {
         let kind = value::optional(Some(node), "type");
         if kind.is_some_and(|kind| kind == "text") {
             return self.encode_text_for_markdown(node, parent);
         }
-        let Some(render) = kind
+        let Some(spec) = kind
             .and_then(Value::as_str)
             .and_then(|kind| self.handler_for_token(kind))
-            .and_then(|spec| spec.render.as_ref())
         else {
+            return Ok(String::new());
+        };
+        let Some(render) = spec.render.as_ref() else {
             return Ok(String::new());
         };
         let previous_node = match value::optional(Some(parent), "content") {
@@ -126,8 +181,16 @@ impl MarkdownManager {
             manager: self,
             node,
             index,
+            child_level: level + usize::from(spec.indents_content),
         };
-        stack::grow(|| render(node, &helpers, &RenderContext { previous_node }))
+        let context = RenderContext {
+            index,
+            level,
+            parent_type: value::optional(Some(parent), "type"),
+            previous_node,
+            parent_attrs: value::optional(Some(parent), "attrs"),
+        };
+        stack::grow(|| render(node, &helpers, &context))
     }
 
     /// `renderNodesWithMarkBoundaries`.
@@ -136,6 +199,7 @@ impl MarkdownManager {
         nodes: &[Value],
         parent: &Value,
         separator: &str,
+        level: usize,
     ) -> Result<String, Error> {
         let mut result = Vec::with_capacity(nodes.len());
         let mut active_marks = Marks::default();
@@ -170,7 +234,7 @@ impl MarkdownManager {
                     self.mark_markdown(Side::Closing, kind, Some(mark), mode)
                 })?;
                 opening_modes.clear();
-                let content = self.render_node(node, parent, i)?;
+                let content = self.render_node(node, parent, i, level)?;
                 let after = if kind.is_some_and(|kind| kind == "hardBreak") {
                     String::new()
                 } else {
@@ -388,7 +452,11 @@ impl MarkdownManager {
             "content": [{ "type": "text", "text": PLACEHOLDER }],
         });
         let context = RenderContext {
+            index: 0,
+            level: 0,
+            parent_type: Some(&TEXT),
             previous_node: None,
+            parent_attrs: None,
         };
         let rendered = render(&node, &MarkHelpers, &context).map_err(|error| {
             Error::Other(match side {

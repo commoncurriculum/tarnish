@@ -13,7 +13,7 @@ use tarnish_js::json::{Map, Value, json};
 use tarnish_js::regexp::RegExp;
 use tarnish_js::units::Units;
 use tarnish_js::{self as js, Error, utf16};
-use tarnish_markdown::marked::{Lexer, Token};
+use tarnish_markdown::marked::{Lexer, List, Token, TokenData, Tokens};
 
 impl MarkdownManager {
     /// `markdownManager.parse(markdown)`.
@@ -41,6 +41,29 @@ static OPENING_TAG: LazyLock<RegExp> =
     LazyLock::new(|| RegExp::new(r"^<[\s]*([\w-]+)(\s|>|\/|$)", "i"));
 static SELF_CLOSING: LazyLock<RegExp> = LazyLock::new(|| RegExp::new(r"\/>$", ""));
 static REGEX_SPECIAL: LazyLock<RegExp> = LazyLock::new(|| RegExp::new(r"[.*+?^${}()|[\]\\]", "g"));
+static TASK_ITEM: LazyLock<RegExp> =
+    LazyLock::new(|| RegExp::new(r"^(\s*)[-+*]\s+\[([ xX])\]\s+", ""));
+static FIRST_LINE: LazyLock<RegExp> =
+    LazyLock::new(|| RegExp::new(r"^\s*[-+*]\s+\[([ xX])\]\s+(.*)$", ""));
+
+/// `item.raw || item.text || ''`.
+fn item_source(item: &Token) -> &[u16] {
+    match (&item.raw, &item.text) {
+        (raw, _) if !raw.is_empty() => raw,
+        (_, Some(text)) => text,
+        _ => &[],
+    }
+}
+
+/// `isTaskItem(item)`: whether the item's source starts as a task's, and its `checked`.
+fn task_item_checked(item: &Token) -> Option<bool> {
+    let found = TASK_ITEM.exec(item_source(item))?;
+    Some(
+        found
+            .get(2)
+            .is_some_and(|mark| utf16::is(mark, "x") || utf16::is(mark, "X")),
+    )
+}
 
 impl ParseHelpers<'_> {
     /// `helpers.tokenizeInline(src)`.
@@ -51,6 +74,12 @@ impl ParseHelpers<'_> {
     /// `helpers.parseChildren(tokens)`.
     pub fn parse_children(&self, tokens: &[Token]) -> Result<Vec<Value>, Error> {
         self.parse_tokens(tokens, false)
+    }
+
+    /// `helpers.parseBlockChildren(tokens)`, which parses blank lines into empty paragraphs as
+    /// the document's are.
+    pub fn parse_block_children(&self, tokens: &[Token]) -> Result<Vec<Value>, Error> {
+        self.parse_tokens(tokens, true)
     }
 
     /// `helpers.createNode(type, attrs, content)`.
@@ -134,14 +163,109 @@ impl ParseHelpers<'_> {
         if token.kind.is_empty() {
             return Ok(Vec::new());
         }
-        // `parseListToken`, whose task list grouping needs a taskList extension, which none is.
         if token.kind == "list" {
-            return self.parse_token_with_handlers(token);
+            return self.parse_list_token(token);
         }
         match self.parse_with_handlers(token)? {
             Some(nodes) => Ok(nodes),
             None => self.parse_fallback_token(token, implicit_paragraphs),
         }
+    }
+
+    /// `parseListToken`: a list of tasks and other items, where an extension parses task
+    /// lists, parses as a list of each run of tasks and of other items.
+    fn parse_list_token(&self, token: &Token) -> Result<Vec<Value>, Error> {
+        let Some(list) = token.list().filter(|list| !list.items.is_empty()) else {
+            return self.parse_token_with_handlers(token);
+        };
+        let tasks: Vec<Option<bool>> = list.items.iter().map(task_item_checked).collect();
+        let has_task = tasks.iter().any(Option::is_some);
+        let has_non_task = tasks.iter().any(Option::is_none);
+        let task_lists = self.manager.handlers_for_token("taskList");
+        if !has_task || !has_non_task || task_lists.is_empty() {
+            return self.parse_token_with_handlers(token);
+        }
+        let mut groups: Vec<(&'static str, Vec<Token>)> = Vec::new();
+        for (item, checked) in list.items.iter().zip(tasks) {
+            let (kind, item) = match checked {
+                Some(checked) => ("taskList", self.task_item(item, checked)?),
+                None => ("list", item.clone()),
+            };
+            match groups.last_mut() {
+                Some((last, group)) if *last == kind => group.push(item),
+                _ => groups.push((kind, vec![item])),
+            }
+        }
+        let mut results = Vec::new();
+        for (kind, items) in groups {
+            let group = Token {
+                kind,
+                raw: token.raw.clone(),
+                text: token.text.clone(),
+                tokens: token.tokens.clone(),
+                data: TokenData::List(Box::new(List {
+                    ordered: list.ordered,
+                    start: list.start,
+                    loose: list.loose,
+                    items,
+                })),
+                extra: token.extra.clone(),
+                child_tokens: token.child_tokens.clone(),
+            };
+            results.extend(stack::grow(|| self.parse_token(&group, false))?);
+        }
+        Ok(results)
+    }
+
+    /// The `taskItem` token `parseListToken` makes of a list item that is a task: its first
+    /// line's text, and the lines after it, lexed anew as their own Markdown.
+    fn task_item(&self, item: &Token, checked: bool) -> Result<Token, Error> {
+        let raw = item_source(item);
+        let lines = utf16::split(raw, utf16::unit(b'\n'));
+        let main_content = FIRST_LINE
+            .exec(lines[0])
+            .and_then(|found| found.get(2))
+            .unwrap_or_default();
+        let mut nested_tokens = Vec::new();
+        let nested_lines = &lines[1..];
+        let newline = [utf16::unit(b'\n')];
+        let blank = |line: &[u16]| utf16::trim(line).is_empty();
+        let nested_raw = utf16::join(nested_lines, &newline);
+        let indents = nested_lines
+            .iter()
+            .filter(|line| !blank(line))
+            .map(|line| line.len() - utf16::trim_start(line).len());
+        if !blank(&nested_raw)
+            && let Some(min_indent) = indents.min()
+        {
+            let trimmed: Vec<&[u16]> = nested_lines
+                .iter()
+                .map(|line| match blank(line) {
+                    true => &[][..],
+                    false => &line[min_indent..],
+                })
+                .collect();
+            let nested_content = utf16::join(&trimmed, &newline);
+            let nested_content = utf16::trim(&nested_content);
+            if !nested_content.is_empty() {
+                let source = [nested_content, &newline].concat();
+                nested_tokens = Lexer::new(&self.manager.marked).lex(&source)?;
+            }
+        }
+        Ok(Token {
+            text: Some(Units::from(main_content)),
+            tokens: Some(self.tokenize_inline(main_content)?.into()),
+            data: TokenData::ListItem {
+                task: true,
+                checked: Some(checked),
+                loose: false,
+            },
+            child_tokens: Some(Box::new(vec![(
+                "nestedTokens",
+                Tokens::from(nested_tokens),
+            )])),
+            ..Token::new("taskItem", Units::default())
+        })
     }
 
     /// The first result of the token's handlers that holds something.

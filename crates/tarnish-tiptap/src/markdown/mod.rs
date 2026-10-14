@@ -1,12 +1,16 @@
 //! `@tiptap/markdown` 3.30.0: the `MarkdownManager`, which parses Markdown with marked and the
 //! extensions' `parseMarkdown`, and serializes with their `renderMarkdown`, and the Markdown API
-//! `@tiptap/core` declares for extensions.
+//! `@tiptap/core` declares for extensions, with its utilities for Markdown that nests.
 
+mod nesting;
 mod parse;
 mod serialize;
 mod types;
 mod utils;
 
+pub use nesting::{
+    IndentedBlockConfig, IndentedBlocks, parse_indented_blocks, render_nested_markdown_content,
+};
 pub use parse::ParseHelpers;
 pub use types::*;
 
@@ -24,6 +28,30 @@ struct Spec {
     parse: Option<ParseMarkdown>,
     render: Option<RenderMarkdown>,
     html_reopen: Option<(&'static str, &'static str)>,
+    /// `isIndenting`.
+    indents_content: bool,
+}
+
+/// The manager's `indentation` option: what `helpers.indent` puts before content.
+#[derive(Clone, Copy, Debug)]
+pub struct Indentation {
+    pub style: IndentStyle,
+    pub size: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IndentStyle {
+    Space,
+    Tab,
+}
+
+impl Default for Indentation {
+    fn default() -> Self {
+        Indentation {
+            style: IndentStyle::Space,
+            size: 2,
+        }
+    }
 }
 
 pub struct MarkdownManager {
@@ -36,6 +64,8 @@ pub struct MarkdownManager {
     extension_ranks: FxHashMap<&'static str, usize>,
     /// The node and mark types that are code.
     code_types: FxHashSet<&'static str>,
+    /// `indentString`.
+    indent_string: String,
 }
 
 impl MarkdownManager {
@@ -48,11 +78,27 @@ impl MarkdownManager {
             node_type_registry: FxHashMap::default(),
             extension_ranks: FxHashMap::default(),
             code_types: FxHashSet::default(),
+            indent_string: String::new(),
         };
+        manager.set_indentation(Indentation::default());
         for extension in sort_extensions(extensions) {
             manager.register_extension(extension);
         }
         manager
+    }
+
+    /// `new MarkdownManager({ extensions, marked, indentation })`.
+    pub fn with_indentation(mut self, indentation: Indentation) -> Self {
+        self.set_indentation(indentation);
+        self
+    }
+
+    fn set_indentation(&mut self, Indentation { style, size }: Indentation) {
+        let character = match style {
+            IndentStyle::Space => " ",
+            IndentStyle::Tab => "\t",
+        };
+        self.indent_string = character.repeat(size);
     }
 
     fn register_extension(&mut self, extension: &Extension) {
@@ -72,12 +118,9 @@ impl MarkdownManager {
             parse: markdown.parse.clone(),
             render: markdown.render.clone(),
             html_reopen: markdown.html_reopen,
+            indents_content: markdown.indents_content,
         };
         if spec.parse.is_some() {
-            assert_ne!(
-                token_name, "taskList",
-                "parseListToken's task list grouping isn't ported"
-            );
             self.registry
                 .entry(token_name)
                 .or_default()

@@ -21,11 +21,25 @@ pub trait RenderHelpers {
 
     /// `helpers.renderChildren(nodes, separator)` for nodes taken out of an array.
     fn render_array(&self, nodes: &[Value], separator: &str) -> Result<String, Error>;
+
+    /// `helpers.renderChild(node, index)`: a node as the child at `index`.
+    fn render_child(&self, node: &Value, index: usize) -> Result<String, Error>;
+
+    /// `helpers.indent(content)`.
+    fn indent(&self, content: &str) -> String;
 }
 
-/// A renderer's `context`, as far as our renderers read it.
+/// A renderer's `context`.
 pub struct RenderContext<'a> {
+    /// The node's index among the nodes it was rendered with.
+    pub index: usize,
+    /// How many of the node's ancestors indent their content.
+    pub level: usize,
+    /// `parentType`, the parent's `type`.
+    pub parent_type: Option<&'a Value>,
     pub previous_node: Option<&'a Value>,
+    /// `meta.parentAttrs`, the parent's `attrs`.
+    pub parent_attrs: Option<&'a Value>,
 }
 
 /// An extension's `parseMarkdown(token, helpers)`.
