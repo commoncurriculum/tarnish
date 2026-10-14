@@ -270,7 +270,7 @@ fn given() -> PlainExtension {
                 _ => Ok(()),
             }
         });
-    let types = &[
+    let types = [
         "paragraph",
         "heading",
         "image",
@@ -283,10 +283,12 @@ fn given() -> PlainExtension {
         "superscript",
         "highlight",
     ];
-    PlainExtension::create("given").add_global_attributes(vec![GlobalAttributes {
-        types: GlobalTypes::Named(types),
-        attributes: vec![given],
-    }])
+    PlainExtension::create("given").add_global_attributes(move |_| {
+        vec![GlobalAttributes {
+            types: GlobalTypes::Named(types.to_vec()),
+            attributes: vec![given.clone()],
+        }]
+    })
 }
 
 /// An application's two attributes on paragraphs and bold, each rendering the object a document
@@ -302,10 +304,13 @@ fn renders() -> PlainExtension {
             Ok(())
         })
     };
-    PlainExtension::create("renders").add_global_attributes(vec![GlobalAttributes {
-        types: GlobalTypes::Named(&["paragraph", "bold"]),
-        attributes: vec![attribute("first"), attribute("second")],
-    }])
+    let attributes = vec![attribute("first"), attribute("second")];
+    PlainExtension::create("renders").add_global_attributes(move |_| {
+        vec![GlobalAttributes {
+            types: GlobalTypes::Named(vec!["paragraph", "bold"]),
+            attributes: attributes.clone(),
+        }]
+    })
 }
 
 /// An application's code mark and code block, whose text stays as it is, and a figure whose

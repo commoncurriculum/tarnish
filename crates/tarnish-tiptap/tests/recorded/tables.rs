@@ -83,10 +83,12 @@ fn style() -> PlainExtension {
             Some(style) if !style.is_null() => rendered.merge("style", style),
             _ => Ok(()),
         });
-    PlainExtension::create("style").add_global_attributes(vec![GlobalAttributes {
-        types: GlobalTypes::Named(&["table", "tableCell", "tableHeader"]),
-        attributes: vec![style],
-    }])
+    PlainExtension::create("style").add_global_attributes(move |_| {
+        vec![GlobalAttributes {
+            types: GlobalTypes::Named(vec!["table", "tableCell", "tableHeader"]),
+            attributes: vec![style.clone()],
+        }]
+    })
 }
 
 fn configuration(name: &str) -> Configuration {

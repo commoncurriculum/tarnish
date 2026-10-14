@@ -39,7 +39,7 @@ pub struct Extension<K = Kind> {
     /// `addAttributes`.
     pub attributes: Vec<ExtensionAttribute>,
     /// `addGlobalAttributes`.
-    pub global_attributes: Vec<GlobalAttributes>,
+    pub global_attributes: Option<AddGlobalAttributes>,
     /// `parseHTML`.
     pub parse_html: Vec<ParseHtml>,
     /// The config's fields that a package declares for itself, such as Table's `tableRole`,
@@ -49,6 +49,10 @@ pub struct Extension<K = Kind> {
     pub extend_node_schema: Option<ExtendNodeSchema>,
     pub(crate) markdown: Markdown,
 }
+
+/// An extension's `addGlobalAttributes()`, given `this.extensions`: the extensions of the
+/// schema's node types, then those of its mark types, in its order.
+pub type AddGlobalAttributes = Arc<dyn Fn(&[&Extension]) -> Vec<GlobalAttributes> + Send + Sync>;
 
 /// An extension's `extendNodeSchema(extension)`: the fields it gives the spec of a node type,
 /// given the type's extension. A field whose value is `null` is left out.
@@ -123,7 +127,7 @@ impl<K: Default> Extension<K> {
             priority: 100,
             kind: K::default(),
             attributes: Vec::new(),
-            global_attributes: Vec::new(),
+            global_attributes: None,
             parse_html: Vec::new(),
             fields: Map::new(),
             extend_node_schema: None,
@@ -203,8 +207,11 @@ impl<K> Extension<K> {
         self
     }
 
-    pub fn add_global_attributes(mut self, global_attributes: Vec<GlobalAttributes>) -> Self {
-        self.global_attributes = global_attributes;
+    pub fn add_global_attributes(
+        mut self,
+        add: impl Fn(&[&Extension]) -> Vec<GlobalAttributes> + Send + Sync + 'static,
+    ) -> Self {
+        self.global_attributes = Some(Arc::new(add));
         self
     }
 

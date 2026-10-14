@@ -46,8 +46,10 @@ pub fn text_align(options: TextAlignOptions) -> PlainExtension {
             ),
             _ => Ok(()),
         });
-    PlainExtension::create("textAlign").add_global_attributes(vec![GlobalAttributes {
-        types: GlobalTypes::Named(types),
-        attributes: vec![attribute],
-    }])
+    PlainExtension::create("textAlign").add_global_attributes(move |_| {
+        vec![GlobalAttributes {
+            types: GlobalTypes::Named(types.to_vec()),
+            attributes: vec![attribute.clone()],
+        }]
+    })
 }

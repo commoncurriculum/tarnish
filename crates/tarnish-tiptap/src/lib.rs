@@ -50,8 +50,8 @@ pub use attributes::{
     ExtensionAttribute, GlobalAttributes, GlobalTypes, ParseAttribute, RenderAttribute, Rendered,
 };
 pub use extension::{
-    ExtendNodeSchema, Extension, Kind, MarkConfig, MarkExtension, NodeConfig, NodeExtension,
-    PlainExtension, RenderMark, RenderNode,
+    AddGlobalAttributes, ExtendNodeSchema, Extension, Kind, MarkConfig, MarkExtension, NodeConfig,
+    NodeExtension, PlainExtension, RenderMark, RenderNode,
 };
 pub use merge_attributes::{HtmlAttributesOptions, merge_attributes};
 pub use parse_html::{ParseHtml, StyleRule, TagRule};

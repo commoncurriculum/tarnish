@@ -110,10 +110,12 @@ fn styled(
             }
             _ => Ok(()),
         });
-    PlainExtension::create(name).add_global_attributes(vec![GlobalAttributes {
-        types: GlobalTypes::Named(options.types),
-        attributes: vec![attribute],
-    }])
+    PlainExtension::create(name).add_global_attributes(move |_| {
+        vec![GlobalAttributes {
+            types: GlobalTypes::Named(options.types.to_vec()),
+            attributes: vec![attribute.clone()],
+        }]
+    })
 }
 
 /// Which of its extensions `TextStyleKit` adds, with their options: `None` for `false`.

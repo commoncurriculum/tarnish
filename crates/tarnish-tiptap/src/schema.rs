@@ -10,7 +10,7 @@ use tarnish_html::HtmlNode;
 use tarnish_js::Result;
 use tarnish_js::json::Map;
 
-use super::attributes::{ExtensionAttribute, get_rendered_attributes};
+use super::attributes::{ExtensionAttribute, GlobalAttributes, get_rendered_attributes};
 use super::extension::{Extension, Kind};
 use super::parse_html::parse_rules;
 use super::text::TextSerializer;
@@ -35,15 +35,24 @@ pub fn get_schema(extensions: &[Extension]) -> Result<TiptapSchema> {
 /// `getSchema` of the extensions given.
 pub(crate) fn schema_of(mut extensions: Vec<&Extension>) -> Result<TiptapSchema> {
     sort(&mut extensions);
-    let names = |of: fn(&Kind) -> bool| -> Vec<&'static str> {
+    let typed = |of: fn(&Kind) -> bool| -> Vec<&Extension> {
         let typed = extensions.iter().filter(|extension| of(&extension.kind));
-        typed.map(|extension| extension.name).collect()
+        typed.copied().collect()
     };
-    let nodes = names(|kind| matches!(kind, Kind::Node(_)));
-    let marks = names(|kind| matches!(kind, Kind::Mark(_)));
-    let globals: Vec<(&'static str, &ExtensionAttribute)> = extensions
+    let node_extensions = typed(|kind| matches!(kind, Kind::Node(_)));
+    let mark_extensions = typed(|kind| matches!(kind, Kind::Mark(_)));
+    let names = |typed: &[&Extension]| -> Vec<&'static str> {
+        typed.iter().map(|extension| extension.name).collect()
+    };
+    let (nodes, marks) = (names(&node_extensions), names(&mark_extensions));
+    let typed_extensions = [node_extensions, mark_extensions].concat();
+    let global_attributes: Vec<GlobalAttributes> = extensions
         .iter()
-        .flat_map(|extension| &extension.global_attributes)
+        .filter_map(|extension| extension.global_attributes.as_ref())
+        .flat_map(|add| add(&typed_extensions))
+        .collect();
+    let globals: Vec<(&'static str, &ExtensionAttribute)> = global_attributes
+        .iter()
         .flat_map(|global| {
             let types = global.types.resolve(&nodes, &marks);
             types.into_iter().flat_map(|name| {

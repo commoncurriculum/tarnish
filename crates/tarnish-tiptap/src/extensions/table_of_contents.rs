@@ -31,8 +31,11 @@ pub fn table_of_contents(options: TableOfContentsOptions) -> PlainExtension {
                 rendered.merge(name, attributes.get(name).expect("its attribute"))
             })
     };
-    PlainExtension::create("tableOfContents").add_global_attributes(vec![GlobalAttributes {
-        types: GlobalTypes::Named(options.anchor_types),
-        attributes: vec![attribute("id"), attribute("data-toc-id")],
-    }])
+    let attributes = vec![attribute("id"), attribute("data-toc-id")];
+    PlainExtension::create("tableOfContents").add_global_attributes(move |_| {
+        vec![GlobalAttributes {
+            types: GlobalTypes::Named(options.anchor_types.to_vec()),
+            attributes: attributes.clone(),
+        }]
+    })
 }

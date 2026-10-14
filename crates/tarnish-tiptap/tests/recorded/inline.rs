@@ -20,40 +20,47 @@ use tarnish_tiptap::extensions::{
     heading::heading, italic::italic, paragraph::paragraph, text::text,
 };
 use tarnish_tiptap::{
-    DomSpec, Extension, ExtensionAttribute, GlobalAttributes, GlobalTypes, MarkExtension,
+    DomSpec, Extension, ExtensionAttribute, GlobalAttributes, GlobalTypes, Kind, MarkExtension,
     NodeExtension, ParseHtml, PlainExtension, node_attr,
 };
 
 use crate::own::{self, Configuration, Nested, Replay};
 
-/// Global attributes for each kind of `types`.
+/// Global attributes for each kind of `types`, the last of the node extensions it's given.
 fn globals() -> PlainExtension {
     let global = |types, attributes| GlobalAttributes { types, attributes };
-    PlainExtension::create("globals").add_global_attributes(vec![
-        global(
-            GlobalTypes::All,
-            vec![ExtensionAttribute::new("every", json!("*"))],
-        ),
-        global(
-            GlobalTypes::Nodes,
-            vec![
-                ExtensionAttribute::new("node", json!("n")),
-                ExtensionAttribute::new("every", json!("node")),
-            ],
-        ),
-        global(
-            GlobalTypes::Marks,
-            vec![ExtensionAttribute::new("mark", Value::Null)],
-        ),
-        global(
-            GlobalTypes::Named(&["paragraph", "bold", "paragraph", "missing"]),
-            vec![ExtensionAttribute::new("named", json!(1))],
-        ),
-        global(
-            GlobalTypes::NodesBut(&["doc", "text"]),
-            vec![ExtensionAttribute::new("made", json!(false)).not_rendered()],
-        ),
-    ])
+    PlainExtension::create("globals").add_global_attributes(move |extensions| {
+        let made = extensions
+            .iter()
+            .filter(|extension| matches!(extension.kind, Kind::Node(_)))
+            .map(|extension| extension.name)
+            .filter(|name| !matches!(*name, "doc" | "text"));
+        vec![
+            global(
+                GlobalTypes::All,
+                vec![ExtensionAttribute::new("every", json!("*"))],
+            ),
+            global(
+                GlobalTypes::Nodes,
+                vec![
+                    ExtensionAttribute::new("node", json!("n")),
+                    ExtensionAttribute::new("every", json!("node")),
+                ],
+            ),
+            global(
+                GlobalTypes::Marks,
+                vec![ExtensionAttribute::new("mark", Value::Null)],
+            ),
+            global(
+                GlobalTypes::Named(vec!["paragraph", "bold", "paragraph", "missing"]),
+                vec![ExtensionAttribute::new("named", json!(1))],
+            ),
+            global(
+                GlobalTypes::Named(made.collect()),
+                vec![ExtensionAttribute::new("made", json!(false)).not_rendered()],
+            ),
+        ]
+    })
 }
 
 /// Document, Paragraph and Text, and `others`.

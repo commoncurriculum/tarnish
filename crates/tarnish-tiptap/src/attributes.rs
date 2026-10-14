@@ -127,34 +127,31 @@ pub struct GlobalAttributes {
 }
 
 /// The `types` of an entry of `addGlobalAttributes`.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum GlobalTypes {
     /// An array of type names.
-    Named(&'static [&'static str]),
+    Named(Vec<&'static str>),
     /// `'*'`: every node type but `text`, and every mark type.
     All,
     /// `'nodes'`: every node type but `text`.
     Nodes,
     /// `'marks'`.
     Marks,
-    /// An array of the node types but those named, as an extension makes one of the node
-    /// extensions `addGlobalAttributes` is given.
-    NodesBut(&'static [&'static str]),
 }
 
 impl GlobalTypes {
     /// The names of the types, of the extensions' node types and mark types, in their order.
-    pub(crate) fn resolve<'a>(&self, nodes: &[&'a str], marks: &[&'a str]) -> Vec<&'a str> {
-        let nodes_but = |excluded: &[&str]| -> Vec<&'a str> {
-            let kept = nodes.iter().filter(|name| !excluded.contains(name));
-            kept.copied().collect()
-        };
-        match *self {
-            GlobalTypes::Named(names) => names.to_vec(),
-            GlobalTypes::All => [nodes_but(&["text"]), marks.to_vec()].concat(),
-            GlobalTypes::Nodes => nodes_but(&["text"]),
+    pub(crate) fn resolve(
+        &self,
+        nodes: &[&'static str],
+        marks: &[&'static str],
+    ) -> Vec<&'static str> {
+        let but_text = || nodes.iter().copied().filter(|name| *name != "text");
+        match self {
+            GlobalTypes::Named(names) => names.clone(),
+            GlobalTypes::All => but_text().chain(marks.iter().copied()).collect(),
+            GlobalTypes::Nodes => but_text().collect(),
             GlobalTypes::Marks => marks.to_vec(),
-            GlobalTypes::NodesBut(excluded) => nodes_but(excluded),
         }
     }
 }

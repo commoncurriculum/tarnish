@@ -12,7 +12,7 @@ use tarnish_js::json::Value;
 use tarnish_js::{Error, Result, stack};
 
 use crate::schema::schema_of;
-use crate::{Extension, ExtensionAttribute, GlobalAttributes, GlobalTypes, PlainExtension};
+use crate::{Extension, ExtensionAttribute, GlobalAttributes, GlobalTypes, Kind, PlainExtension};
 
 /// A `generateID` option, given the node and where it is.
 pub type GenerateId =
@@ -68,16 +68,27 @@ pub fn unique_id(options: UniqueIdOptions) -> PlainExtension {
     let name = options.attribute_name;
     let attribute = ExtensionAttribute::new(name, Value::Null)
         .html_attribute_when_truthy(format!("data-{name}"));
-    let types = match options.types {
-        UniqueIdTypes::Named(names) => GlobalTypes::Named(names),
-        UniqueIdTypes::All => GlobalTypes::NodesBut(&["doc", "text"]),
-    };
     PlainExtension::create("uniqueID")
         .priority(10000)
-        .add_global_attributes(vec![GlobalAttributes {
-            types,
-            attributes: vec![attribute],
-        }])
+        .add_global_attributes(move |extensions| {
+            vec![GlobalAttributes {
+                types: GlobalTypes::Named(resolve_types(options.types, extensions)),
+                attributes: vec![attribute.clone()],
+            }]
+        })
+}
+
+/// `resolveTypes(types, extensions)`: the types named, or every node type but `doc` and `text`.
+fn resolve_types(types: UniqueIdTypes, extensions: &[&Extension]) -> Vec<&'static str> {
+    match types {
+        UniqueIdTypes::Named(names) => names.to_vec(),
+        UniqueIdTypes::All => extensions
+            .iter()
+            .filter(|extension| matches!(extension.kind, Kind::Node(_)))
+            .map(|extension| extension.name)
+            .filter(|name| !matches!(*name, "doc" | "text"))
+            .collect(),
+    }
 }
 
 /// `generateUniqueIds(doc, [...extensions, UniqueID.configure(options)])`: the document, read
