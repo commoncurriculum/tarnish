@@ -24,6 +24,7 @@ import { Color } from "@tiptap/extension-color"
 import { FontFamily } from "@tiptap/extension-font-family"
 import * as textStyles from "@tiptap/extension-text-style"
 import { BackgroundColor, FontSize, LineHeight, TextStyle, TextStyleKit } from "@tiptap/extension-text-style"
+import { TextAlign } from "@tiptap/extension-text-align"
 import { Underline } from "@tiptap/extension-underline"
 import { MarkdownManager } from "@tiptap/markdown"
 import { DOMParser, DOMSerializer, Node } from "@tiptap/pm/model"
@@ -112,6 +113,18 @@ const configurations = {
         HTMLAttributes: { class: "styled", style: "font-weight: bold; color: black", "data-x": null, "data-n": 0 },
         mergeNestedSpanStyles: false,
       },
+    }),
+  ],
+  textAlignNone: [...own, TextAlign],
+  textAlign: [...own, TextAlign.configure({ types: ["heading", "paragraph"] })],
+  // An alignment's style joins a font size's, which goes first.
+  textAlignOptions: [
+    ...own,
+    FontSize.configure({ types: ["paragraph"] }),
+    TextAlign.configure({
+      types: ["paragraph", "missing"],
+      alignments: ["left", "right", "start"],
+      defaultAlignment: "left",
     }),
   ],
 }
@@ -211,6 +224,32 @@ const styleDocs = [
   },
 ]
 
+const alignHTML = [
+  '<p style="text-align: center">c</p><p style="text-align: RIGHT">r</p><h2 style="text-align: justify">j</h2>',
+  '<p style="text-align: start">s</p><p style="text-align: left !important">i</p><p align="center">attr</p>',
+  '<p style="text-align: ">e</p><p style="text-align: bogus">b</p><p style="TEXT-ALIGN: left; text-align: right">l</p>',
+  '<p style="font-size: 2px; text-align: left">both</p><p style="text-align: inherit">inherit</p>',
+  '<h1 style="text-align:center">h</h1><p>none</p><span style="text-align: right">loose</span>',
+]
+const alignDocs = [
+  {
+    type: "doc",
+    content: ["center", "", null, 0, 1, "bogus", { an: "object" }, [1, 2]].map(textAlign => ({
+      type: "paragraph",
+      attrs: { textAlign },
+      content: [{ type: "text", text: "x" }],
+    })),
+  },
+  {
+    type: "doc",
+    content: [
+      { type: "heading", attrs: { level: 3, textAlign: "right" }, content: [{ type: "text", text: "h" }] },
+      { type: "paragraph", attrs: { textAlign: "left", fontSize: "3px" } },
+      { type: "paragraph" },
+    ],
+  },
+]
+
 const parsesMarkdown = each({
   globals: ["plain **bold**"],
   styles: ['<span style="color: red">x</span>', "plain *em*"],
@@ -229,6 +268,9 @@ const parsesHTML = each({
   styles: [...styleHTML, ...domHTML(/style|<span/i)],
   kit: styleHTML,
   kitOptions: styleHTML,
+  textAlignNone: alignHTML,
+  textAlign: [...alignHTML, ...domHTML(/style|align/i)],
+  textAlignOptions: alignHTML,
 }).map(([name, html]) => ({
   extensions: name,
   html,
@@ -265,6 +307,9 @@ const docs = {
   styles: styleDocs,
   kit: styleDocs,
   kitOptions: styleDocs,
+  textAlignNone: alignDocs,
+  textAlign: alignDocs,
+  textAlignOptions: alignDocs,
 }
 
 const serializesMarkdown = documents(docs).map(([name, doc]) => ({

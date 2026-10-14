@@ -31,6 +31,7 @@ pub mod table_of_contents;
 pub mod task_item;
 pub mod task_list;
 pub mod text;
+pub mod text_align;
 pub mod text_style;
 pub mod twitch;
 pub mod underline;

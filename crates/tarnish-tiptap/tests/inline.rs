@@ -11,6 +11,7 @@ use std::sync::Arc;
 use own::{Converter, input_of};
 use tarnish::json::{Map, Value, json, object};
 use tarnish_fixtures::{outcome, read, records, same};
+use tarnish_tiptap::extensions::text_align::{TextAlignOptions, text_align};
 use tarnish_tiptap::extensions::text_style::{
     StyleOptions, TextStyleKitOptions, TextStyleOptions, background_color, color, font_family,
     font_size, line_height, text_style_kit,
@@ -90,6 +91,11 @@ fn specs() -> Vec<Extension> {
     with([chip.into(), rule.into(), tag.into(), free.into()])
 }
 
+/// Tiptap's own extensions, and `others`.
+fn own_with(others: impl IntoIterator<Item = Extension>) -> Vec<Extension> {
+    own::extensions().into_iter().chain(others).collect()
+}
+
 /// Document, Paragraph, Text, Heading and Bold, and the extensions of a `TextStyleKit`.
 fn kit(options: TextStyleKitOptions) -> Vec<Extension> {
     let base = with([heading(HeadingOptions::default()).into(), bold().into()]);
@@ -103,9 +109,26 @@ fn configuration(name: &str) -> Vec<Extension> {
         "specs" => specs(),
         "styles" => {
             let styles = [background_color, color, font_family, font_size, line_height];
-            let styles = styles.map(|style| style(StyleOptions::default()).into());
-            own::extensions().into_iter().chain(styles).collect()
+            own_with(styles.map(|style| style(StyleOptions::default()).into()))
         }
+        "textAlignNone" => own_with([text_align(TextAlignOptions::default()).into()]),
+        "textAlign" => own_with([text_align(TextAlignOptions {
+            types: &["heading", "paragraph"],
+            ..TextAlignOptions::default()
+        })
+        .into()]),
+        "textAlignOptions" => own_with([
+            font_size(StyleOptions {
+                types: &["paragraph"],
+            })
+            .into(),
+            text_align(TextAlignOptions {
+                types: &["paragraph", "missing"],
+                alignments: &["left", "right", "start"],
+                default_alignment: Some("left"),
+            })
+            .into(),
+        ]),
         "kit" => kit(TextStyleKitOptions::default()),
         "kitOptions" => kit(TextStyleKitOptions {
             background_color: None,
