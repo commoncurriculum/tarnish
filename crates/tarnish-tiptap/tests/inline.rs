@@ -5,16 +5,20 @@
 #[allow(dead_code)]
 mod own;
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use own::{Converter, input_of};
-use tarnish::json::{Value, json};
-use tarnish_fixtures::{read, records, same};
+use tarnish::json::{Map, Value, json};
+use tarnish_fixtures::{outcome, read, records, same};
 use tarnish_tiptap::extensions::{
     bold::bold, document::document, hard_break::hard_break, heading::HeadingOptions,
     heading::heading, italic::italic, paragraph::paragraph, text::text,
 };
 use tarnish_tiptap::{
     Extension, ExtensionAttribute, GlobalAttributes, GlobalTypes, MarkExtension, NodeExtension,
-    PlainExtension, TiptapSchema, get_schema,
+    PlainExtension, TextOptions, TextSerializer, TiptapSchema, generate_text, get_schema,
+    node_attr,
 };
 
 /// Global attributes for each kind of `types`.
@@ -60,7 +64,19 @@ fn specs() -> Vec<Extension> {
         .inline(true)
         .atom()
         .selectable(false)
-        .draggable();
+        .draggable()
+        .add_attributes(vec![ExtensionAttribute::new("label", json!("c"))])
+        .render_text(|props| {
+            let label = node_attr(props.node, "label").to_js_string()?;
+            let parent = props.parent.node_type();
+            let (pos, index, range) = (props.pos, props.index, &props.range);
+            Ok(format!(
+                "<{label} {pos} {} {index} {}-{}>",
+                parent.name(),
+                range.start,
+                range.end
+            ))
+        });
     let rule = NodeExtension::create("rule")
         .group("block")
         .atom()
@@ -89,9 +105,10 @@ fn configuration(name: &str) -> Vec<Extension> {
     }
 }
 
-/// A configuration, and what converts with its extensions.
+/// A configuration's extensions, and what converts with them.
 struct Configured {
     name: String,
+    extensions: Vec<Extension>,
     converter: Converter,
 }
 
@@ -102,18 +119,20 @@ fn configured(records: &[Value]) -> Vec<Configured> {
         let name = record["extensions"].as_str().expect("a configuration");
         if configured.iter().all(|done| done.name != name) {
             let extensions = configuration(name);
+            let converter = Converter::of(&extensions);
             configured.push(Configured {
                 name: name.to_owned(),
-                converter: Converter::of(&extensions),
+                extensions,
+                converter,
             });
         }
     }
     configured
 }
 
-/// Holds each record of `section` to what `run` makes of its input with the extensions it names,
-/// as a record of the section holds it.
-fn check(section: &str, run: impl Fn(&Configured, &Value) -> Value) {
+/// Holds each record of `section` to what `run` makes of its inputs, those of the fields `inputs`
+/// names that it has, with the extensions it names, as a record of the section holds it.
+fn check(section: &str, inputs: &[&str], run: impl Fn(&Configured, &Map) -> Value) {
     let fixtures = read("tiptap-inline");
     let records = records(&fixtures, section);
     let configured = configured(records);
@@ -122,15 +141,19 @@ fn check(section: &str, run: impl Fn(&Configured, &Value) -> Value) {
         let mut expected = record.clone();
         let fields = expected.as_object_mut().expect("a record");
         let name = fields.shift_remove("extensions").expect("a configuration");
-        let input = fields.shift_remove(input_of(section)).expect("an input");
+        let given: Map = inputs
+            .iter()
+            .filter_map(|input| Some(((*input).into(), fields.shift_remove(input)?)))
+            .collect();
         let configuration = configured
             .iter()
             .find(|configured| configured.name == name)
             .expect("the configuration");
-        let actual = run(configuration, &input);
+        let actual = run(configuration, &given);
         if !same(&expected, &actual) {
             failures.push(format!(
-                "{name}: {input}\n  Tiptap: {expected}\n  tarnish-tiptap: {actual}"
+                "{name}: {}\n  Tiptap: {expected}\n  tarnish-tiptap: {actual}",
+                Value::Object(given)
             ));
         }
     }
@@ -191,30 +214,61 @@ fn makes_the_schemas_tiptap_does() {
     }
 }
 
+/// The text serializers a record names.
+fn serializers(name: &str) -> HashMap<String, TextSerializer> {
+    assert_eq!(name, "places", "no serializers {name}");
+    let paragraph: TextSerializer = Arc::new(|props| {
+        let name = props.node.node_type().name();
+        Ok(format!("[{name} {} {}]", props.pos, props.index))
+    });
+    let chip: TextSerializer = Arc::new(|props| {
+        let label = node_attr(props.node, "label").to_js_string()?;
+        Ok(format!("({label})"))
+    });
+    HashMap::from([("paragraph".into(), paragraph), ("chip".into(), chip)])
+}
+
+#[test]
+fn generates_text_as_tiptap_does() {
+    let inputs = ["doc", "blockSeparator", "serializers"];
+    check("generatesText", &inputs, |configured, given| {
+        let mut options = TextOptions::default();
+        if let Some(separator) = given.get("blockSeparator") {
+            options.block_separator = separator.as_str().expect("a separator").to_owned();
+        }
+        if let Some(named) = given.get("serializers") {
+            options.text_serializers = serializers(named.as_str().expect("a name"));
+        }
+        let text = generate_text(&given["doc"], &configured.extensions, &options);
+        outcome(text.map(|text| json!({"text": text})))
+    });
+}
+
+/// Holds each record of a section `own::Converter` converts.
+fn converts(section: &str) {
+    check(section, &[input_of(section)], |configured, given| {
+        configured
+            .converter
+            .convert(section, &given[input_of(section)])
+    });
+}
+
 #[test]
 fn parses_markdown_as_tiptap_does() {
-    check("parsesMarkdown", |configured, input| {
-        configured.converter.convert("parsesMarkdown", input)
-    });
+    converts("parsesMarkdown");
 }
 
 #[test]
 fn serializes_markdown_as_tiptap_does() {
-    check("serializesMarkdown", |configured, input| {
-        configured.converter.convert("serializesMarkdown", input)
-    });
+    converts("serializesMarkdown");
 }
 
 #[test]
 fn parses_html_as_tiptap_does() {
-    check("parsesHTML", |configured, input| {
-        configured.converter.convert("parsesHTML", input)
-    });
+    converts("parsesHTML");
 }
 
 #[test]
 fn serializes_html_as_tiptap_does() {
-    check("serializesHTML", |configured, input| {
-        configured.converter.convert("serializesHTML", input)
-    });
+    converts("serializesHTML");
 }

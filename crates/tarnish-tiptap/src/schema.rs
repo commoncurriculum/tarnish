@@ -13,13 +13,17 @@ use tarnish_js::json::Map;
 use super::attributes::{ExtensionAttribute, get_rendered_attributes};
 use super::extension::{Extension, Kind};
 use super::parse_html::parse_rules;
+use super::text::TextSerializer;
 
 /// The schema `getSchema` builds from extensions, with the `DOMParser` and `DOMSerializer`
-/// `fromSchema` make of its specs' `parseDOM` and `toDOM`.
+/// `fromSchema` make of its specs' `parseDOM` and `toDOM`, and the text serializers
+/// `getTextSerializersFromSchema` reads from their `toText`.
 pub struct TiptapSchema {
     pub schema: Schema,
     pub parser: DomParser<HtmlNode>,
     pub serializer: DomSerializer<HtmlNode>,
+    /// Each node type's `renderText`, by its name.
+    pub text_serializers: HashMap<String, TextSerializer>,
 }
 
 /// `getSchema(extensions)`: the extensions sorted by priority, their node and mark types in that
@@ -48,6 +52,7 @@ pub fn get_schema(extensions: &[Extension]) -> Result<TiptapSchema> {
     let mut spec = SchemaSpec::default();
     let (mut node_rules, mut mark_rules) = (Vec::new(), Vec::new());
     let (mut to_doms, mut mark_to_doms) = (HashMap::new(), HashMap::new());
+    let mut text_serializers = HashMap::new();
     for &extension in &extensions {
         let attributes: Vec<ExtensionAttribute> = globals
             .iter()
@@ -93,6 +98,9 @@ pub fn get_schema(extensions: &[Extension]) -> Result<TiptapSchema> {
                     });
                     to_doms.insert(extension.name.to_owned(), to_dom);
                 }
+                if let Some(render_text) = node.render_text.clone() {
+                    text_serializers.insert(extension.name.to_owned(), render_text);
+                }
             }
             Kind::Mark(mark) => {
                 spec.marks.push((
@@ -126,6 +134,7 @@ pub fn get_schema(extensions: &[Extension]) -> Result<TiptapSchema> {
         schema,
         parser,
         serializer: DomSerializer::new(to_doms, mark_to_doms),
+        text_serializers,
     })
 }
 

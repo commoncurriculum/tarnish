@@ -12,6 +12,7 @@ use super::markdown::{
     RenderMarkdown, Start,
 };
 use super::parse_html::ParseHtml;
+use super::text::{TextSerializer, TextSerializerProps};
 use crate::{DomSpec, SpecAttrs};
 use tarnish::model::Whitespace;
 use tarnish::{Mark, Node};
@@ -83,6 +84,8 @@ pub struct NodeConfig {
     pub defining: bool,
     pub whitespace: Option<Whitespace>,
     pub render_html: Option<RenderNode>,
+    /// `renderText`: the node's text, in place of its content's.
+    pub render_text: Option<TextSerializer>,
 }
 
 #[derive(Default)]
@@ -359,6 +362,14 @@ impl NodeExtension {
         + 'static,
     ) -> Self {
         self.kind.render_html = Some(Arc::new(render));
+        self
+    }
+
+    pub fn render_text(
+        mut self,
+        render: impl Fn(&TextSerializerProps) -> Result<String, Error> + Send + Sync + 'static,
+    ) -> Self {
+        self.kind.render_text = Some(Arc::new(render));
         self
     }
 }

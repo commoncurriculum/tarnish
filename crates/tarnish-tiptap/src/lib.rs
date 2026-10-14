@@ -38,6 +38,7 @@ pub mod markdown;
 mod merge_attributes;
 mod parse_html;
 mod schema;
+mod text;
 mod utilities;
 mod web_url;
 
@@ -54,6 +55,7 @@ pub use merge_attributes::{
 };
 pub use parse_html::{ParseHtml, StyleRule, TagRule};
 pub use schema::{TiptapSchema, get_schema, sort_extensions};
+pub use text::{TextOptions, TextSerializer, TextSerializerProps, generate_text, get_text};
 pub use utilities::{
     attrs_equal, decode_html_entities, get_style_property, mark_attr, marks_equal, node_attr,
 };

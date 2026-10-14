@@ -2,10 +2,12 @@
 // make of documents, to fixtures/tiptap-inline.json, for tarnish-tiptap's tests/inline.rs to
 // expect. Each record names the configuration of extensions it's of in `extensions`:
 // - `schemas` records each configuration's node and mark types as ProseMirror reads their specs.
+// - `generatesText` records the text `generateText` makes of documents, with a `blockSeparator`
+//   and the text serializers it names in `serializers`, where the record has them.
 // - `parsesMarkdown`, `serializesMarkdown`, `parsesHTML` and `serializesHTML` record what
 //   harness/record-tiptap.mjs records, of each configuration.
 import { readFileSync } from "node:fs"
-import { Extension, Mark, Node as TiptapNode, getSchema, splitExtensions } from "@tiptap/core"
+import { Extension, Mark, Node as TiptapNode, generateText, getSchema, splitExtensions } from "@tiptap/core"
 import { Bold } from "@tiptap/extension-bold"
 import { Document } from "@tiptap/extension-document"
 import { HardBreak } from "@tiptap/extension-hard-break"
@@ -72,6 +74,9 @@ const Chip = TiptapNode.create({
   atom: true,
   selectable: false,
   draggable: true,
+  addAttributes: () => ({ label: { default: "c" } }),
+  renderText: ({ node, pos, parent, index, range }) =>
+    `<${node.attrs.label} ${pos} ${parent.type.name} ${index} ${range.from}-${range.to}>`,
 })
 const Rule = TiptapNode.create({ name: "rule", group: "block", atom: true, selectable: true })
 const Tag = Mark.create({ name: "tag", inclusive: false })
@@ -185,8 +190,78 @@ const serializesHTML = documents(docs).map(([name, doc]) => ({
   }),
 }))
 
+// Text serializers that name the nodes they're given and where.
+const serializers = {
+  places: {
+    paragraph: ({ node, pos, index }) => `[${node.type.name} ${pos} ${index}]`,
+    chip: ({ node }) => `(${node.attrs.label})`,
+  },
+}
+const textDocs = {
+  own: [
+    {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "a" }, { type: "hardBreak" }, { type: "text", text: "b" }],
+        },
+        { type: "paragraph" },
+        { type: "heading", attrs: { level: 2 }, content: [{ type: "text", text: "c", marks: [{ type: "bold" }] }] },
+        { type: "image", attrs: { src: "x.png" } },
+        { type: "paragraph", content: [{ type: "text", text: "d" }] },
+      ],
+    },
+    { type: "doc", content: [{ type: "unknown" }] },
+    { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "" }] }] },
+  ],
+  specs: [
+    {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "chip" }, { type: "text", text: "a" }, { type: "chip", attrs: { label: 5 } }],
+        },
+        { type: "rule" },
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: "b" },
+            { type: "chip", attrs: { label: null } },
+          ],
+        },
+      ],
+    },
+  ],
+}
+// The documents tiptap.json serializes to HTML with Tiptap's own extensions, with the default
+// options, and those above with each.
+const tiptapDocs = fixture("tiptap")
+  .serializesHTML.filter(record => !record.extensions && record.html !== undefined)
+  .map(record => JSON.stringify(record.doc))
+const textOptions = [{}, { blockSeparator: "\n" }, { blockSeparator: "" }, { serializers: "places" }]
+const generatesText = [
+  ...unique(tiptapDocs).map(text => ["own", JSON.parse(text), {}]),
+  ...Object.entries(textDocs).flatMap(([name, docs]) =>
+    docs.flatMap(doc => textOptions.map(options => [name, doc, options])),
+  ),
+].map(([name, doc, { blockSeparator, serializers: named }]) => ({
+  extensions: name,
+  doc,
+  ...(blockSeparator === undefined ? {} : { blockSeparator }),
+  ...(named === undefined ? {} : { serializers: named }),
+  ...outcome(() => ({
+    text: generateText(doc, converters[name].extensions, {
+      blockSeparator,
+      textSerializers: named && serializers[named],
+    }),
+  })),
+}))
+
 writeFixture("tiptap-inline", {
   schemas,
+  generatesText,
   parsesMarkdown,
   serializesMarkdown,
   parsesHTML,

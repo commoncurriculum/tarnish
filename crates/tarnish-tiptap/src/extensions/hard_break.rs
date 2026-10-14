@@ -15,6 +15,7 @@ pub fn hard_break() -> NodeExtension {
         .linebreak_replacement()
         .parse_html([ParseHtml::tag("br")])
         .render_html(|_, html| Ok(DomSpec::element("br", html, Vec::new())))
+        .render_text(|_| Ok("\n".to_owned()))
         .render_markdown(render_markdown)
         .parse_markdown(|_, _| Ok(Parsed::Node(json!({ "type": "hardBreak" }))))
 }
