@@ -52,9 +52,14 @@ impl PartialEq for Value {
 
 impl Drop for Value {
     fn drop(&mut self) {
+        // Items that hold no arrays or objects drop without going a level deeper, so only a
+        // vector that holds one needs room on the stack checked.
+        let nests = |value: &Value| matches!(value, Value::Array(_) | Value::Object(_));
         match self {
-            Value::Array(items) => stack::drop_nested(items),
-            Value::Object(map) => stack::drop_nested(&mut map.entries),
+            Value::Array(items) if items.iter().any(nests) => stack::drop_nested(items),
+            Value::Object(map) if map.entries.iter().any(|(_, value)| nests(value)) => {
+                stack::drop_nested(&mut map.entries)
+            }
             _ => {}
         }
     }

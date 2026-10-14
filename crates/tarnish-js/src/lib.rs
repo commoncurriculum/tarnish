@@ -101,7 +101,7 @@ pub fn to_string(value: &Value) -> Result<String> {
         Value::Null => "null".into(),
         Value::Bool(boolean) => boolean.to_string(),
         Value::Number(number) => number_to_string(number.as_f64()),
-        Value::String(string) => string.clone(),
+        Value::String(string) => string.as_str().into(),
         Value::Array(items) => {
             let mut parts = Vec::with_capacity(items.len());
             for item in items {
@@ -134,13 +134,15 @@ pub fn no_primitive() -> Error {
 /// converted to one, or else the sum of their numbers.
 pub fn plus(a: &Value, b: &Value) -> Result<Value> {
     let primitive = |value: &Value| match value {
-        Value::Array(_) | Value::Object(_) => to_string(value).map(Value::String),
+        Value::Array(_) | Value::Object(_) => {
+            to_string(value).map(|string| Value::String(string.into()))
+        }
         _ => Ok(value.clone()),
     };
     let (a, b) = (primitive(a)?, primitive(b)?);
     Ok(match (&a, &b) {
         (Value::String(_), _) | (_, Value::String(_)) => {
-            Value::String(to_string(&a)? + &to_string(&b)?)
+            Value::String((to_string(&a)? + &to_string(&b)?).into())
         }
         _ => number(to_number(Some(&a))? + to_number(Some(&b))?),
     })
@@ -174,7 +176,7 @@ pub static EMPTY_ARRAY: Value = Value::Array(Vec::new());
 pub static EMPTY_OBJECT: Value = Value::Object(Map::new());
 
 /// `""`.
-pub static EMPTY_STRING: Value = Value::String(String::new());
+pub static EMPTY_STRING: Value = Value::String(json::Str::const_new(""));
 
 pub static TRUE: Value = Value::Bool(true);
 

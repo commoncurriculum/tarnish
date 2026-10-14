@@ -102,20 +102,22 @@ impl ExtensionAttribute {
     fn in_html(self, html: Cow<'static, str>, when_truthy: bool) -> Self {
         let name = self.name;
         let parsed = html.clone();
-        self.parse_html(move |element| element.attribute(&parsed).map(Value::String))
-            .render_html(move |attributes, rendered| match attributes.get(name) {
-                Some(value) if value.truthy() || !when_truthy => {
-                    rendered.merge(html.clone(), value)
-                }
-                _ => Ok(()),
-            })
+        self.parse_html(move |element| {
+            element
+                .attribute(&parsed)
+                .map(|value| Value::String(value.into()))
+        })
+        .render_html(move |attributes, rendered| match attributes.get(name) {
+            Some(value) if value.truthy() || !when_truthy => rendered.merge(html.clone(), value),
+            _ => Ok(()),
+        })
     }
 }
 
 /// `default: this.options[name]` of an option that is `undefined` where it's `None`.
 pub(crate) fn option_default(option: &Option<String>) -> AttributeDefault {
     match option {
-        Some(value) => Value::String(value.clone()).into(),
+        Some(value) => Value::String(value.as_str().into()).into(),
         None => AttributeDefault::Undefined,
     }
 }

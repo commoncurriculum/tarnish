@@ -71,7 +71,7 @@ fn color() -> ExtensionAttribute {
                         .filter(|color| !color.is_empty())
                 })
                 .unwrap_or_else(|| element.style_value("background-color"));
-            Some(Value::String(value))
+            Some(Value::String(value.into()))
         })
         .render_html(|attributes, rendered| match attributes.get("color") {
             Some(color) if color.truthy() => {

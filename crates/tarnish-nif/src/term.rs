@@ -55,13 +55,13 @@ impl Reader {
     fn read_into(&mut self, term: Term, slot: &mut Value) -> Result<(), Unread> {
         self.weigh(1)?;
         *slot = match term.get_type() {
-            TermType::Binary => Value::String(text(self.bytes(term)?)?.to_owned()),
+            TermType::Binary => Value::String(text(self.bytes(term)?)?.into()),
             TermType::Atom if atom::nil() == term => return Ok(()),
             TermType::Atom if atom::true_() == term => Value::Bool(true),
             TermType::Atom if atom::false_() == term => Value::Bool(false),
             // The VM gives out an atom's name in Latin-1, which not every name fits.
             TermType::Atom => match term.atom_to_string() {
-                Ok(name) => Value::String(name),
+                Ok(name) => Value::String(name.into()),
                 Err(_) => return self.external(term, slot),
             },
             TermType::Integer => match term.decode::<i64>() {

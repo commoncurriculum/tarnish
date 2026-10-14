@@ -84,7 +84,7 @@ static LIST_STYLE_TYPE: LazyLock<RegExp> =
 /// `list-style-type` maps to, or its first item's.
 fn html_type(element: &HtmlNode) -> Option<Value> {
     if let Some(kind) = element.attribute("type").filter(|kind| !kind.is_empty()) {
-        return Some(Value::String(kind));
+        return Some(Value::String(kind.into()));
     }
     let mapped = |element: &HtmlNode| {
         let style = element

@@ -220,7 +220,7 @@ pub fn value_from_js(value: Unknown) -> Result<Option<Value>> {
         ValueType::Null => Value::Null,
         ValueType::Boolean => Value::Bool(bool::from_unknown(value)?),
         ValueType::Number => tarnish::js::number(f64::from_unknown(value)?),
-        ValueType::String => Value::String(String::from_unknown(value)?),
+        ValueType::String => Value::String(String::from_unknown(value)?.into()),
         ValueType::Object if value.is_array()? => Value::Array(
             Vec::<Unknown>::from_unknown(value)?
                 .into_iter()

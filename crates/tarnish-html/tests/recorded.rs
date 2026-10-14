@@ -271,7 +271,7 @@ fn inline_styles_match_the_fork() -> Result<()> {
     let dom = HtmlDom::new();
     let mut failures = Vec::new();
     for record in records(&fixtures, "styles") {
-        let css = Value::String(record["css"].as_str().expect("CSS").to_owned());
+        let css = Value::String(record["css"].as_str().expect("CSS").into());
         let element = dom.create_element(None, "p")?;
         dom.set_attribute(&element, None, "style", &css)?;
         let mut values = Map::new();
@@ -279,7 +279,7 @@ fn inline_styles_match_the_fork() -> Result<()> {
             let property = property.as_str().expect("a property");
             let value = dom.style_value(&element, property)?;
             if !value.is_empty() {
-                values.insert(property.into(), Value::String(value));
+                values.insert(property.into(), Value::String(value.into()));
             }
         }
         let written = dom.create_element(None, "p")?;

@@ -85,16 +85,50 @@ pub fn write_string(out: &mut String, string: &str) {
     out.reserve(string.len() + 2);
     out.push('"');
     let mut rest = string;
-    while let Some(index) = rest
-        .bytes()
-        .position(|byte| byte < 0x20 || byte == b'"' || byte == b'\\')
-    {
+    while let Some(index) = escape_index(rest.as_bytes()) {
         out.push_str(&rest[..index]);
         write_escape(out, rest.as_bytes()[index].into());
         rest = &rest[index + 1..];
     }
     out.push_str(rest);
     out.push('"');
+}
+
+/// Where the first byte `JSON.stringify` escapes is: a control character, `"` or `\`. Text is
+/// read eight bytes at a time, as serde_json's and V8's writers skip runs that need no escape.
+#[inline]
+fn escape_index(bytes: &[u8]) -> Option<usize> {
+    let (words, tail) = bytes.as_chunks::<8>();
+    let at = match words.iter().position(|word| escapes(*word)) {
+        Some(word) => word * 8,
+        None => {
+            // The last few bytes, padded with a letter, which needs no escape.
+            let mut word = [b'a'; 8];
+            word[..tail.len()].copy_from_slice(tail);
+            if !escapes(word) {
+                return None;
+            }
+            words.len() * 8
+        }
+    };
+    let found = bytes[at..]
+        .iter()
+        .position(|&byte| byte < 0x20 || byte == b'"' || byte == b'\\')?;
+    Some(at + found)
+}
+
+/// Whether any of eight bytes is one `JSON.stringify` escapes.
+#[inline]
+fn escapes(bytes: [u8; 8]) -> bool {
+    const ONES: u64 = u64::from_ne_bytes([0x01; 8]);
+    const HIGHS: u64 = u64::from_ne_bytes([0x80; 8]);
+    // Whether any byte of `word` is below `bound`, which is at most 0x80.
+    let below = |word: u64, bound: u8| word.wrapping_sub(ONES * u64::from(bound)) & !word & HIGHS;
+    let word = u64::from_ne_bytes(bytes);
+    below(word, 0x20)
+        | below(word ^ (ONES * u64::from(b'"')), 1)
+        | below(word ^ (ONES * u64::from(b'\\')), 1)
+        != 0
 }
 
 /// [`write_string`] of a string held as UTF-16 units, which may hold a lone surrogate.
@@ -185,5 +219,50 @@ fn write_pretty(out: &mut String, value: &Value, depth: usize) {
             out.push('}');
         }
         scalar => write_value(out, scalar),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::write_string;
+
+    /// Each byte `JSON.stringify` escapes, at every place in strings longer and shorter than the
+    /// eight bytes read at a time, among ASCII and multi-byte text, is found and escaped, as a
+    /// byte-at-a-time scan escapes it.
+    #[test]
+    fn escapes_as_a_byte_at_a_time_scan_does() {
+        let escape = |string: &str| {
+            let mut out = String::from("\"");
+            for character in string.chars() {
+                match character {
+                    '"' => out.push_str("\\\""),
+                    '\\' => out.push_str("\\\\"),
+                    '\u{8}' => out.push_str("\\b"),
+                    '\u{c}' => out.push_str("\\f"),
+                    '\n' => out.push_str("\\n"),
+                    '\r' => out.push_str("\\r"),
+                    '\t' => out.push_str("\\t"),
+                    control if control < ' ' => out.push_str(&format!("\\u{:04x}", control as u32)),
+                    other => out.push(other),
+                }
+            }
+            out + "\""
+        };
+        let specials = (0..0x20u8)
+            .map(char::from)
+            .chain(['"', '\\', '\u{7f}', '!', '#', '[', ']']);
+        for filler in ["a", "é", "\u{80}", "\u{ffff}", "😀"] {
+            for len in 0..20 {
+                for at in 0..=len {
+                    for special in specials.clone() {
+                        let mut string = filler.repeat(len);
+                        string.insert(string.len() / len.max(1) * at.min(len), special);
+                        let mut out = String::new();
+                        write_string(&mut out, &string);
+                        assert_eq!(out, escape(&string), "{string:?}");
+                    }
+                }
+            }
+        }
     }
 }

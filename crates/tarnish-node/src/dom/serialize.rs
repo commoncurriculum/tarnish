@@ -62,7 +62,7 @@ fn attributes(value: Unknown) -> Result<Option<Map>> {
     for name in Object::keys(&object)? {
         let value = js::get(&object, &name)?;
         if !js::is_nullish(&value)? {
-            attrs.insert(name.into(), Value::String(attribute_value(value)?));
+            attrs.insert(name.into(), Value::String(attribute_value(value)?.into()));
         }
     }
     Ok(Some(attrs))

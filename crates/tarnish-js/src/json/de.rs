@@ -147,11 +147,11 @@ impl<'de> Visitor<'de> for Seed {
     }
 
     fn visit_str<E>(self, text: &str) -> Result<Value, E> {
-        Ok(Value::String(text.to_owned()))
+        Ok(Value::String(text.into()))
     }
 
     fn visit_string<E>(self, text: String) -> Result<Value, E> {
-        Ok(Value::String(text))
+        Ok(Value::String(text.into()))
     }
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut items: A) -> Result<Value, A::Error> {
@@ -226,7 +226,7 @@ impl Builder {
                 Some(Open::Object(object, _)) => Value::Object(object.finish()),
                 None => unreachable!("the parser closes only what it opened"),
             },
-            JsonEvent::String(text) => Value::String(text.into_owned()),
+            JsonEvent::String(text) => Value::String(text.into()),
             JsonEvent::Number(text) => {
                 number(text.parse().expect("the parser checks a number's syntax"))
             }

@@ -99,7 +99,7 @@ impl Difference {
     pub(crate) fn group(&self, request: &Request) -> Group {
         Group {
             operation: match &request.operation {
-                Value::String(operation) => operation.clone(),
+                Value::String(operation) => operation.to_string(),
                 operation => stringify(operation),
             },
             pattern: self

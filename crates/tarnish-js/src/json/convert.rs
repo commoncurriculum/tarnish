@@ -29,25 +29,25 @@ impl ToValue for Number {
 
 impl ToValue for str {
     fn to_value(&self) -> Value {
-        Value::String(self.to_owned())
+        Value::String(self.into())
     }
 }
 
 impl ToValue for String {
     fn to_value(&self) -> Value {
-        Value::String(self.clone())
+        Value::String(self.as_str().into())
     }
 }
 
 impl ToValue for Cow<'_, str> {
     fn to_value(&self) -> Value {
-        Value::String(self.to_string())
+        Value::String(self.to_string().into())
     }
 }
 
 impl ToValue for char {
     fn to_value(&self) -> Value {
-        Value::String(self.to_string())
+        Value::String(self.to_string().into())
     }
 }
 
@@ -132,7 +132,7 @@ impl IntoValue for Map {
 
 impl IntoValue for String {
     fn into_value(self) -> Value {
-        Value::String(self)
+        Value::String(self.into())
     }
 }
 
@@ -144,7 +144,7 @@ impl IntoValue for Number {
 
 impl IntoValue for Cow<'_, str> {
     fn into_value(self) -> Value {
-        Value::String(self.into_owned())
+        Value::String(self.into())
     }
 }
 
@@ -196,13 +196,13 @@ impl From<Vec<Value>> for Value {
 
 impl From<String> for Value {
     fn from(text: String) -> Value {
-        Value::String(text)
+        Value::String(text.into())
     }
 }
 
 impl From<&str> for Value {
     fn from(text: &str) -> Value {
-        Value::String(text.to_owned())
+        Value::String(text.into())
     }
 }
 

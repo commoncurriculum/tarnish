@@ -44,7 +44,7 @@ sustained = fn name, call ->
   {faulted, rss} = stat.()
 
   IO.puts(
-    String.pad_trailing(name, 27) <>
+    String.pad_trailing(name, 30) <>
       "#{:erlang.float_to_binary(mean, decimals: 1)} µs, " <>
       "#{:erlang.float_to_binary((faulted - faults) / calls, decimals: 2)} faults, " <>
       "RSS #{div(rss, 1024 * 1024)} MiB"
@@ -54,6 +54,7 @@ end
 sustained.("Node.from_json", fn -> Tarnish.Node.from_json(schema, json) end)
 sustained.("Node.to_json, unchanged", fn -> Tarnish.Node.to_json(doc) end)
 sustained.("Node.to_json after the steps", fn -> Tarnish.Node.to_json(changed) end)
+sustained.("JSON text after the steps", fn -> Jason.encode!(Tarnish.Node.to_json(changed)) end)
 sustained.("Node.check", fn -> Tarnish.Node.check(doc) end)
 sustained.("Step.apply, 10 steps", fn -> Tarnish.Step.apply(doc, steps) end)
 

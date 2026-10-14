@@ -5,7 +5,7 @@
 use std::borrow::Cow;
 use std::hash::{Hash, Hasher};
 
-use crate::json::Value;
+use crate::json::{self, Value};
 use crate::{Error, Result, number_to_string};
 
 /// JavaScript's two values without properties.
@@ -130,7 +130,7 @@ pub fn index(value: Option<&Value>, index: usize) -> Result<Option<Cow<'_, Value
         Some(Value::Array(items)) => items.get(index).map(Cow::Borrowed),
         Some(Value::String(text)) => text.encode_utf16().nth(index).map(|unit| {
             // A lone surrogate, which a `String` can't hold, is U+FFFD.
-            Cow::Owned(Value::String(String::from_utf16_lossy(&[unit])))
+            Cow::Owned(Value::String(String::from_utf16_lossy(&[unit]).into()))
         }),
         Some(Value::Object(map)) => map.get(index.to_string().as_str()).map(Cow::Borrowed),
         _ => None,
@@ -159,7 +159,9 @@ pub fn iterate<'a>(value: Option<&'a Value>, how: Iterating) -> Result<Cow<'a, [
             return Ok(Cow::Owned(
                 string
                     .chars()
-                    .map(|character| Value::String(character.into()))
+                    .map(|character| {
+                        Value::String(json::Str::from(&*character.encode_utf8(&mut [0; 4])))
+                    })
                     .collect(),
             ));
         }

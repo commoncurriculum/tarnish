@@ -24,7 +24,7 @@ pub fn table_of_contents(options: TableOfContentsOptions) -> PlainExtension {
             element
                 .attribute(name)
                 .filter(|id| !id.is_empty())
-                .map(Value::String)
+                .map(|value| Value::String(value.into()))
         })
     };
     let attributes = vec![attribute("id"), attribute("data-toc-id")];

@@ -24,6 +24,9 @@ pub use write::{
 };
 /// An object's key, kept in place up to 24 bytes, which every key the schemas name fits in.
 pub type Key = compact_str::CompactString;
+/// A string value, kept in place up to 24 bytes, as type names, mark names and most short
+/// attributes are.
+pub type Str = compact_str::CompactString;
 pub use crate::number::Number;
 
 pub static NULL: Value = Value::Null;
@@ -38,7 +41,7 @@ pub enum Value {
     Null,
     Bool(bool),
     Number(Number),
-    String(String),
+    String(Str),
     Array(Vec<Value>),
     Object(Map),
 }
@@ -174,7 +177,7 @@ impl Value {
     #[inline]
     pub fn into_string(mut self) -> Option<String> {
         match &mut self {
-            Value::String(string) => Some(std::mem::take(string)),
+            Value::String(string) => Some(std::mem::take(string).into_string()),
             _ => None,
         }
     }

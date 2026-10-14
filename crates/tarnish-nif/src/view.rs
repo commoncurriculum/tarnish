@@ -354,7 +354,7 @@ impl<'a, 'r> Json<'a, 'r> {
             Kind::Null => Value::Null,
             Kind::Bool(boolean) => Value::Bool(boolean),
             Kind::Number(number) => Value::Number(number),
-            Kind::String(text) => Value::String(text.into_owned()),
+            Kind::String(text) => Value::String(text.into()),
             Kind::Array if self.reading.weigh(1) => Value::Array(
                 self.list()
                     .map(|item| stack::grow(|| item.value()))

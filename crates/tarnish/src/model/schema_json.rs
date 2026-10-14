@@ -30,7 +30,7 @@ fn loosely_equals(value: &Value, text: &str) -> Result<bool> {
 fn truthy_string(spec: &Map, key: &str) -> Result<Option<String>> {
     match spec.get(key).filter(|value| js::truthy(Some(value))) {
         None => Ok(None),
-        Some(Value::String(value)) => Ok(Some(value.clone())),
+        Some(Value::String(value)) => Ok(Some(value.to_string())),
         Some(_) => Err(invalid(&format!("{key} must be a string"))),
     }
 }
@@ -40,7 +40,7 @@ fn truthy_string(spec: &Map, key: &str) -> Result<Option<String>> {
 fn marks(spec: &Map) -> Result<Option<String>> {
     let value = match spec.get("marks") {
         None | Some(Value::Null) => return Ok(None),
-        Some(Value::String(expr)) => return Ok(Some(expr.clone())),
+        Some(Value::String(expr)) => return Ok(Some(expr.to_string())),
         Some(value) => value,
     };
     if loosely_equals(value, "_")? {
@@ -56,7 +56,7 @@ fn marks(spec: &Map) -> Result<Option<String>> {
 fn excludes(spec: &Map) -> Result<Option<String>> {
     match spec.get("excludes") {
         None | Some(Value::Null) => Ok(None),
-        Some(Value::String(expr)) => Ok(Some(expr.clone())),
+        Some(Value::String(expr)) => Ok(Some(expr.to_string())),
         Some(value) if loosely_equals(value, "")? => Ok(Some(String::new())),
         Some(_) => Err(invalid("excludes must be a string")),
     }
@@ -99,7 +99,7 @@ fn entries<'a>(spec: &'a Map, key: &str) -> Result<Option<&'a Map>> {
 
 fn validate(attr: &Map, name: &str) -> Option<Validate> {
     match attr.get("validate") {
-        Some(Value::String(types)) => Some(Validate::Types(types.clone())),
+        Some(Value::String(types)) => Some(Validate::Types(types.to_string())),
         // ProseMirror calls any other truthy value when it checks the attribute, which throws.
         Some(value) if js::truthy(Some(value)) => {
             let message = format!("The validate of attribute {name} is not a function");

@@ -106,7 +106,7 @@ impl<'a> Reader<'a> {
         *slot = match self.byte()? {
             BINARY => {
                 let length = self.u32()?;
-                Value::String(self.text(length)?.to_owned())
+                Value::String(self.text(length)?.into())
             }
             MAP => {
                 let arity = self.u32()?;
@@ -128,7 +128,7 @@ impl<'a> Reader<'a> {
                 "nil" => Value::Null,
                 "true" => Value::Bool(true),
                 "false" => Value::Bool(false),
-                name => Value::String(name.to_owned()),
+                name => Value::String(name.into()),
             },
             // A list of bytes.
             STRING => {

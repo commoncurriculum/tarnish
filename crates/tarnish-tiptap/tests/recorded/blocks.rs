@@ -449,7 +449,7 @@ const NESTED: [Nested; 9] = [
         configuration: "blocks",
         section: "parsesHTML",
         depth: PARSES,
-        input: |depth| Value::String("<blockquote>".repeat(depth) + "x"),
+        input: |depth| Value::String(("<blockquote>".repeat(depth) + "x").into()),
         output: |depth| json!({ "doc": doc(quoted(depth)) }),
     },
     Nested {
@@ -457,7 +457,7 @@ const NESTED: [Nested; 9] = [
         configuration: "blocks",
         section: "parsesHTML",
         depth: PARSES,
-        input: |depth| Value::String(details_html(depth)),
+        input: |depth| Value::String(details_html(depth).into()),
         output: |depth| json!({ "doc": doc(nested_details(depth)) }),
     },
     Nested {
@@ -465,7 +465,7 @@ const NESTED: [Nested; 9] = [
         configuration: "blocks",
         section: "parsesMarkdown",
         depth: PARSES,
-        input: |depth| Value::String("> ".repeat(depth) + "x"),
+        input: |depth| Value::String(("> ".repeat(depth) + "x").into()),
         output: |depth| json!({ "doc": doc(quoted(depth)) }),
     },
     Nested {
@@ -473,7 +473,7 @@ const NESTED: [Nested; 9] = [
         configuration: "blocks",
         section: "parsesMarkdown",
         depth: PARSES,
-        input: |depth| Value::String(">".repeat(depth) + " x"),
+        input: |depth| Value::String((">".repeat(depth) + " x").into()),
         output: |depth| json!({ "doc": doc(quoted(depth)) }),
     },
     Nested {
@@ -481,7 +481,7 @@ const NESTED: [Nested; 9] = [
         configuration: "blocks",
         section: "parsesMarkdown",
         depth: DETAILS,
-        input: |depth| Value::String(details_markdown(depth)),
+        input: |depth| Value::String(details_markdown(depth).into()),
         output: |depth| json!({ "doc": doc(nested_details(depth)) }),
     },
 ];

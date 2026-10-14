@@ -215,7 +215,7 @@ pub fn attributes_from_twitch_embed_url(url: &str) -> Option<Map> {
         result.push("muted".into(), Value::Bool(true));
     }
     if let Some(time) = filled("time") {
-        result.push("time".into(), Value::String(time));
+        result.push("time".into(), Value::String(time.into()));
     }
     is_valid_twitch_url(&src).then_some(result)
 }

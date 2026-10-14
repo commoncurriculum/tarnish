@@ -7,7 +7,7 @@ use super::view::{MarkRef, NodeRef, SetRef, TextRef};
 use crate::chunk::ValueRef;
 use crate::js::json;
 use crate::js::stack;
-use crate::json::{Map, Value};
+use crate::json::{Key, Map, Value};
 
 #[derive(Clone, Copy)]
 pub enum Field<'c> {
@@ -27,6 +27,18 @@ impl Field<'_> {
             Field::Content(_) => "content",
             Field::Marks(_) => "marks",
             Field::Text(_) => "text",
+        }
+    }
+
+    /// The key as `JSON.stringify` writes it, with its colon, and the comma before it unless it
+    /// is the first.
+    fn written_key(self) -> &'static str {
+        match self {
+            Field::Type(_) => "\"type\":",
+            Field::Attrs(_) => ",\"attrs\":",
+            Field::Content(_) => ",\"content\":",
+            Field::Marks(_) => ",\"marks\":",
+            Field::Text(_) => ",\"text\":",
         }
     }
 }
@@ -103,7 +115,9 @@ impl Node<'_> {
 
     /// `JSON.stringify(node.toJSON())`. Text keeps a lone surrogate, which a JSON value can't.
     pub fn to_json_string(&self) -> String {
-        let mut out = String::new();
+        // Room for the JSON of a document of short paragraphs, so that writing it grows the
+        // string a time or two rather than a dozen.
+        let mut out = String::with_capacity(self.node_size().saturating_mul(4).max(64));
         write_json(&mut out, self.view());
         out
     }
@@ -116,8 +130,10 @@ impl Mark<'_> {
 }
 
 pub(crate) fn to_value<'c>(fields: impl Fields<'c>) -> Value {
-    let mut object = Map::with_capacity(fields.field_count());
-    fields.fields(|field| object.push(field.key().into(), field_value(field)));
+    // The first push makes room for four entries, which is as many as a node of most schemas has,
+    // without reading the fields twice to count them.
+    let mut object = Map::new();
+    fields.fields(|field| object.push(Key::const_new(field.key()), field_value(field)));
     Value::Object(object)
 }
 
@@ -125,13 +141,12 @@ fn field_value(field: Field) -> Value {
     match field {
         Field::Type(name) => Value::String(name.into()),
         Field::Attrs(attrs) => attrs.to_value(),
-        Field::Content(node) => Value::Array(
-            node.children()
-                .map(|child| stack::grow(|| to_value(child)))
-                .collect(),
-        ),
+        // One check of the stack for the level, rather than one for each child.
+        Field::Content(node) => {
+            Value::Array(stack::grow(|| node.children().map(to_value).collect()))
+        }
         Field::Marks(marks) => Value::Array(marks.iter().map(to_value).collect()),
-        Field::Text(text) => Value::String(text.to_string_lossy().into_owned()),
+        Field::Text(text) => Value::String(text.to_string_lossy().as_ref().into()),
     }
 }
 
@@ -139,24 +154,23 @@ fn field_value(field: Field) -> Value {
 // content grows the stack
 pub(crate) fn write_json<'c>(out: &mut String, fields: impl Fields<'c>) {
     out.push('{');
-    let mut first = true;
+    // The type is first, so each key but its writes the comma before it.
     fields.fields(|field| {
-        if !std::mem::take(&mut first) {
-            out.push(',');
-        }
-        json::write_string(out, field.key());
-        out.push(':');
+        out.push_str(field.written_key());
         match field {
             Field::Type(name) => json::write_string(out, name),
             Field::Attrs(attrs) => attrs.write_json(out),
             Field::Content(node) => {
                 out.push('[');
-                for (index, child) in node.children().enumerate() {
-                    if index > 0 {
-                        out.push(',');
+                // One check of the stack for the level, rather than one for each child.
+                stack::grow(|| {
+                    for (index, child) in node.children().enumerate() {
+                        if index > 0 {
+                            out.push(',');
+                        }
+                        write_json(out, child);
                     }
-                    stack::grow(|| write_json(out, child));
-                }
+                });
                 out.push(']');
             }
             Field::Marks(marks) => {

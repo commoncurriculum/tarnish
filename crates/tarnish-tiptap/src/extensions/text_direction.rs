@@ -39,7 +39,9 @@ pub fn text_direction(options: TextDirectionOptions) -> PlainExtension {
         .parse_html(move |element| {
             let dir = element.attribute("dir");
             let dir = dir.filter(|dir| matches!(dir.as_str(), "ltr" | "rtl" | "auto"));
-            Some(Value::String(dir.unwrap_or_else(|| direction.into())))
+            Some(Value::String(
+                dir.map_or_else(|| direction.into(), Into::into),
+            ))
         })
         .render_html(|attributes, rendered| match attributes.get("dir") {
             Some(dir) if dir.truthy() => rendered.merge("dir", dir),

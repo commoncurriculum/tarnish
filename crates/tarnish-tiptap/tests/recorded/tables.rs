@@ -78,7 +78,11 @@ fn with_table(options: TableOptions) -> Vec<Extension> {
 /// An application's `style` attribute on tables and cells, which renders even when it's falsy.
 fn style() -> PlainExtension {
     let style = ExtensionAttribute::new("style", Value::Null)
-        .parse_html(|element| element.attribute("style").map(Value::String))
+        .parse_html(|element| {
+            element
+                .attribute("style")
+                .map(|value| Value::String(value.into()))
+        })
         .render_html(|attributes, rendered| match attributes.get("style") {
             Some(style) if !style.is_null() => rendered.merge("style", style),
             _ => Ok(()),
@@ -283,7 +287,7 @@ const NESTED: [Nested; 3] = [
         depth: PARSES,
         input: |depth| {
             let html = "<table><tr><td>".repeat(depth) + "x" + &"</td></tr></table>".repeat(depth);
-            Value::String(html)
+            Value::String(html.into())
         },
         output: parsed_table,
     },

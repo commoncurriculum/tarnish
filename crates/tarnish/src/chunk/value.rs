@@ -252,7 +252,25 @@ impl<'c> ValueRef<'c> {
     }
 
     pub fn to_value(self) -> Value {
-        JsonView::to_value(self).into_owned()
+        match self.kind() {
+            Kind::Null => Value::Null,
+            Kind::Bool(boolean) => Value::Bool(boolean),
+            Kind::Number(number) => Value::Number(number),
+            Kind::String(string) => Value::String(string.into()),
+            Kind::Array(_) => {
+                Value::Array(stack::grow(|| self.items().map(Self::to_value).collect()))
+            }
+            // A chunk's object holds each key once, as the value it was written from did.
+            Kind::Object(len) => {
+                let mut map = Map::with_capacity(len as usize);
+                stack::grow(|| {
+                    for (key, value) in self.entries() {
+                        map.push(Key::from(key), value.to_value());
+                    }
+                });
+                Value::Object(map)
+            }
+        }
     }
 
     /// An object's entries as a map; empty for anything else.
