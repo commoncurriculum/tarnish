@@ -24,6 +24,7 @@ pub fn heading(options: HeadingOptions) -> NodeExtension {
     NodeExtension::create("heading")
         .content("inline*")
         .group("block")
+        .defining()
         .add_attributes(vec![
             ExtensionAttribute::new("level", json!(1)).not_rendered(),
         ])
