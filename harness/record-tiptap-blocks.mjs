@@ -3,6 +3,7 @@
 // tests/blocks.rs to expect. Each record names the configuration it's of in `extensions`: the
 // extension with its default options, or with the options that change what it makes, beside
 // Document, Paragraph, Text, Heading, HardBreak, Bold and Italic; `all` has every extension here.
+// - schemas: each configuration's schema, as harness/fixture.mjs's schemaRecord writes it.
 // - parsesMarkdown: the document the manager parses each Markdown input to.
 // - serializesMarkdown: the Markdown the manager serializes each document to, the parses' among
 //   them, and documents whose attributes or content are of types the JS reads otherwise.
@@ -41,7 +42,7 @@ import { parseHTML } from "linkedom"
 import { common, createLowlight } from "lowlight"
 import { Marked } from "marked"
 import moreLists from "marked-more-lists"
-import { outcome, writeFixture } from "./fixture.mjs"
+import { outcome, schemaRecord, writeFixture } from "./fixture.mjs"
 
 const base = [Document, Paragraph, Text, Heading, HardBreak, Bold, Italic]
 const details = [Details, DetailsSummary, DetailsContent]
@@ -172,6 +173,8 @@ const { document } = parseHTML("<!DOCTYPE html><html><body></body></html>")
 globalThis.document = document
 const fixture = name => JSON.parse(readFileSync(new URL(`../fixtures/${name}.json`, import.meta.url), "utf8"))
 const unique = values => [...new Set(values)]
+
+const schemas = Object.entries(converters).map(([name, { schema }]) => ({ extensions: name, ...schemaRecord(schema) }))
 
 const doc = (...content) => ({ type: "doc", content })
 const p = (...content) => ({ type: "paragraph", content })
@@ -815,4 +818,11 @@ const attributes = [
   ...attributeObjects.map(input => ({ serialize: input, ...outcome(() => ({ string: serializeAttributes(input) })) })),
 ]
 
-writeFixture("tiptap-blocks", { parsesMarkdown, serializesMarkdown, parsesHTML, serializesHTML, attributes })
+writeFixture("tiptap-blocks", {
+  schemas,
+  parsesMarkdown,
+  serializesMarkdown,
+  parsesHTML,
+  serializesHTML,
+  attributes,
+})

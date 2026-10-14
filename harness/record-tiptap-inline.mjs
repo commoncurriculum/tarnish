@@ -1,7 +1,7 @@
 // Records what Tiptap's inline extensions, and the extensions that give other types attributes,
 // make of documents, to fixtures/tiptap-inline.json, for tarnish-tiptap's tests/inline.rs to
 // expect. Each record names the configuration of extensions it's of in `extensions`:
-// - `schemas` records each configuration's node and mark types as ProseMirror reads their specs.
+// - `schemas` records each configuration's schema, as harness/fixture.mjs's schemaRecord writes it.
 // - `generatesText` records the text `generateText` makes of documents, with a `blockSeparator`
 //   and the text serializers it names in `serializers`, where the record has them.
 // - `generatesUniqueIds` records the document `generateUniqueIds` gives ids, in `ids`.
@@ -35,7 +35,7 @@ import { DOMParser, DOMSerializer, Node } from "@tiptap/pm/model"
 import { parseHTML } from "linkedom"
 import { Marked } from "marked"
 import moreLists from "marked-more-lists"
-import { outcome, writeFixture } from "./fixture.mjs"
+import { outcome, schemaRecord, writeFixture } from "./fixture.mjs"
 
 // Tiptap's own extensions, as harness/record-tiptap.mjs gives them.
 const own = [
@@ -236,24 +236,7 @@ const unique = values => [...new Set(values)]
 const each = inputs => Object.entries(inputs).flatMap(([name, list]) => unique(list).map(input => [name, input]))
 const paragraph = (...content) => ({ type: "doc", content: [{ type: "paragraph", content }] })
 
-const schemas = Object.entries(converters).map(([name, { schema }]) => ({
-  extensions: name,
-  nodes: Object.values(schema.nodes).map(type => [
-    type.name,
-    {
-      atom: type.isAtom,
-      inline: type.isInline,
-      selectable: type.spec.selectable !== false,
-      draggable: !!type.spec.draggable,
-      groups: type.groups,
-      attrs: type.defaultAttrs,
-    },
-  ]),
-  marks: Object.values(schema.marks).map(type => [
-    type.name,
-    { inclusive: type.spec.inclusive !== false, attrs: type.instance ? type.instance.attrs : null },
-  ]),
-}))
+const schemas = Object.entries(converters).map(([name, { schema }]) => ({ extensions: name, ...schemaRecord(schema) }))
 
 // The inputs html5ever builds another tree from than the fork's parse5 does, which tarnish-html's
 // tests/recorded.rs holds to html5ever's tree, as harness/record-tiptap.mjs leaves them out.

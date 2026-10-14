@@ -4,6 +4,7 @@
 //! (the cube, when a lazy continuation line re-lexes every nested blockquote), so parses nest
 //! less deeply.
 
+#[allow(dead_code)]
 mod own;
 
 use own::{Converter, input_of, named};

@@ -8,9 +8,7 @@ mod own;
 
 use own::{Converter, input_of};
 use tarnish::js::stack::on_dirty_scheduler_stack;
-use tarnish::json::{Map, Value, json};
-use tarnish::model::AttributeDefault;
-use tarnish::{NodeType, Schema};
+use tarnish::json::{Value, json};
 use tarnish_fixtures::{expect, read, records, same};
 use tarnish_html::HtmlDom;
 use tarnish_js::utf16;
@@ -248,70 +246,12 @@ fn serializes_html_as_tiptap_does() {
     check("serializesHTML");
 }
 
-/// A node type's spec as `JSON.stringify` writes the spec `getSchema` makes, without its
-/// `parseDOM`: the fields `extendNodeSchema` gives it first, then those Tiptap's core reads.
-fn spec_json(node_type: NodeType) -> Value {
-    let spec = node_type.spec();
-    let mut json = spec.extra.clone();
-    let mut set = |key: &str, value: Option<Value>| {
-        if let Some(value) = value {
-            json.insert(key.into(), value);
-        }
-    };
-    let flag = |set: bool| set.then_some(Value::Bool(true));
-    set("content", spec.content.clone().map(Value::String));
-    set("marks", spec.marks.clone().map(Value::String));
-    set("group", spec.group.clone().map(Value::String));
-    set("inline", flag(spec.inline));
-    set("atom", flag(spec.atom));
-    set("selectable", spec.selectable.map(Value::Bool));
-    set("draggable", flag(spec.draggable));
-    set("code", flag(spec.code));
-    set("linebreakReplacement", flag(spec.linebreak_replacement));
-    set("defining", flag(spec.defining));
-    set("isolating", flag(spec.isolating));
-    let attrs: Map = spec
-        .attrs
-        .iter()
-        .map(|(name, attribute)| {
-            let default = match &attribute.default {
-                AttributeDefault::Value(default) => json!({ "default": default.clone() }),
-                AttributeDefault::Required | AttributeDefault::Undefined => json!({}),
-            };
-            (name.as_str().into(), default)
-        })
-        .collect();
-    set("attrs", (!attrs.is_empty()).then_some(Value::Object(attrs)));
-    Value::Object(json)
-}
-
-fn schema_json(schema: &Schema) -> Value {
-    let names: Vec<Value> = schema
-        .node_types()
-        .map(|node_type| json!(node_type.name()))
-        .collect();
-    let tables: Vec<Value> = schema
-        .node_types()
-        .filter(|node_type| node_type.name().starts_with("table"))
-        .map(|node_type| json!([node_type.name(), spec_json(node_type)]))
-        .collect();
-    json!({ "names": names, "tables": tables })
-}
-
-/// Each configuration's node types, and the specs of the table's, with `tableRole` only where
-/// Table's `extendNodeSchema` puts it.
+/// Each configuration's schema, with `tableRole` only where Table's `extendNodeSchema` puts it.
 #[test]
 fn builds_the_schemas_tiptap_does() {
-    let fixtures = read("tiptap-tables");
-    for record in records(&fixtures, "schemas") {
-        let name = named(record);
-        let converter = Converter::of(&configuration(name));
-        expect(
-            record,
-            &["extensions"],
-            schema_json(&converter.schema().schema),
-        );
-    }
+    own::check_schemas("tiptap-tables", |name| {
+        Converter::of(&configuration(name.expect("a configuration")))
+    });
 }
 
 const DOCUMENTS: usize = 20_000;

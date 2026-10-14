@@ -2,6 +2,7 @@
 // with @tiptap/extension-list's BulletList, OrderedList, ListItem, TaskList and TaskItem, to
 // fixtures/tiptap-lists.json, for tarnish-tiptap's tests/lists.rs to expect, in the record shapes
 // harness/record-tiptap.mjs writes:
+// - Each configuration records its schema, but `tabs`, whose is `lists`'.
 // - Each Markdown input records the document the manager parses it to: every input of
 //   fixtures/marked.json, and each list form the extensions' tokenizers and parsers read.
 // - Each document records the Markdown the manager serializes it to: the documents the parses
@@ -38,7 +39,7 @@ import { parseHTML } from "linkedom"
 import { Marked } from "marked"
 import moreLists from "marked-more-lists"
 import { FlatListCore, FlatListOrdered, FlatListTask, FlatListUnordered } from "tiptap-extension-flat-list"
-import { outcome, writeFixture } from "./fixture.mjs"
+import { outcome, schemaRecord, writeFixture } from "./fixture.mjs"
 
 const own = [
   Document,
@@ -586,39 +587,8 @@ const serializesHTML = schemas
   .flatMap(name => documents(name, docsFor(name), serialized(name)))
   .map(([name, doc]) => ({ extensions: name, doc, ...serializeHTML(name, doc) }))
 
-// Each configuration's node and mark types in the schema's order, with the fields of their specs
-// a schema reads: strings and `selectable` where given, other flags where true, and each
-// attribute's default where it has one.
-const present = (spec, keys) => keys.filter(key => spec[key] !== undefined).map(key => [key, spec[key]])
-const flags = (spec, keys) => keys.filter(key => spec[key]).map(key => [key, true])
-const attributes = spec =>
-  Object.entries(spec.attrs ?? {}).map(([name, attr]) => ("default" in attr ? { name, default: attr.default } : { name }))
-const typeSpecs = (types, strings, booleans) => {
-  const specs = []
-  types.forEach((name, spec) =>
-    specs.push({
-      name,
-      ...Object.fromEntries([...present(spec, strings), ...flags(spec, booleans)]),
-      attrs: attributes(spec),
-    }),
-  )
-  return specs
-}
-const schemaRecords = schemas.map(name => {
-  const { spec } = converters[name].schema
-  return {
-    extensions: name,
-    nodes: typeSpecs(
-      spec.nodes,
-      ["content", "marks", "group", "whitespace", "selectable"],
-      ["inline", "atom", "draggable", "code", "linebreakReplacement", "defining", "isolating"],
-    ),
-    marks: typeSpecs(spec.marks, ["excludes", "group", "inclusive", "spanning"], ["code"]),
-  }
-})
-
 writeFixture("tiptap-lists", {
-  schemas: schemaRecords,
+  schemas: schemas.map(name => ({ extensions: name, ...schemaRecord(converters[name].schema) })),
   parsesMarkdown,
   serializesMarkdown,
   parsesHTML,

@@ -28,8 +28,8 @@ use tarnish_tiptap::extensions::{
 };
 use tarnish_tiptap::{
     DomSpec, Extension, ExtensionAttribute, GlobalAttributes, GlobalTypes, MarkExtension,
-    NodeExtension, ParseHtml, PlainExtension, TextOptions, TextSerializer, TiptapSchema,
-    generate_text, get_schema, node_attr,
+    NodeExtension, ParseHtml, PlainExtension, TextOptions, TextSerializer, generate_text,
+    node_attr,
 };
 
 /// Global attributes for each kind of `types`.
@@ -418,53 +418,11 @@ fn check(section: &str) {
     );
 }
 
-/// Each node and mark type of a schema, as the recorder reads their specs.
-fn types(schema: &TiptapSchema) -> Value {
-    let schema = &schema.schema;
-    let attrs =
-        |attrs: Option<&tarnish::json::Map>| attrs.cloned().map_or(Value::Null, Value::Object);
-    let nodes: Vec<Value> = schema
-        .node_types()
-        .map(|node| {
-            json!([node.name(), {
-                "atom": node.is_atom(),
-                "inline": node.is_inline(),
-                "selectable": node.spec().selectable != Some(false),
-                "draggable": node.spec().draggable,
-                "groups": node.groups(),
-                "attrs": attrs(node.default_attrs()),
-            }])
-        })
-        .collect();
-    let marks: Vec<Value> = schema
-        .mark_types()
-        .map(|mark| {
-            json!([mark.name(), {
-                "inclusive": mark.spec().inclusive != Some(false),
-                "attrs": attrs(mark.default_attrs()),
-            }])
-        })
-        .collect();
-    json!({"nodes": nodes, "marks": marks})
-}
-
 #[test]
-fn makes_the_schemas_tiptap_does() {
-    let fixtures = read("tiptap-inline");
-    for record in records(&fixtures, "schemas") {
-        let name = record["extensions"].as_str().expect("a configuration");
-        let schema = get_schema(&configuration(name)).expect("the schema");
-        let mut expected = record.clone();
-        expected
-            .as_object_mut()
-            .expect("a record")
-            .shift_remove("extensions");
-        let actual = types(&schema);
-        assert!(
-            same(&expected, &actual),
-            "{name}: {actual} where {expected}"
-        );
-    }
+fn builds_the_schemas_tiptap_does() {
+    own::check_schemas("tiptap-inline", |name| {
+        Converter::of(&configuration(name.expect("a configuration")))
+    });
 }
 
 /// The text serializers a record names.

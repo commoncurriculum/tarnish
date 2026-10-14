@@ -1,7 +1,8 @@
 //! What @tiptap/markdown's `MarkdownManager` and ProseMirror's `DOMParser` and `DOMSerializer` do
 //! with Tiptap's block and embed extensions, recorded by `harness/record-tiptap-blocks.mjs`:
-//! tarnish-tiptap's must make the same documents, Markdown and HTML, or fail with the same error,
-//! in each configuration a record names, and at any depth blockquotes and details nest.
+//! tarnish-tiptap's must make the same schemas, documents, Markdown and HTML, or fail with the
+//! same error, in each configuration a record names, and at any depth blockquotes and details
+//! nest.
 
 #[allow(dead_code)]
 mod own;
@@ -346,6 +347,13 @@ fn check(section: &str) {
         failures.len(),
         failures.join("\n\n")
     );
+}
+
+#[test]
+fn builds_the_schemas_tiptap_does() {
+    own::check_schemas("tiptap-blocks", |name| {
+        converter(name.expect("a configuration"))
+    });
 }
 
 #[test]

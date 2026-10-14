@@ -8,10 +8,8 @@ mod own;
 
 use own::{Converter, input_of, named};
 use tarnish::js::stack::on_dirty_scheduler_stack;
-use tarnish::json::{Map, Value, json};
-use tarnish::model::{AttributeDefault, NodeType, Whitespace};
+use tarnish::json::{Value, json};
 use tarnish_fixtures::{expect, read, records, same};
-use tarnish_tiptap::get_schema;
 
 const CONFIGURATIONS: [&str; 9] = [
     "lists",
@@ -74,86 +72,9 @@ fn serializes_html_as_tiptap_does() {
     check("serializesHTML");
 }
 
-/// The node types the lists port.
-const LISTS: [&str; 5] = [
-    "bulletList",
-    "orderedList",
-    "listItem",
-    "taskList",
-    "taskItem",
-];
-
-/// A node type's spec as the recorder writes it: its strings and `selectable` where given, its
-/// other flags where true, and its attributes' defaults.
-fn node_spec(node: NodeType) -> Value {
-    let spec = node.spec();
-    let mut out = Map::new();
-    out.insert("name".into(), json!(node.name()));
-    let strings = [
-        ("content", spec.content.clone()),
-        ("marks", spec.marks.clone()),
-        ("group", spec.group.clone()),
-        (
-            "whitespace",
-            spec.whitespace.map(|whitespace| match whitespace {
-                Whitespace::Pre => "pre".into(),
-                Whitespace::Normal => "normal".into(),
-            }),
-        ),
-    ];
-    for (key, string) in strings {
-        if let Some(string) = string {
-            out.insert(key.into(), json!(string));
-        }
-    }
-    if let Some(selectable) = spec.selectable {
-        out.insert("selectable".into(), json!(selectable));
-    }
-    let flags = [
-        ("inline", spec.inline),
-        ("atom", spec.atom),
-        ("draggable", spec.draggable),
-        ("code", spec.code),
-        ("linebreakReplacement", spec.linebreak_replacement),
-        ("defining", spec.defining),
-        ("isolating", spec.isolating),
-    ];
-    for (key, _) in flags.iter().filter(|(_, flag)| *flag) {
-        out.insert((*key).into(), json!(true));
-    }
-    let attrs: Vec<Value> = spec
-        .attrs
-        .iter()
-        .map(|(name, attr)| match &attr.default {
-            AttributeDefault::Value(default) => json!({ "name": name, "default": default }),
-            AttributeDefault::Required | AttributeDefault::Undefined => json!({ "name": name }),
-        })
-        .collect();
-    out.insert("attrs".into(), Value::Array(attrs));
-    Value::Object(out)
-}
-
-/// Each configuration's schema has Tiptap's node types in its order, and the lists' as Tiptap
-/// specifies them.
 #[test]
 fn builds_the_schemas_tiptap_does() {
-    let fixtures = read("tiptap-lists");
-    for record in records(&fixtures, "schemas") {
-        let name = named(record).expect("a configuration");
-        let (extensions, _) = own::lists::configuration(name).expect("the configuration");
-        let schema = get_schema(&extensions).expect("the schema").schema;
-        let recorded = record["nodes"].as_array().expect("nodes");
-        let names: Vec<&Value> = recorded.iter().map(|spec| &spec["name"]).collect();
-        let types: Vec<Value> = schema.node_types().map(|node| json!(node.name())).collect();
-        assert!(names.iter().copied().eq(types.iter()), "{name}: {types:?}");
-        for spec in recorded {
-            let type_name = spec["name"].as_str().expect("a name");
-            if LISTS.contains(&type_name) {
-                let actual = node_spec(schema.node_type(type_name).expect("the type"));
-                assert!(same(spec, &actual), "{name}: {actual}");
-            }
-        }
-    }
+    own::check_schemas("tiptap-lists", Converter::new);
 }
 
 const DOCUMENTS: usize = 10_000;

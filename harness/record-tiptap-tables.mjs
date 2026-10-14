@@ -9,10 +9,9 @@
 //   with Table's `HTMLAttributes` too;
 // - `kit`: TableKit, with a minimum cell width;
 // - `partial`: rows and cells, with no Table.
-// `schemas` records each configuration's node types, and the specs of the table's as JSON writes
-// them, without their parse rules, and `queries` the `width` of each element each table's
-// `querySelectorAll("colgroup > col")` finds, which TableCell's colwidth reads when the cell has
-// none of its own.
+// `schemas` records each configuration's schema, as harness/fixture.mjs's schemaRecord writes it,
+// and `queries` the `width` of each element each table's `querySelectorAll("colgroup > col")`
+// finds, which TableCell's colwidth reads when the cell has none of its own.
 import { readFileSync } from "node:fs"
 import { Extension, Mark, getSchema } from "@tiptap/core"
 import { Bold } from "@tiptap/extension-bold"
@@ -28,7 +27,7 @@ import { DOMParser, DOMSerializer, Node } from "@tiptap/pm/model"
 import { parseHTML } from "linkedom"
 import { Marked } from "marked"
 import moreLists from "marked-more-lists"
-import { outcome, writeFixture } from "./fixture.mjs"
+import { outcome, schemaRecord, writeFixture } from "./fixture.mjs"
 
 const Code = Mark.create({
   name: "code",
@@ -96,16 +95,7 @@ const fixture = name => JSON.parse(readFileSync(new URL(`../fixtures/${name}.jso
 const unique = values => [...new Set(values)]
 const body = html => parseHTML(`<!DOCTYPE html><html><body>${html}</body></html>`).document.body
 
-const schemas = Object.entries(converters).map(([name, { schema }]) => {
-  const names = []
-  const tables = []
-  schema.spec.nodes.forEach((type, spec) => {
-    names.push(type)
-    const { parseDOM, ...rest } = spec
-    if (type.startsWith("table")) tables.push([type, JSON.parse(JSON.stringify(rest))])
-  })
-  return { extensions: name, names, tables }
-})
+const schemas = Object.entries(converters).map(([name, { schema }]) => ({ extensions: name, ...schemaRecord(schema) }))
 
 // A table `depth` deep in a cell of a table, around a paragraph's text.
 const nestedTable = depth => {

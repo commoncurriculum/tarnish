@@ -1,5 +1,6 @@
 // Records what @tiptap/markdown's MarkdownManager and ProseMirror's DOMParser and DOMSerializer do
 // with Tiptap's extensions, to fixtures/tiptap.json, for tarnish-tiptap's tests to expect:
+// - Each configuration records its schema, as harness/fixture.mjs's schemaRecord writes it.
 // - Each Markdown input records the document the manager parses it to: fixtures/marked.json's,
 //   and Tiptap's own syntax.
 // - Each document records the Markdown the manager serializes it to: the documents the parses
@@ -32,7 +33,7 @@ import { DOMParser, DOMSerializer, Node } from "@tiptap/pm/model"
 import { parseHTML } from "linkedom"
 import { Marked } from "marked"
 import moreLists from "marked-more-lists"
-import { outcome, writeFixture } from "./fixture.mjs"
+import { outcome, schemaRecord, writeFixture } from "./fixture.mjs"
 
 const own = [
   Document,
@@ -89,6 +90,8 @@ const { document } = parseHTML("<!DOCTYPE html><html><body></body></html>")
 const fixture = name => JSON.parse(readFileSync(new URL(`../fixtures/${name}.json`, import.meta.url), "utf8"))
 const named = name => (name === "own" ? {} : { extensions: name })
 const unique = values => [...new Set(values)]
+
+const schemas = Object.entries(converters).map(([name, { schema }]) => ({ ...named(name), ...schemaRecord(schema) }))
 
 // `type` inside itself, `depth` deep, around a text node.
 const nested = (type, depth) => {
@@ -325,6 +328,7 @@ const serializesHTML = [
 }))
 
 writeFixture("tiptap", {
+  schemas,
   parsesMarkdown,
   serializesMarkdown,
   parsesHTML,

@@ -4,9 +4,10 @@
 
 pub mod lists;
 
-use tarnish::Node;
-use tarnish::json::{Value, json};
-use tarnish_fixtures::outcome;
+use tarnish::json::{Map, Value, json, object};
+use tarnish::model::{AttributeDefault, AttributeSpec, Whitespace};
+use tarnish::{Node, Schema};
+use tarnish_fixtures::{outcome, read, records, same};
 use tarnish_js::Error;
 use tarnish_markdown::marked::Marked;
 use tarnish_markdown::marked_more_lists::more_lists;
@@ -140,7 +141,6 @@ impl Converter {
         }
     }
 
-    #[allow(dead_code)]
     pub fn schema(&self) -> &TiptapSchema {
         &self.schema
     }
@@ -175,4 +175,114 @@ pub fn input_of(section: &str) -> &'static str {
         "parsesHTML" => "html",
         _ => "doc",
     }
+}
+
+/// A schema as `harness/fixture.mjs`'s `schemaRecord` writes it: its top node's type, and each
+/// node and mark type with each field of its spec, one left out written as ProseMirror reads it,
+/// then the fields an extension adds, and each attribute: whether it's required, and its default,
+/// but an `undefined` one.
+pub fn schema_record(schema: &Schema) -> Value {
+    fn typed(name: &str, fields: Map, extra: &Map, attrs: &[(String, AttributeSpec)]) -> Value {
+        let attrs = attrs.iter().map(|(name, attr)| {
+            let required = matches!(attr.default, AttributeDefault::Required);
+            match &attr.default {
+                AttributeDefault::Value(default) => {
+                    json!({ "name": name, "required": required, "default": default.clone() })
+                }
+                _ => json!({ "name": name, "required": required }),
+            }
+        });
+        let mut record = Map::from_iter([("name".into(), json!(name))]);
+        record.extend(fields);
+        record.extend(extra.clone());
+        record.insert("attrs".into(), Value::Array(attrs.collect()));
+        Value::Object(record)
+    }
+    let nodes = schema.node_types().map(|node| {
+        let spec = node.spec();
+        let whitespace = spec.whitespace.map(|whitespace| match whitespace {
+            Whitespace::Pre => "pre",
+            Whitespace::Normal => "normal",
+        });
+        let fields = object!({
+            "content": spec.content.as_deref(),
+            "marks": spec.marks.as_deref(),
+            "group": spec.group.as_deref(),
+            "inline": spec.inline,
+            "atom": spec.atom,
+            "selectable": spec.selectable.unwrap_or(true),
+            "draggable": spec.draggable,
+            "code": spec.code,
+            "whitespace": whitespace,
+            "definingAsContext": spec.defining_as_context,
+            "definingForContent": spec.defining_for_content,
+            "defining": spec.defining,
+            "isolating": spec.isolating,
+            "linebreakReplacement": spec.linebreak_replacement,
+        });
+        typed(node.name(), fields, &spec.extra, &spec.attrs)
+    });
+    let marks = schema.mark_types().map(|mark| {
+        let spec = mark.spec();
+        let fields = object!({
+            "inclusive": spec.inclusive.unwrap_or(true),
+            "excludes": spec.excludes.as_deref(),
+            "group": spec.group.as_deref(),
+            "spanning": spec.spanning.unwrap_or(true),
+            "code": spec.code,
+        });
+        typed(mark.name(), fields, &spec.extra, &spec.attrs)
+    });
+    json!({
+        "topNode": schema.top_node_type().name(),
+        "nodes": Value::Array(nodes.collect()),
+        "marks": Value::Array(marks.collect()),
+    })
+}
+
+/// Holds each record of a fixture's `schemas` to the schema `converter` builds of the
+/// configuration it names, as [`schema_record`] writes it, naming each type that differs.
+#[track_caller]
+pub fn check_schemas(fixture: &str, converter: impl Fn(Option<&str>) -> Converter) {
+    let fixtures = read(fixture);
+    let mut failures = Vec::new();
+    for record in records(&fixtures, "schemas") {
+        let name = named(record);
+        let actual = schema_record(&converter(name).schema().schema);
+        let mut expected = record.clone();
+        expected
+            .as_object_mut()
+            .expect("a record")
+            .shift_remove("extensions");
+        if same(&expected, &actual) {
+            continue;
+        }
+        let configuration = name.unwrap_or("own");
+        let write = |record: Option<&Value>| record.map_or("none".into(), Value::to_string);
+        let mut differ = Vec::new();
+        for kind in ["nodes", "marks"] {
+            let types = |record: &Value| record[kind].as_array().cloned().unwrap_or_default();
+            let (recorded, made) = (types(&expected), types(&actual));
+            for index in 0..recorded.len().max(made.len()) {
+                let (recorded, made) = (write(recorded.get(index)), write(made.get(index)));
+                if recorded != made {
+                    differ.push(format!(
+                        "{configuration} {kind}[{index}]\n  Tiptap: {recorded}\n  tarnish-tiptap: {made}"
+                    ));
+                }
+            }
+        }
+        if differ.is_empty() {
+            differ.push(format!(
+                "{configuration}\n  Tiptap: {expected}\n  tarnish-tiptap: {actual}"
+            ));
+        }
+        failures.extend(differ);
+    }
+    assert!(
+        failures.is_empty(),
+        "{} failures:\n\n{}",
+        failures.len(),
+        failures.join("\n\n")
+    );
 }

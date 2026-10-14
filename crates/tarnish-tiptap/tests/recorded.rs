@@ -1,6 +1,6 @@
 //! What @tiptap/markdown's `MarkdownManager` and ProseMirror's `DOMParser` and `DOMSerializer` do
 //! with Tiptap's extensions, recorded by `harness/record-tiptap.mjs`: tarnish-tiptap's must make
-//! the same documents, Markdown and HTML, or fail with the same error.
+//! the same schemas, documents, Markdown and HTML, or fail with the same error.
 
 mod own;
 
@@ -50,6 +50,11 @@ fn ports_the_installed_tiptap() {
     }
     let flat_list = version("tiptap-extension-flat-list");
     assert_eq!(flat_list, tarnish_tiptap::FLAT_LIST);
+}
+
+#[test]
+fn builds_the_schemas_tiptap_does() {
+    own::check_schemas("tiptap", Converter::new);
 }
 
 #[test]
