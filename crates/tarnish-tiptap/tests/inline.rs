@@ -18,6 +18,9 @@ use tarnish_tiptap::extensions::text_style::{
     StyleOptions, TextStyleKitOptions, TextStyleOptions, background_color, color, font_family,
     font_size, line_height, text_style_kit,
 };
+use tarnish_tiptap::extensions::unique_id::{
+    UniqueIdOptions, UniqueIdTypes, generate_unique_ids, unique_id,
+};
 use tarnish_tiptap::extensions::{
     bold::bold, document::document, hard_break::hard_break, heading::HeadingOptions,
     heading::heading, italic::italic, paragraph::paragraph, text::text,
@@ -96,6 +99,37 @@ fn specs() -> Vec<Extension> {
 /// Tiptap's own extensions, and `others`.
 fn own_with(others: impl IntoIterator<Item = Extension>) -> Vec<Extension> {
     own::extensions().into_iter().chain(others).collect()
+}
+
+/// The options of the UniqueID of each configuration that has one.
+fn ids(name: &str) -> UniqueIdOptions {
+    match name {
+        "uniqueIdNone" => UniqueIdOptions::default(),
+        "uniqueId" => UniqueIdOptions {
+            types: UniqueIdTypes::Named(&["paragraph", "heading"]),
+            generate_id: Arc::new(|node, pos| {
+                Ok(json!(format!("{}-{pos}", node.node_type().name())))
+            }),
+            ..UniqueIdOptions::default()
+        },
+        "uniqueIdAll" => UniqueIdOptions {
+            types: UniqueIdTypes::All,
+            generate_id: Arc::new(|node, pos| {
+                Ok(if node.is_inline() {
+                    json!(pos)
+                } else {
+                    json!({"at": pos})
+                })
+            }),
+            ..UniqueIdOptions::default()
+        },
+        "uniqueIdName" => UniqueIdOptions {
+            attribute_name: "uid",
+            types: UniqueIdTypes::Named(&["paragraph"]),
+            generate_id: Arc::new(|_, _| Ok(json!(""))),
+        },
+        other => panic!("no UniqueID in {other}"),
+    }
 }
 
 /// Document, Paragraph, Text, Heading and Bold, and the extensions of a `TextStyleKit`.
@@ -209,6 +243,16 @@ fn configuration(name: &str) -> Vec<Extension> {
             ..MentionOptions::default()
         })
         .into()]),
+        "uniqueIdNone" => own_with([unique_id(UniqueIdOptions::default()).into()]),
+        "uniqueId" | "uniqueIdAll" | "uniqueIdName" => {
+            let options = ids(name);
+            let mut extensions = own::extensions();
+            if name == "uniqueIdAll" {
+                extensions.push(mention(MentionOptions::default()).into());
+            }
+            extensions.push(unique_id(options).into());
+            extensions
+        }
         "kit" => kit(TextStyleKitOptions::default()),
         "kitOptions" => kit(TextStyleKitOptions {
             background_color: None,
@@ -380,6 +424,15 @@ fn generates_text_as_tiptap_does() {
         }
         let text = generate_text(&given["doc"], &configured.extensions, &options);
         outcome(text.map(|text| json!({"text": text})))
+    });
+}
+
+#[test]
+fn generates_unique_ids_as_tiptap_does() {
+    check("generatesUniqueIds", &["doc"], |configured, given| {
+        let options = ids(&configured.name);
+        let doc = generate_unique_ids(&given["doc"], &configured.extensions, &options);
+        outcome(doc.map(|doc| json!({"ids": doc})))
     });
 }
 

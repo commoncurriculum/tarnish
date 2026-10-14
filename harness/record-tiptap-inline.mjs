@@ -4,6 +4,7 @@
 // - `schemas` records each configuration's node and mark types as ProseMirror reads their specs.
 // - `generatesText` records the text `generateText` makes of documents, with a `blockSeparator`
 //   and the text serializers it names in `serializers`, where the record has them.
+// - `generatesUniqueIds` records the document `generateUniqueIds` gives ids, in `ids`.
 // - `parsesMarkdown`, `serializesMarkdown`, `parsesHTML` and `serializesHTML` record what
 //   harness/record-tiptap.mjs records, of each configuration.
 import { readFileSync } from "node:fs"
@@ -28,6 +29,7 @@ import * as textStyles from "@tiptap/extension-text-style"
 import { BackgroundColor, FontSize, LineHeight, TextStyle, TextStyleKit } from "@tiptap/extension-text-style"
 import { TextAlign } from "@tiptap/extension-text-align"
 import { Underline } from "@tiptap/extension-underline"
+import { UniqueID, generateUniqueIds } from "@tiptap/extension-unique-id"
 import { MarkdownManager } from "@tiptap/markdown"
 import { DOMParser, DOMSerializer, Node } from "@tiptap/pm/model"
 import { parseHTML } from "linkedom"
@@ -179,6 +181,18 @@ const configurations = {
       renderLabel: ({ node, suggestion }) => `${suggestion.char}${node.attrs.label}!`,
     }),
   ],
+  uniqueIdNone: [...own, UniqueID],
+  uniqueId: [
+    ...own,
+    UniqueID.configure({ types: ["paragraph", "heading"], generateID: ({ node, pos }) => `${node.type.name}-${pos}` }),
+  ],
+  // UniqueID's id and Mention's own, of the same name.
+  uniqueIdAll: [
+    ...own,
+    Mention,
+    UniqueID.configure({ types: "all", generateID: ({ node, pos }) => (node.isInline ? pos : { at: pos }) }),
+  ],
+  uniqueIdName: [...own, UniqueID.configure({ types: ["paragraph"], attributeName: "uid", generateID: () => "" })],
 }
 
 const converters = Object.fromEntries(
@@ -444,6 +458,27 @@ const mentionDocs = [
   ),
 ]
 
+const idHTML = [
+  '<p data-id="a">x</p><h1 data-id="1">h</h1><p data-id="">e</p><p>none</p><p id="plain">i</p>',
+  '<p data-uid="u" data-id="d">both</p><img src="a.png" data-id="img"><p DATA-ID="caps">c</p>',
+]
+const idDocs = [
+  {
+    type: "doc",
+    content: [
+      { type: "paragraph", attrs: { id: "a" }, content: [{ type: "text", text: "x" }] },
+      { type: "paragraph", attrs: { id: "" } },
+      { type: "paragraph", attrs: { id: 0 } },
+      { type: "paragraph", attrs: { id: 5 } },
+      { type: "paragraph" },
+      { type: "heading", attrs: { level: 2, id: { an: "object" } }, content: [{ type: "text", text: "h" }] },
+      { type: "heading", attrs: { level: 3 } },
+      { type: "image", attrs: { src: "a.png" } },
+      { type: "paragraph", attrs: { uid: "u" } },
+    ],
+  },
+]
+
 const parsesMarkdown = each({
   globals: ["plain **bold**"],
   styles: ['<span style="color: red">x</span>', "plain *em*"],
@@ -479,6 +514,10 @@ const parsesHTML = each({
   mentionRender: mentionHTML,
   mentionString: mentionHTML,
   mentionLabel: mentionHTML,
+  uniqueIdNone: idHTML,
+  uniqueId: idHTML,
+  uniqueIdAll: [...idHTML, ...mentionHTML],
+  uniqueIdName: idHTML,
 }).map(([name, html]) => ({
   extensions: name,
   html,
@@ -528,6 +567,10 @@ const docs = {
   mentionRender: mentionDocs,
   mentionString: mentionDocs,
   mentionLabel: mentionDocs,
+  uniqueIdNone: idDocs,
+  uniqueId: idDocs,
+  uniqueIdAll: [...idDocs, ...mentionDocs.slice(0, 2)],
+  uniqueIdName: idDocs,
 }
 
 const serializesMarkdown = documents(docs).map(([name, doc]) => ({
@@ -623,9 +666,26 @@ const generatesText = [
   })),
 }))
 
+const idsDocs = [
+  ...idDocs,
+  ...unique(tiptapDocs)
+    .slice(0, 30)
+    .map(text => JSON.parse(text)),
+  { type: "doc", content: [{ type: "paragraph", attrs: { id: "x" } }, { type: "unknown" }] },
+]
+const generatesUniqueIds = [
+  ...["uniqueIdNone", "uniqueId", "uniqueIdName"].flatMap(name => idsDocs.map(doc => [name, doc])),
+  ...[...idsDocs, ...mentionDocs.slice(0, 2)].map(doc => ["uniqueIdAll", doc]),
+].map(([name, doc]) => ({
+  extensions: name,
+  doc,
+  ...outcome(() => ({ ids: generateUniqueIds(doc, converters[name].extensions) })),
+}))
+
 writeFixture("tiptap-inline", {
   schemas,
   generatesText,
+  generatesUniqueIds,
   parsesMarkdown,
   serializesMarkdown,
   parsesHTML,

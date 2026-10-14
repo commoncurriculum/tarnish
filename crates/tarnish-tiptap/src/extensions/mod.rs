@@ -37,6 +37,7 @@ pub mod text_align;
 pub mod text_style;
 pub mod twitch;
 pub mod underline;
+pub mod unique_id;
 pub mod youtube;
 
 #[cfg(test)]
