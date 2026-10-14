@@ -153,6 +153,24 @@ This example is `tarnish-html`'s doctest.
 extensions are in `tarnish_tiptap::extensions`; an application writes its own, or extends
 these, as it would in JavaScript.
 
+Every open-source Tiptap 3.30.0 extension that defines a document's content is here, each
+making what its JavaScript makes:
+
+- **Nodes:** Document, Paragraph, Text, Heading, HardBreak, Blockquote, CodeBlock (and
+  CodeBlockLowlight, whose documents are CodeBlock's), HorizontalRule, Image, BulletList,
+  OrderedList, ListItem, TaskList, TaskItem, Table, TableRow, TableCell, TableHeader, Details,
+  DetailsSummary, DetailsContent, InlineMath, BlockMath, Emoji, Mention, YouTube, Twitch and
+  Audio, and tiptap-extension-flat-list's flat list.
+- **Marks:** Bold, Italic, Strike, Underline, Code, Highlight, Subscript, Superscript, Link,
+  RubyText and TextStyle, with Color, BackgroundColor, FontFamily, FontSize and LineHeight.
+- **Attributes on other types:** TextAlign, UniqueID and TableOfContents' ids.
+
+What only an editor uses isn't here: commands, keyboard shortcuts, input and paste rules, node
+views, and plugins that decorate, suggest or react to typing. Nor are the plugins that change a
+document as it's edited: UniqueID's and TableOfContents' ids for new nodes, prosemirror-tables'
+`fixTables`, and Emoji's and Mathematics' conversions of typed text. `generateUniqueIds` and
+`generateText` are here.
+
 ```toml
 [dependencies]
 tarnish-markdown = { git = "https://github.com/commoncurriculum/tarnish" }
@@ -181,12 +199,16 @@ assert_eq!(markdown.parse("Hello **world**")?, doc.to_json());
 This example is `tarnish-tiptap`'s doctest.
 
 `npm run test:js` records what the JavaScript does, for the tests to hold these crates to:
-`fixtures/marked.json`, the tokens marked, with marked-more-lists, makes of 206 Markdown
-inputs; `fixtures/tiptap.json`, the documents, Markdown and HTML that `MarkdownManager`,
-`DOMParser` and `DOMSerializer` make with Tiptap's own extensions, among them V8's errors for
-documents holding what the manager can't read; and `fixtures/js.json`, what V8's built-ins that
-`tarnish-js` ports give: `JSON.parse`, `Number`, `parseInt`, the `TypeError`s of reading JSON
-values, `repeat`, `replaceAll`, each comparison a sort asks for, and `localeCompare`.
+`fixtures/marked.json`, the tokens marked, with marked-more-lists, makes of 224 Markdown
+inputs, and with block tokenizer extensions of 34 more; `fixtures/tiptap.json`, the documents,
+Markdown and HTML that `MarkdownManager`, `DOMParser` and `DOMSerializer` make with Tiptap's
+own extensions, among them V8's errors for documents holding what the manager can't read;
+`fixtures/tiptap-tables.json`, `tiptap-lists.json`, `tiptap-blocks.json` and
+`tiptap-inline.json`, the same for each group of the extensions above, over every attribute,
+option, parse rule and Markdown form its source reads, and its schema; and `fixtures/js.json`,
+what V8's built-ins that `tarnish-js` ports give: `JSON.parse`, `Number`, `parseInt`, the
+`TypeError`s of reading JSON values, `repeat`, `replaceAll`, each comparison a sort asks for,
+and `localeCompare`.
 
 `fixtures/versions.json` records the version installed of each package a crate ports or is held
 to, each as its dependent resolves it (`"@tiptap/pm > prosemirror-model"`), and the linkedom
