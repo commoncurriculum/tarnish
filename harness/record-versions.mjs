@@ -51,19 +51,22 @@ function version(key) {
   return JSON.parse(readFileSync(join(dir, "package.json"), "utf8")).version
 }
 
-// The recorders run every Tiptap package the harness installs.
+// The recorders run every Tiptap package the harness installs, and each package they import,
+// named as its imports' specifiers begin.
 const { devDependencies } = JSON.parse(readFileSync(join(root, "package.json"), "utf8"))
 const tiptap = Object.keys(devDependencies).filter(name => name.startsWith("@tiptap/"))
+const recorders = readdirSync(join(root, "harness")).filter(name => /^(?:record-.*|tiptap)\.mjs$/.test(name))
+const imported = recorders.flatMap(name =>
+  [...readFileSync(join(root, "harness", name), "utf8").matchAll(/^import .* from "([^".][^"]*)"$/gm)]
+    .map(([, specifier]) => specifier.match(/^(?:@[^/]+\/)?[^/]+/)[0])
+    .filter(specifier => !specifier.startsWith("node:")),
+)
 
 const packages = [
   "@tiptap/pm > prosemirror-model",
   "@tiptap/pm > prosemirror-transform",
-  ...tiptap,
-  "tiptap-extension-flat-list",
-  "marked",
+  ...[...new Set([...tiptap, ...imported])].sort(),
   "@tiptap/markdown > marked",
-  "marked-more-lists",
-  "linkedom",
   "linkedom > parse5",
   "linkedom > parse5 > entities",
   "linkedom > css-select",

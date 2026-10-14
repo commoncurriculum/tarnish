@@ -15,9 +15,22 @@ import { HardBreak } from "@tiptap/extension-hard-break"
 import { Heading } from "@tiptap/extension-heading"
 import { Italic } from "@tiptap/extension-italic"
 import { Paragraph } from "@tiptap/extension-paragraph"
-import { Table, TableCell, TableHeader, TableKit, TableRow } from "@tiptap/extension-table"
+import * as tableExtensions from "@tiptap/extension-table"
+import { Table, TableKit } from "@tiptap/extension-table"
+import { TableCell } from "@tiptap/extension-table-cell"
+import { TableHeader } from "@tiptap/extension-table-header"
+import { TableRow } from "@tiptap/extension-table-row"
 import { Text } from "@tiptap/extension-text"
 import { body, doc, otherAttributes, paragraph, record, text, unique, withParsed } from "./tiptap.mjs"
+
+// The packages of rows and cells are @tiptap/extension-table's.
+if (
+  TableRow !== tableExtensions.TableRow ||
+  TableCell !== tableExtensions.TableCell ||
+  TableHeader !== tableExtensions.TableHeader
+) {
+  throw new Error("The row and cell packages aren't @tiptap/extension-table's")
+}
 
 const Code = Mark.create({
   name: "code",

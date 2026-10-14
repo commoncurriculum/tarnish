@@ -5,13 +5,28 @@
 // `ordered` and `tasks`, with only those lists; `paragraphs`, lists of paragraphs; `flat`, the
 // lists beside tiptap-extension-flat-list's items, without the items' parse rules, which tarnish
 // leaves to the application; and `tabs`, the lists with a manager that indents with tabs.
-import { BulletList, ListItem, OrderedList, TaskItem, TaskList } from "@tiptap/extension-list"
+import { BulletList } from "@tiptap/extension-bullet-list"
 import { Document } from "@tiptap/extension-document"
+import * as list from "@tiptap/extension-list"
+import { ListItem } from "@tiptap/extension-list-item"
+import { OrderedList } from "@tiptap/extension-ordered-list"
 import { Paragraph } from "@tiptap/extension-paragraph"
+import { TaskItem } from "@tiptap/extension-task-item"
+import { TaskList } from "@tiptap/extension-task-list"
 import { Text } from "@tiptap/extension-text"
 import { FlatListCore, FlatListOrdered, FlatListTask, FlatListUnordered } from "tiptap-extension-flat-list"
 import { doc, otherAttributes, own, paragraph, record, rendered, text, withParsed } from "./tiptap.mjs"
 
+// The package of each list is @tiptap/extension-list's.
+if (
+  BulletList !== list.BulletList ||
+  OrderedList !== list.OrderedList ||
+  ListItem !== list.ListItem ||
+  TaskList !== list.TaskList ||
+  TaskItem !== list.TaskItem
+) {
+  throw new Error("The list packages aren't @tiptap/extension-list's")
+}
 const lists = [BulletList, OrderedList, ListItem, TaskList, TaskItem]
 const withoutParseRules = extension => extension.extend({ parseHTML: () => [] })
 
