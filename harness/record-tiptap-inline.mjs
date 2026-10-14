@@ -16,6 +16,7 @@ import { Highlight } from "@tiptap/extension-highlight"
 import { Image } from "@tiptap/extension-image"
 import { Italic } from "@tiptap/extension-italic"
 import { Link } from "@tiptap/extension-link"
+import { Mention } from "@tiptap/extension-mention"
 import { Paragraph } from "@tiptap/extension-paragraph"
 import { Strike } from "@tiptap/extension-strike"
 import { Subscript } from "@tiptap/extension-subscript"
@@ -150,6 +151,34 @@ const configurations = {
   ],
   // A class that isn't a string, which mergeAttributes can't split.
   linkClass: [...own, Link.configure({ HTMLAttributes: { class: 5 } })],
+  mention: [...own, Mention],
+  mentionOptions: [
+    ...own,
+    Mention.configure({
+      HTMLAttributes: { class: "mention", style: "color: red", "data-x": 1 },
+      suggestions: [{ char: "#" }, { char: "@" }, {}, { char: "++" }],
+    }),
+  ],
+  mentionSuggestion: [...own, Mention.configure({ suggestion: { char: "+" } })],
+  mentionRender: [
+    ...own,
+    Mention.configure({
+      renderText: ({ node, suggestion }) => `${suggestion.char}text:${node.attrs.id}`,
+      renderHTML: ({ options, node, suggestion }) => [
+        "b",
+        options.HTMLAttributes,
+        `${suggestion.char}${node.attrs.label}`,
+      ],
+    }),
+  ],
+  mentionString: [...own, Mention.configure({ renderHTML: ({ node }) => `<${node.attrs.id}>` })],
+  mentionLabel: [
+    ...own,
+    Mention.configure({
+      HTMLAttributes: { class: "l" },
+      renderLabel: ({ node, suggestion }) => `${suggestion.char}${node.attrs.label}!`,
+    }),
+  ],
 }
 
 const converters = Object.fromEntries(
@@ -162,6 +191,9 @@ const converters = Object.fromEntries(
     return [name, { extensions, manager: new MarkdownManager({ extensions, marked }), schema, parser, serializer }]
   }),
 )
+// Mention warns that renderLabel is deprecated each time it renders with it.
+const warn = console.warn
+console.warn = (...args) => String(args[0]).startsWith("renderLabel is deprecated") || warn(...args)
 const { document } = parseHTML("<!DOCTYPE html><html><body></body></html>")
 const fixture = name => JSON.parse(readFileSync(new URL(`../fixtures/${name}.json`, import.meta.url), "utf8"))
 const unique = values => [...new Set(values)]
@@ -361,11 +393,64 @@ const linkDocs = [
   paragraph({ type: "text", text: "*a* [b]", marks: [{ type: "link", attrs: { href: "(u)", title: "T" } }] }),
 ]
 
+const mentionHTML = [
+  '<p><span data-type="mention" data-id="1" data-label="Ann" data-mention-suggestion-char="#">ignored</span></p>',
+  '<p><span data-type="mention">bare</span> <span data-type="mention" data-id="" data-label="">empty</span></p>',
+  '<p><span data-type="Mention" data-id="x">case</span><span data-type="mentions">other</span><span data-type=mention data-id=u>unquoted</span></p>',
+  '<p><span data-type="mention" data-id="a" style="color: red">styled</span><b><span data-type="mention" data-id="b">bold</span></b></p>',
+  '<p><span data-type="mention" data-id="1.5" data-label="true" data-mention-suggestion-char="+" class="c">x</span></p>',
+  '<div data-type="mention" data-id="d">div</div><span data-type="mention" data-id="loose"></span>',
+  '<p><span data-type="mention" data-id="o"><span data-type="mention" data-id="i">in</span></span></p>',
+]
+const mentionMarkdown = [
+  '[@ id="madonna" label="Madonna"]',
+  "hi [@ id=\"a\"] and [@ id='b' label='B' char='#'] there",
+  '[@] [@ ] [@id="x"] [@ id=x] [@ id="a" id="b"] [@  id = "c" ]',
+  '[@ __proto__="p" constructor="c" char="@"] [@ mentionSuggestionChar="%" char="&"]',
+  '[@ id="a" and [@ id="a]b"] [@ id="unclosed"',
+  '**[@ id="b"]** *a [@ id="c"] b* [@ id="x"](u) \\[@ id="e"] `[@ id="f"]`',
+  '[@ id="x"]\n[@ id="y"]\n\n[@ label="L" id="I" char="#" extra="e"]',
+  '[[@ id="x"]](u) [@ id="x" [@ id="y"]',
+  '[@ id=\'one"quote\'] [@ id="two\'quote"] [@ id=""]',
+]
+const mention = attrs => ({ type: "mention", ...(attrs === undefined ? {} : { attrs }) })
+const mentionDocs = [
+  paragraph(
+    ...[
+      undefined,
+      { id: "a" },
+      { id: "a", label: "L" },
+      { id: null, label: null },
+      { label: "L" },
+      { id: "h", mentionSuggestionChar: "#" },
+      { id: "p", mentionSuggestionChar: "+" },
+      { id: "q", mentionSuggestionChar: "++" },
+      { id: "n", mentionSuggestionChar: null },
+      { id: 5, label: { an: "object" } },
+      { id: [1, [2, 3]], label: "" },
+      { id: "", label: 0 },
+      { id: 'a"b', label: "<l>" },
+    ].map(mention),
+  ),
+  paragraph(
+    { type: "text", text: "a " },
+    { type: "mention", attrs: { id: "m" }, marks: [{ type: "bold" }] },
+    { type: "text", text: " b", marks: [{ type: "bold" }] },
+  ),
+  // What the Markdown makes of a mention whose attributes or content JSON makes anything.
+  ...["abc", 5, [1], null, {}, true].map(attrs => paragraph({ type: "mention", attrs })),
+  ...["xy", [null], [{ type: "text", text: "t" }, 5], { length: 1 }, { length: "0" }, 5, ""].map(content =>
+    paragraph({ type: "mention", attrs: { id: "c" }, content }),
+  ),
+]
+
 const parsesMarkdown = each({
   globals: ["plain **bold**"],
   styles: ['<span style="color: red">x</span>', "plain *em*"],
   link: [...linkMarkdown, ...markedMarkdown(/\[|<|https?:|www\.|@|ftp:/)],
   linkOptions: linkMarkdown,
+  mention: [...mentionMarkdown, ...markedMarkdown(/\[|@/)],
+  mentionOptions: mentionMarkdown,
 }).map(([name, markdown]) => ({
   extensions: name,
   markdown,
@@ -388,6 +473,12 @@ const parsesHTML = each({
   linkOptions: linkHTML,
   linkAllowed: linkHTML,
   linkClass: linkHTML.slice(0, 3),
+  mention: [...mentionHTML, ...domHTML(/data-|<span/i)],
+  mentionOptions: mentionHTML,
+  mentionSuggestion: mentionHTML,
+  mentionRender: mentionHTML,
+  mentionString: mentionHTML,
+  mentionLabel: mentionHTML,
 }).map(([name, html]) => ({
   extensions: name,
   html,
@@ -431,6 +522,12 @@ const docs = {
   linkOptions: linkDocs,
   linkAllowed: linkDocs,
   linkClass: linkDocs.slice(0, 3),
+  mention: mentionDocs,
+  mentionOptions: mentionDocs,
+  mentionSuggestion: mentionDocs,
+  mentionRender: mentionDocs,
+  mentionString: mentionDocs,
+  mentionLabel: mentionDocs,
 }
 
 const serializesMarkdown = documents(docs).map(([name, doc]) => ({
@@ -457,7 +554,14 @@ const serializers = {
     chip: ({ node }) => `(${node.attrs.label})`,
   },
 }
+const mentionTextDocs = mentionDocs.slice(0, 2)
 const textDocs = {
+  mention: mentionTextDocs,
+  mentionOptions: mentionTextDocs,
+  mentionSuggestion: mentionTextDocs,
+  mentionRender: mentionTextDocs,
+  mentionString: mentionTextDocs,
+  mentionLabel: mentionTextDocs,
   own: [
     {
       type: "doc",

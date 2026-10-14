@@ -12,6 +12,7 @@ use own::{Converter, input_of};
 use tarnish::json::{Map, Value, json, object};
 use tarnish_fixtures::{outcome, read, records, same};
 use tarnish_tiptap::extensions::link::{LinkOptions, link};
+use tarnish_tiptap::extensions::mention::{MentionHtml, MentionOptions, mention};
 use tarnish_tiptap::extensions::text_align::{TextAlignOptions, text_align};
 use tarnish_tiptap::extensions::text_style::{
     StyleOptions, TextStyleKitOptions, TextStyleOptions, background_color, color, font_family,
@@ -22,9 +23,9 @@ use tarnish_tiptap::extensions::{
     heading::heading, italic::italic, paragraph::paragraph, text::text,
 };
 use tarnish_tiptap::{
-    Extension, ExtensionAttribute, GlobalAttributes, GlobalTypes, MarkExtension, NodeExtension,
-    PlainExtension, TextOptions, TextSerializer, TiptapSchema, generate_text, get_schema,
-    node_attr,
+    DomSpec, Extension, ExtensionAttribute, GlobalAttributes, GlobalTypes, MarkExtension,
+    NodeExtension, PlainExtension, TextOptions, TextSerializer, TiptapSchema, generate_text,
+    get_schema, node_attr,
 };
 
 /// Global attributes for each kind of `types`.
@@ -166,6 +167,48 @@ fn configuration(name: &str) -> Vec<Extension> {
             options.html_attributes.insert("class".into(), json!(5));
             own_with([link(options).into()])
         }
+        "mention" => own_with([mention(MentionOptions::default()).into()]),
+        "mentionOptions" => own_with([mention(MentionOptions {
+            html_attributes: object!({"class": "mention", "style": "color: red", "data-x": 1}),
+            suggestions: ["#", "@", "@", "++"].map(String::from).into(),
+            ..MentionOptions::default()
+        })
+        .into()]),
+        "mentionSuggestion" => own_with([mention(MentionOptions {
+            suggestion: "+".into(),
+            ..MentionOptions::default()
+        })
+        .into()]),
+        "mentionRender" => own_with([mention(MentionOptions {
+            render_text: Some(Arc::new(|node, char| {
+                let id = node_attr(node, "id").to_js_string()?;
+                Ok(format!("{char}text:{id}"))
+            })),
+            render_html: Some(Arc::new(|node, char, html| {
+                let label = node_attr(node, "label").to_js_string()?;
+                let text = DomSpec::Text(format!("{char}{label}").into());
+                Ok(MentionHtml::Spec(DomSpec::element("b", html, vec![text])))
+            })),
+            ..MentionOptions::default()
+        })
+        .into()]),
+        "mentionString" => own_with([mention(MentionOptions {
+            render_html: Some(Arc::new(|node, _, _| {
+                let id = node_attr(node, "id").to_js_string()?;
+                Ok(MentionHtml::Text(format!("<{id}>")))
+            })),
+            ..MentionOptions::default()
+        })
+        .into()]),
+        "mentionLabel" => own_with([mention(MentionOptions {
+            html_attributes: object!({"class": "l"}),
+            render_label: Some(Arc::new(|node, char| {
+                let label = node_attr(node, "label").to_js_string()?;
+                Ok(format!("{char}{label}!"))
+            })),
+            ..MentionOptions::default()
+        })
+        .into()]),
         "kit" => kit(TextStyleKitOptions::default()),
         "kitOptions" => kit(TextStyleKitOptions {
             background_color: None,

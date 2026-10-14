@@ -21,6 +21,7 @@ pub mod italic;
 pub mod link;
 pub mod list_item;
 pub mod mathematics;
+pub mod mention;
 pub mod ordered_list;
 pub mod paragraph;
 pub mod ruby_text;
@@ -45,20 +46,23 @@ mod tests {
 
     use super::highlight::{HighlightOptions, highlight};
     use super::mathematics::inline_math;
+    use super::mention::{MentionOptions, mention};
     use super::underline::underline;
     use crate::Extension;
     use crate::markdown::MarkdownManager;
 
     #[test]
     fn tokenizers_match_only_at_their_starts() {
-        let extensions: [Extension; 3] = [
+        let extensions: [Extension; 4] = [
             underline().into(),
             highlight(HighlightOptions { multicolor: false }).into(),
             inline_math().into(),
+            mention(MentionOptions::default()).into(),
         ];
         let manager = MarkdownManager::new(&extensions, Marked::new(more_lists()));
         let alphabet = &[
-            "=", "==", "+", "++", "$", "$$", "a", " ", "\n", "\\", "*", "`", "<", ">",
+            "=", "==", "+", "++", "$", "$$", "a", " ", "\n", "\\", "*", "`", "<", ">", "[", "]",
+            "[@", "@", "id=\"", "'",
         ];
         manager.marked().check_extension_starts(alphabet);
     }
