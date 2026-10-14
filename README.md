@@ -204,13 +204,18 @@ This example is `tarnish-tiptap`'s doctest.
 
 `npm run test:js` records what the JavaScript does, for the tests to hold these crates to:
 `fixtures/marked.json`, the tokens marked, with marked-more-lists, makes of 224 Markdown
-inputs, and with block tokenizer extensions of 34 more; `fixtures/tiptap.json`, the documents,
-Markdown and HTML that `MarkdownManager`, `DOMParser` and `DOMSerializer` make with Tiptap's
-own extensions, among them V8's errors for documents holding what the manager can't read;
-`fixtures/tiptap-tables.json`, `tiptap-lists.json`, `tiptap-blocks.json` and
-`tiptap-inline.json`, the same for each group of the extensions above, over every attribute,
-option, parse rule and Markdown form its source reads, and its schema; and `fixtures/js.json`,
-what V8's built-ins that `tarnish-js` ports give: `JSON.parse`, `Number`, `parseInt`, the
+inputs, of 430 lists of each marker marked-more-lists reads, and with block tokenizer
+extensions of 34 more; the `fixtures/tiptap*.json` that `harness/tiptap.mjs` records, each
+configuration of extensions with its schema and, in the sections its options reach, the
+documents, Markdown and HTML that `MarkdownManager`, `DOMParser` and `DOMSerializer` make,
+the text `generateText` makes and the ids `generateUniqueIds` gives, or V8's error:
+`tiptap.json` of Tiptap's own extensions, alone and with each option set, and of every group's
+together, which parse `marked.json`'s and `dom.json`'s inputs and what one group nests in
+another's, and `tiptap-tables.json`, `tiptap-lists.json`, `tiptap-blocks.json` and
+`tiptap-inline.json` of each group of the extensions above, over every attribute, option,
+parse rule and Markdown form its source reads, with the `col`s each table's `colgroup` holds
+and what `parseAttributes` and `serializeAttributes` make; and `fixtures/js.json`, what V8's
+built-ins that `tarnish-js` ports give: `JSON.parse`, `Number`, `parseInt`, the
 `TypeError`s of reading JSON values, `repeat`, `replaceAll`, each comparison a sort asks for,
 and `localeCompare`.
 
@@ -621,7 +626,7 @@ hold:
 | `vendor/regress` | regress 0.12.0, the `RegExp` engine of `tarnish-js`, with its patches marked in the source |
 | `crates/tarnish-node` | The Node bridge that runs ProseMirror's suites against tarnish. Internal, not published |
 | `upstream/` | ProseMirror's repositories, pinned as submodules, for their test suites |
-| `harness/` | The suite runner, the fixture recorders and the one way they record (`fixture.mjs`), and the bridge and C test builds |
+| `harness/` | The suite runner, the fixture recorders and the one way they record (`fixture.mjs`, and `tiptap.mjs` for Tiptap's), and the bridge and C test builds |
 | `test/` | tarnish's own tests, in the upstream suites' style |
 | `fixtures/` | What the real packages did, recorded by `npm run test:js`, which `crates/tarnish-fixtures` reads for the Rust tests |
 | `bench/` | The benchmark document and ProseMirror's timing |
