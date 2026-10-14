@@ -20,16 +20,12 @@ impl Default for TableOfContentsOptions {
 
 pub fn table_of_contents(options: TableOfContentsOptions) -> PlainExtension {
     let attribute = |name: &'static str| {
-        ExtensionAttribute::new(name, Value::Null)
-            .parse_html(move |element| {
-                element
-                    .attribute(name)
-                    .filter(|id| !id.is_empty())
-                    .map(Value::String)
-            })
-            .render_html(move |attributes, rendered| {
-                rendered.merge(name, attributes.get(name).expect("its attribute"))
-            })
+        ExtensionAttribute::new(name, Value::Null).parse_html(move |element| {
+            element
+                .attribute(name)
+                .filter(|id| !id.is_empty())
+                .map(Value::String)
+        })
     };
     let attributes = vec![attribute("id"), attribute("data-toc-id")];
     PlainExtension::create("tableOfContents").add_global_attributes(move |_| {
