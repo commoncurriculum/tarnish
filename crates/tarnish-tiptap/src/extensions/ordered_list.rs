@@ -6,8 +6,9 @@ use std::sync::LazyLock;
 
 use super::bullet_list::render_list;
 use crate::markdown::{Lines, ParseHelpers, Parsed};
+use crate::merge_attributes::merge_configured;
 use crate::{AttrValue, DomSpec, ExtensionAttribute, HtmlNode, NodeExtension};
-use crate::{ParseHtml, SpecAttrs, merge_html_attributes};
+use crate::{ParseHtml, SpecAttrs};
 use tarnish_js::json::{Map, Value, json};
 use tarnish_js::regexp::RegExp;
 use tarnish_js::units::Units;
@@ -17,15 +18,14 @@ use tarnish_markdown::marked::{Lexer, List, Token, TokenData};
 pub struct OrderedListOptions {
     /// The node type of the list's items.
     pub item_type_name: &'static str,
-    /// `HTMLAttributes`, each a string.
-    pub html_attributes: Vec<(String, String)>,
+    pub html_attributes: Map,
 }
 
 impl Default for OrderedListOptions {
     fn default() -> Self {
         OrderedListOptions {
             item_type_name: "listItem",
-            html_attributes: Vec::new(),
+            html_attributes: Map::new(),
         }
     }
 }
@@ -55,7 +55,7 @@ pub fn ordered_list(options: OrderedListOptions) -> NodeExtension {
             {
                 rest.set(key.to_owned(), value.clone());
             }
-            let mut attrs = merge_html_attributes(&attributes, rest)?;
+            let mut attrs = merge_configured(&attributes, rest, [])?;
             if let Some(start) = start.filter(|start| !is_one(start)) {
                 attrs.set("start", start);
             }

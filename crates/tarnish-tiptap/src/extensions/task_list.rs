@@ -5,8 +5,9 @@ use std::sync::LazyLock;
 
 use super::bullet_list::render_list;
 use crate::markdown::{IndentedBlockConfig, ParseHelpers, Parsed, parse_indented_blocks};
+use crate::merge_attributes::merge_configured;
 use crate::{AttrValue, DomSpec, NodeExtension, ParseHtml};
-use crate::{merge_attributes, merge_html_attributes};
+use tarnish_js::json::Map;
 use tarnish_js::regexp::RegExp;
 use tarnish_js::units::Units;
 use tarnish_js::{Error, utf16};
@@ -15,15 +16,14 @@ use tarnish_markdown::marked::{Lexer, List, Token, TokenData, Tokens};
 pub struct TaskListOptions {
     /// The node type of the list's items.
     pub item_type_name: &'static str,
-    /// `HTMLAttributes`, each a string.
-    pub html_attributes: Vec<(String, String)>,
+    pub html_attributes: Map,
 }
 
 impl Default for TaskListOptions {
     fn default() -> Self {
         TaskListOptions {
             item_type_name: "taskItem",
-            html_attributes: Vec::new(),
+            html_attributes: Map::new(),
         }
     }
 }
@@ -35,8 +35,8 @@ pub fn task_list(options: TaskListOptions) -> NodeExtension {
         .content(format!("{}+", options.item_type_name))
         .parse_html([ParseHtml::tag(r#"ul[data-type="taskList"]"#).priority(51)])
         .render_html(move |_, html| {
-            let html = merge_html_attributes(&attributes, html)?;
-            let html = merge_attributes(html, [("data-type", AttrValue::from("taskList"))])?;
+            let data_type = [("data-type", AttrValue::from("taskList"))];
+            let html = merge_configured(&attributes, html, data_type)?;
             Ok(DomSpec::wrapping("ul", html))
         })
         .parse_markdown(parse_markdown)

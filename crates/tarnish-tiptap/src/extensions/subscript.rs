@@ -23,7 +23,7 @@ pub fn subscript(options: SubscriptOptions) -> MarkExtension {
             })),
         ])
         .render_html(move |_, html| {
-            let html = merge_configured(&options.html_attributes, html)?;
+            let html = merge_configured(&options.html_attributes, html, [])?;
             Ok(DomSpec::wrapping("sub", html))
         })
 }

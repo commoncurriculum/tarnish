@@ -1,16 +1,15 @@
 //! `@tiptap/extension-blockquote`.
 
 use crate::markdown::{ParseHelpers, Parsed, RenderContext, RenderHelpers};
-use crate::{
-    DomSpec, NodeExtension, ParseHtml, element_attrs, merge_html_attributes, rendered_object,
-};
-use tarnish_js::json::Value;
+use crate::merge_attributes::merge_configured;
+use crate::{DomSpec, NodeExtension, ParseHtml, element_attrs, rendered_object};
+use tarnish_js::json::{Map, Value};
 use tarnish_js::{self as js, Error, value};
 use tarnish_markdown::marked::Token;
 
 #[derive(Default)]
 pub struct BlockquoteOptions {
-    pub html_attributes: Vec<(String, String)>,
+    pub html_attributes: Map,
 }
 
 pub fn blockquote(options: BlockquoteOptions) -> NodeExtension {
@@ -20,7 +19,7 @@ pub fn blockquote(options: BlockquoteOptions) -> NodeExtension {
         .defining()
         .parse_html([ParseHtml::tag("blockquote")])
         .render_html(move |_, html| {
-            let mut html = merge_html_attributes(&options.html_attributes, html)?;
+            let mut html = merge_configured(&options.html_attributes, html, [])?;
             // The JSX runtime takes `children` for the element's content.
             if html.get("children").is_some() {
                 let mut object = rendered_object(&html);

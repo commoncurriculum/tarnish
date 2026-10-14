@@ -22,9 +22,8 @@ use tarnish_js::value::{self, Nullish};
 use tarnish_markdown::marked::{Token, TokenData};
 
 use crate::markdown::{ParseHelpers, Parsed};
-use crate::{
-    AttrValue, DomSpec, NodeExtension, ParseHtml, merge_attributes, merge_html_attributes,
-};
+use crate::merge_attributes::merge_configured;
+use crate::{AttrValue, DomSpec, NodeExtension, ParseHtml};
 use col_group::create_col_group;
 use markdown::{render_table_to_markdown, tokenize, tokenizer_start};
 use utils::normalize_table_cell_align;
@@ -33,8 +32,7 @@ use utils::normalize_table_cell_align;
 /// `lastColumnResizable` and `allowTableNodeSelection` change only an editor's plugins and node
 /// view.
 pub struct TableOptions {
-    /// `HTMLAttributes`, each a string.
-    pub html_attributes: Vec<(String, String)>,
+    pub html_attributes: Map,
     /// `renderWrapper`: whether the table renders in a `div.tableWrapper`.
     pub render_wrapper: bool,
     /// `cellMinWidth`: the width in pixels of a column with none of its own, and the least of
@@ -45,7 +43,7 @@ pub struct TableOptions {
 impl Default for TableOptions {
     fn default() -> Self {
         TableOptions {
-            html_attributes: Vec::new(),
+            html_attributes: Map::new(),
             render_wrapper: false,
             cell_min_width: 25.0,
         }
@@ -77,8 +75,7 @@ pub fn table(options: TableOptions) -> NodeExtension {
                     None => "min-width: undefined".to_owned(),
                 }),
             };
-            let attrs = merge_html_attributes(&html_attributes, html)?;
-            let attrs = merge_attributes(attrs, [("style", style)])?;
+            let attrs = merge_configured(&html_attributes, html, [("style", style)])?;
             // A table without rows renders an `undefined` colgroup, which `renderSpec` reads.
             let Some(col_group) = col_group else {
                 return Err(value::cannot_read(Nullish::Undefined, "nodeType"));

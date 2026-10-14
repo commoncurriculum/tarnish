@@ -1,13 +1,14 @@
 //! `@tiptap/extension-code`: the inline code mark, which no other mark can be beside.
 
 use crate::markdown::{RenderContext, RenderHelpers};
-use crate::{DomSpec, MarkExtension, ParseHtml, merge_html_attributes};
-use tarnish_js::json::{Value, json};
+use crate::merge_attributes::merge_configured;
+use crate::{DomSpec, MarkExtension, ParseHtml};
+use tarnish_js::json::{Map, Value, json};
 use tarnish_js::{self as js, Error, utf16};
 
 #[derive(Default)]
 pub struct CodeOptions {
-    pub html_attributes: Vec<(String, String)>,
+    pub html_attributes: Map,
 }
 
 pub fn code(options: CodeOptions) -> MarkExtension {
@@ -18,7 +19,7 @@ pub fn code(options: CodeOptions) -> MarkExtension {
         .render_html(move |_, html| {
             Ok(DomSpec::wrapping(
                 "code",
-                merge_html_attributes(&options.html_attributes, html)?,
+                merge_configured(&options.html_attributes, html, [])?,
             ))
         })
         .markdown_token_name("codespan")

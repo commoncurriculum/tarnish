@@ -8,7 +8,7 @@ mod own;
 
 use own::{Converter, input_of};
 use tarnish::js::stack::on_dirty_scheduler_stack;
-use tarnish::json::{Value, json};
+use tarnish::json::{Value, json, object};
 use tarnish_fixtures::{expect, read, records, same};
 use tarnish_html::HtmlDom;
 use tarnish_js::utf16;
@@ -57,12 +57,6 @@ fn inline() -> Vec<Extension> {
     ]
 }
 
-/// `HTMLAttributes` of strings.
-fn attributes(attributes: &[(&str, &str)]) -> Vec<(String, String)> {
-    let attribute = |(name, value): &(&str, &str)| (name.to_string(), value.to_string());
-    attributes.iter().map(attribute).collect()
-}
-
 /// The inline extensions, then the table's four with these options.
 fn tables(
     table_options: TableOptions,
@@ -108,20 +102,17 @@ fn configuration(name: &str) -> Vec<Extension> {
         "tables" | "resizable" => with_table(TableOptions::default()),
         "attributes" => tables(
             TableOptions {
-                html_attributes: attributes(&[
-                    ("class", "t"),
-                    ("style", "color: red; min-width: 1px"),
-                ]),
+                html_attributes: object!({"class": "t", "style": "color: red; min-width: 1px"}),
                 ..TableOptions::default()
             },
             TableRowOptions {
-                html_attributes: attributes(&[("class", "r")]),
+                html_attributes: object!({"class": "r"}),
             },
             TableCellOptions {
-                html_attributes: attributes(&[("class", "c"), ("style", "padding: 1px")]),
+                html_attributes: object!({"class": "c", "style": "padding: 1px"}),
             },
             TableHeaderOptions {
-                html_attributes: attributes(&[("class", "h"), ("data-x", "y")]),
+                html_attributes: object!({"class": "h", "data-x": "y"}),
             },
         ),
         "wrapper" => with_table(TableOptions {
@@ -143,7 +134,7 @@ fn configuration(name: &str) -> Vec<Extension> {
         }
         "both" => {
             let mut extensions = with_table(TableOptions {
-                html_attributes: attributes(&[("class", "b"), ("style", "color: red; width: 9px")]),
+                html_attributes: object!({"class": "b", "style": "color: red; width: 9px"}),
                 ..TableOptions::default()
             });
             extensions.push(style().into());

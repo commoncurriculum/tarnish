@@ -31,7 +31,7 @@ pub fn bold(options: BoldOptions) -> MarkExtension {
             })),
         ])
         .render_html(move |_, html| {
-            let mut html = merge_configured(&options.html_attributes, html)?;
+            let mut html = merge_configured(&options.html_attributes, html, [])?;
             // The JSX runtime takes `children` for the element's content.
             if html.get("children").is_some() {
                 let mut object = rendered_object(&html);

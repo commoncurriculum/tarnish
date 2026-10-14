@@ -36,7 +36,7 @@ pub fn underline(options: UnderlineOptions) -> MarkExtension {
             ),
         ])
         .render_html(move |_, html| {
-            let html = merge_configured(&options.html_attributes, html)?;
+            let html = merge_configured(&options.html_attributes, html, [])?;
             Ok(DomSpec::wrapping("u", html))
         })
         .parse_markdown(|token, helpers| {

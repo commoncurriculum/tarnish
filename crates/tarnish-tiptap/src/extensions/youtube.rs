@@ -6,7 +6,7 @@ use std::sync::LazyLock;
 use crate::web_url::WebUrl;
 use crate::{
     DomSpec, ExtensionAttribute, HtmlNode, NodeExtension, ParseHtml, SpecAttrs, element_attrs,
-    html_attributes_object, merge_objects, rendered_object,
+    merge_objects, rendered_object,
 };
 use tarnish_js::json::{Map, Value, json};
 use tarnish_js::regexp::RegExp;
@@ -26,7 +26,7 @@ pub struct YoutubeOptions {
     pub iv_load_policy: f64,
     pub r#loop: bool,
     pub modest_branding: bool,
-    pub html_attributes: Vec<(String, String)>,
+    pub html_attributes: Map,
     pub inline: bool,
     pub nocookie: bool,
     pub origin: String,
@@ -52,7 +52,7 @@ impl Default for YoutubeOptions {
             iv_load_policy: 0.0,
             r#loop: false,
             modest_branding: false,
-            html_attributes: Vec::new(),
+            html_attributes: Map::new(),
             inline: false,
             nocookie: false,
             origin: String::new(),
@@ -89,11 +89,8 @@ pub fn youtube(options: YoutubeOptions) -> NodeExtension {
             let src = html.get("src").cloned();
             let embed_url = embed_url_from_youtube_url(src.as_ref(), &options, &start)?;
             html.insert("src".into(), embed_url.map_or(Value::Null, Value::String));
-            let iframe = merge_objects([
-                &html_attributes_object(&options.html_attributes),
-                &iframe_options(&options),
-                &html,
-            ])?;
+            let iframe =
+                merge_objects([&options.html_attributes, &iframe_options(&options), &html])?;
             Ok(DomSpec::element(
                 "div",
                 SpecAttrs::from([("data-youtube-video", "".into())]),

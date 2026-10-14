@@ -6,7 +6,7 @@ use std::sync::LazyLock;
 use crate::web_url::{WebUrl, with_search_params};
 use crate::{
     DomSpec, ExtensionAttribute, HtmlNode, NodeExtension, ParseHtml, SpecAttrs, element_attrs,
-    html_attributes_object, merge_objects, rendered_object,
+    merge_objects, rendered_object,
 };
 use tarnish_js::json::{Map, Value, json};
 use tarnish_js::regexp::RegExp;
@@ -21,7 +21,7 @@ pub struct TwitchOptions {
     pub parent: String,
     pub height: Value,
     pub width: Value,
-    pub html_attributes: Vec<(String, String)>,
+    pub html_attributes: Map,
     pub inline: bool,
 }
 
@@ -35,7 +35,7 @@ impl Default for TwitchOptions {
             parent: "localhost".into(),
             height: json!(480),
             width: json!(640),
-            html_attributes: Vec::new(),
+            html_attributes: Map::new(),
             inline: false,
         }
     }
@@ -90,8 +90,7 @@ pub fn twitch(options: TwitchOptions) -> NodeExtension {
                 ("scrolling".into(), json!("no")),
                 ("frameborder".into(), json!("0")),
             ]);
-            let options_html = html_attributes_object(&options.html_attributes);
-            let iframe = merge_objects([&options_html, &frame, &html])?;
+            let iframe = merge_objects([&options.html_attributes, &frame, &html])?;
             Ok(DomSpec::element(
                 "div",
                 SpecAttrs::from([("data-twitch-video", "".into())]),

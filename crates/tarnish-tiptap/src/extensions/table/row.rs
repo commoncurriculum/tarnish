@@ -1,11 +1,12 @@
 //! `TableRow`.
 
-use crate::{DomSpec, NodeExtension, ParseHtml, merge_html_attributes};
+use crate::merge_attributes::merge_configured;
+use crate::{DomSpec, NodeExtension, ParseHtml};
+use tarnish_js::json::Map;
 
 #[derive(Default)]
 pub struct TableRowOptions {
-    /// `HTMLAttributes`, each a string.
-    pub html_attributes: Vec<(String, String)>,
+    pub html_attributes: Map,
 }
 
 pub fn table_row(options: TableRowOptions) -> NodeExtension {
@@ -15,7 +16,7 @@ pub fn table_row(options: TableRowOptions) -> NodeExtension {
         .field("tableRole", "row")
         .parse_html([ParseHtml::tag("tr")])
         .render_html(move |_, html| {
-            let attrs = merge_html_attributes(&html_attributes, html)?;
+            let attrs = merge_configured(&html_attributes, html, [])?;
             Ok(DomSpec::wrapping("tr", attrs))
         })
 }

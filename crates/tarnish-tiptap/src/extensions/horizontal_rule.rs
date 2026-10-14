@@ -1,11 +1,13 @@
 //! `@tiptap/extension-horizontal-rule`.
 
 use crate::markdown::Parsed;
-use crate::{DomSpec, NodeExtension, ParseHtml, merge_html_attributes};
+use crate::merge_attributes::merge_configured;
+use crate::{DomSpec, NodeExtension, ParseHtml};
+use tarnish_js::json::Map;
 
 #[derive(Default)]
 pub struct HorizontalRuleOptions {
-    pub html_attributes: Vec<(String, String)>,
+    pub html_attributes: Map,
 }
 
 pub fn horizontal_rule(options: HorizontalRuleOptions) -> NodeExtension {
@@ -13,7 +15,7 @@ pub fn horizontal_rule(options: HorizontalRuleOptions) -> NodeExtension {
         .group("block")
         .parse_html([ParseHtml::tag("hr")])
         .render_html(move |_, html| {
-            let html = merge_html_attributes(&options.html_attributes, html)?;
+            let html = merge_configured(&options.html_attributes, html, [])?;
             Ok(DomSpec::element("hr", html, Vec::new()))
         })
         .markdown_token_name("hr")

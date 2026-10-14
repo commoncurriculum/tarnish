@@ -1,6 +1,7 @@
 //! The configurations `harness/record-tiptap-lists.mjs` records the lists with, by the name a
 //! record gives in `extensions`.
 
+use tarnish::json::{Map, object};
 use tarnish_tiptap::Extension;
 use tarnish_tiptap::extensions::bullet_list::{BulletListOptions, bullet_list};
 use tarnish_tiptap::extensions::document::document;
@@ -33,11 +34,34 @@ fn with_own(more: Vec<Extension>) -> Vec<Extension> {
     extensions
 }
 
-fn attributes(entries: &[(&str, &str)]) -> Vec<(String, String)> {
-    entries
-        .iter()
-        .map(|(key, value)| (key.to_string(), value.to_string()))
-        .collect()
+/// Tiptap's own extensions and the five lists, each with its HTMLAttributes.
+fn with_attributes([bullets, numbers, item, tasks, task]: [Map; 5]) -> Vec<Extension> {
+    with_own(vec![
+        bullet_list(BulletListOptions {
+            html_attributes: bullets,
+            ..BulletListOptions::default()
+        })
+        .into(),
+        ordered_list(OrderedListOptions {
+            html_attributes: numbers,
+            ..OrderedListOptions::default()
+        })
+        .into(),
+        list_item(ListItemOptions {
+            html_attributes: item,
+        })
+        .into(),
+        task_list(TaskListOptions {
+            html_attributes: tasks,
+            ..TaskListOptions::default()
+        })
+        .into(),
+        task_item(TaskItemOptions {
+            html_attributes: task,
+            ..TaskItemOptions::default()
+        })
+        .into(),
+    ])
 }
 
 /// The extensions of the configuration `name`, and the indentation its manager has where it
@@ -54,40 +78,12 @@ pub fn configuration(name: &str) -> Option<(Vec<Extension>, Option<Indentation>)
             .into();
             with_own(nested)
         }
-        "attributes" => with_own(vec![
-            bullet_list(BulletListOptions {
-                html_attributes: attributes(&[("class", "bullets"), ("data-list", "bullet")]),
-                ..BulletListOptions::default()
-            })
-            .into(),
-            ordered_list(OrderedListOptions {
-                html_attributes: attributes(&[
-                    ("class", "numbers"),
-                    ("start", "9"),
-                    ("type", "A"),
-                    ("style", "color: red"),
-                ]),
-                ..OrderedListOptions::default()
-            })
-            .into(),
-            list_item(ListItemOptions {
-                html_attributes: attributes(&[("class", "item")]),
-            })
-            .into(),
-            task_list(TaskListOptions {
-                html_attributes: attributes(&[("class", "tasks"), ("data-type", "mine")]),
-                ..TaskListOptions::default()
-            })
-            .into(),
-            task_item(TaskItemOptions {
-                html_attributes: attributes(&[
-                    ("class", "task"),
-                    ("data-checked", "maybe"),
-                    ("style", "color: blue"),
-                ]),
-                ..TaskItemOptions::default()
-            })
-            .into(),
+        "attributes" => with_attributes([
+            object!({"class": "bullets", "data-list": "bullet"}),
+            object!({"class": "numbers", "start": "9", "type": "A", "style": "color: red"}),
+            object!({"class": "item"}),
+            object!({"class": "tasks", "data-type": "mine"}),
+            object!({"class": "task", "data-checked": "maybe", "style": "color: blue"}),
         ]),
         "bullets" => with_own(vec![
             bullet_list(BulletListOptions::default()).into(),

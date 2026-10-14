@@ -31,7 +31,7 @@ pub fn highlight(options: HighlightOptions) -> MarkExtension {
         .add_attributes(attributes)
         .parse_html([ParseHtml::tag("mark")])
         .render_html(move |_, html| {
-            let html = merge_configured(&configured, html)?;
+            let html = merge_configured(&configured, html, [])?;
             Ok(DomSpec::wrapping("mark", html))
         })
         .render_markdown(render_markdown)

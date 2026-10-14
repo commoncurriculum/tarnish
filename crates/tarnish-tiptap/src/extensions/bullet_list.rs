@@ -1,23 +1,23 @@
 //! `@tiptap/extension-list`'s `BulletList`, which `@tiptap/extension-bullet-list` exports.
 
 use crate::markdown::{ParseHelpers, Parsed, RenderContext, RenderHelpers};
-use crate::{DomSpec, NodeExtension, ParseHtml, merge_html_attributes};
+use crate::merge_attributes::merge_configured;
+use crate::{DomSpec, NodeExtension, ParseHtml};
 use tarnish_js::Error;
-use tarnish_js::json::{Value, json};
+use tarnish_js::json::{Map, Value, json};
 use tarnish_markdown::marked::Token;
 
 pub struct BulletListOptions {
     /// The node type of the list's items.
     pub item_type_name: &'static str,
-    /// `HTMLAttributes`, each a string.
-    pub html_attributes: Vec<(String, String)>,
+    pub html_attributes: Map,
 }
 
 impl Default for BulletListOptions {
     fn default() -> Self {
         BulletListOptions {
             item_type_name: "listItem",
-            html_attributes: Vec::new(),
+            html_attributes: Map::new(),
         }
     }
 }
@@ -31,7 +31,7 @@ pub fn bullet_list(options: BulletListOptions) -> NodeExtension {
         .render_html(move |_, html| {
             Ok(DomSpec::wrapping(
                 "ul",
-                merge_html_attributes(&attributes, html)?,
+                merge_configured(&attributes, html, [])?,
             ))
         })
         .markdown_token_name("list")

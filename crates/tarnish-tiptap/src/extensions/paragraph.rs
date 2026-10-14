@@ -23,7 +23,7 @@ pub fn paragraph(options: ParagraphOptions) -> NodeExtension {
         .content("inline*")
         .parse_html([ParseHtml::tag("p")])
         .render_html(move |_, html| {
-            let html = merge_configured(&options.html_attributes, html)?;
+            let html = merge_configured(&options.html_attributes, html, [])?;
             Ok(DomSpec::wrapping("p", html))
         })
         .parse_markdown(parse_markdown)

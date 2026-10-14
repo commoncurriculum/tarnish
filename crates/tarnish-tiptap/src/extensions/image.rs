@@ -32,7 +32,7 @@ pub fn image(options: ImageOptions) -> NodeExtension {
             r#"img[src]:not([src^="data:"])"#
         })])
         .render_html(move |_, html| {
-            let html = merge_configured(&configured, html)?;
+            let html = merge_configured(&configured, html, [])?;
             Ok(DomSpec::element("img", html, Vec::new()))
         })
         .parse_markdown(parse_markdown)

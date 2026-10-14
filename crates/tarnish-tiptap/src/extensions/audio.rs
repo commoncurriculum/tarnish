@@ -5,8 +5,8 @@ use std::sync::LazyLock;
 
 use crate::web_url::WebUrl;
 use crate::{
-    DomSpec, ExtensionAttribute, NodeExtension, ParseHtml, element_attrs, html_attributes_object,
-    merge_objects, rendered_object,
+    DomSpec, ExtensionAttribute, NodeExtension, ParseHtml, element_attrs, merge_objects,
+    rendered_object,
 };
 use tarnish_js::json::{Map, Value, json};
 use tarnish_js::regexp::RegExp;
@@ -25,7 +25,7 @@ pub struct AudioOptions {
     /// `None` for `undefined`.
     pub crossorigin: Option<String>,
     pub disable_remote_playback: bool,
-    pub html_attributes: Vec<(String, String)>,
+    pub html_attributes: Map,
     pub inline: bool,
 }
 
@@ -41,7 +41,7 @@ impl Default for AudioOptions {
             controlslist: None,
             crossorigin: None,
             disable_remote_playback: false,
-            html_attributes: Vec::new(),
+            html_attributes: Map::new(),
             inline: false,
         }
     }
@@ -97,8 +97,7 @@ pub fn audio(options: AudioOptions) -> NodeExtension {
                     json!(options.disable_remote_playback),
                 ),
             ]);
-            let options_html = html_attributes_object(&options.html_attributes);
-            let mut merged = merge_objects([&options_html, &defaults, &html])?;
+            let mut merged = merge_objects([&options.html_attributes, &defaults, &html])?;
             merged.retain(|_, value| !matches!(value, Value::Null | Value::Bool(false)));
             Ok(DomSpec::element(
                 "audio",

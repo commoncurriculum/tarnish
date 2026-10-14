@@ -19,27 +19,6 @@ pub fn merge_attributes<'a, const N: usize>(
     Ok(html)
 }
 
-/// `mergeAttributes(this.options.HTMLAttributes, HTMLAttributes)`: an extension's
-/// `HTMLAttributes` option, each a string as `setAttribute` makes of a value, with the
-/// attributes its node or mark renders merged over them.
-pub fn merge_html_attributes<'a>(
-    options: &[(String, String)],
-    html: SpecAttrs<'a>,
-) -> Result<SpecAttrs<'a>, Error> {
-    if options.is_empty() {
-        return Ok(html);
-    }
-    let mut merged = SpecAttrs::new();
-    for (key, value) in options {
-        let value = AttrValue::Text(Cow::Owned(value.clone()));
-        merge_entry(&mut merged, Cow::Owned(key.clone()), value)?;
-    }
-    for (key, value) in html.iter() {
-        merge_entry(&mut merged, Cow::Owned(key.to_owned()), value.clone())?;
-    }
-    Ok(merged)
-}
-
 /// `mergeAttributes(...objects)` of objects whose values are any JSON, such as the options an
 /// embed gives its iframe ahead of what its node renders. `null` stands for `undefined` too,
 /// which an element is given no more than `null`.
@@ -61,24 +40,22 @@ pub fn merge_objects<'m>(objects: impl IntoIterator<Item = &'m Map>) -> Result<M
     Ok(merged)
 }
 
-/// `mergeAttributes(this.options.HTMLAttributes, HTMLAttributes)` of an `HTMLAttributes` option
-/// whose values are any JSON, as [`merge_objects`] merges them.
-pub(crate) fn merge_configured<'a>(
+/// `mergeAttributes(this.options.HTMLAttributes, HTMLAttributes, extra)` of an `HTMLAttributes`
+/// option whose values are any JSON, as [`merge_objects`] merges them.
+pub(crate) fn merge_configured<'a, const N: usize>(
     configured: &Map,
     html: SpecAttrs<'a>,
+    extra: [(&'a str, AttrValue<'a>); N],
 ) -> Result<SpecAttrs<'a>, Error> {
     if configured.is_empty() {
-        return Ok(html);
+        return merge_attributes(html, extra);
     }
-    element_attrs(merge_objects([configured, &rendered_object(&html)])?)
-}
-
-/// An extension's `HTMLAttributes` option as an object.
-pub fn html_attributes_object(options: &[(String, String)]) -> Map {
-    options
-        .iter()
-        .map(|(key, value)| (key.as_str().into(), Value::String(value.clone())))
-        .collect()
+    let extra = rendered_object(&SpecAttrs::from(extra));
+    element_attrs(merge_objects([
+        configured,
+        &rendered_object(&html),
+        &extra,
+    ])?)
 }
 
 fn joined_classes(existing: &Value, value: &Value) -> Result<Value, Error> {

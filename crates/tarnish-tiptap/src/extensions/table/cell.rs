@@ -1,12 +1,13 @@
 //! `TableCell`, and the TableHeader it differs from in its name, tag and role.
 
 use super::utils::{cell_attributes, cell_parse_html};
-use crate::{DomSpec, NodeExtension, merge_html_attributes};
+use crate::merge_attributes::merge_configured;
+use crate::{DomSpec, NodeExtension};
+use tarnish_js::json::Map;
 
 #[derive(Default)]
 pub struct TableCellOptions {
-    /// `HTMLAttributes`, each a string.
-    pub html_attributes: Vec<(String, String)>,
+    pub html_attributes: Map,
 }
 
 pub fn table_cell(options: TableCellOptions) -> NodeExtension {
@@ -18,7 +19,7 @@ pub(super) fn cell(
     name: &'static str,
     tag: &'static str,
     role: &'static str,
-    html_attributes: Vec<(String, String)>,
+    html_attributes: Map,
 ) -> NodeExtension {
     NodeExtension::create(name)
         .content("block+")
@@ -27,7 +28,7 @@ pub(super) fn cell(
         .isolating()
         .parse_html(cell_parse_html(tag, name))
         .render_html(move |_, html| {
-            let attrs = merge_html_attributes(&html_attributes, html)?;
+            let attrs = merge_configured(&html_attributes, html, [])?;
             Ok(DomSpec::wrapping(tag, attrs))
         })
 }

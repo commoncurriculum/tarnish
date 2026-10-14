@@ -2,11 +2,11 @@
 
 use super::cell::cell;
 use crate::NodeExtension;
+use tarnish_js::json::Map;
 
 #[derive(Default)]
 pub struct TableHeaderOptions {
-    /// `HTMLAttributes`, each a string.
-    pub html_attributes: Vec<(String, String)>,
+    pub html_attributes: Map,
 }
 
 pub fn table_header(options: TableHeaderOptions) -> NodeExtension {

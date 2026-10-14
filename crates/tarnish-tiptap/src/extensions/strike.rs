@@ -32,7 +32,7 @@ pub fn strike(options: StrikeOptions) -> MarkExtension {
             ),
         ])
         .render_html(move |_, html| {
-            let html = merge_configured(&options.html_attributes, html)?;
+            let html = merge_configured(&options.html_attributes, html, [])?;
             Ok(DomSpec::wrapping("s", html))
         })
         .markdown_token_name("del")

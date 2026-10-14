@@ -2,16 +2,15 @@
 //! `:::name` block in Markdown. Whether a details element is open is kept only with `persist`.
 
 use crate::markdown::specs::BlockContent;
-use crate::{
-    DomSpec, ExtensionAttribute, NodeExtension, ParseHtml, merge_attributes, merge_html_attributes,
-};
-use tarnish_js::json::{Value, json};
+use crate::merge_attributes::merge_configured;
+use crate::{DomSpec, ExtensionAttribute, NodeExtension, ParseHtml};
+use tarnish_js::json::{Map, Value, json};
 
 #[derive(Default)]
 pub struct DetailsOptions {
     /// Whether the document keeps the `open` attribute.
     pub persist: bool,
-    pub html_attributes: Vec<(String, String)>,
+    pub html_attributes: Map,
 }
 
 pub fn details(options: DetailsOptions) -> NodeExtension {
@@ -30,7 +29,7 @@ pub fn details(options: DetailsOptions) -> NodeExtension {
         .render_html(move |_, html| {
             Ok(DomSpec::wrapping(
                 "details",
-                merge_html_attributes(&html_attributes, html)?,
+                merge_configured(&html_attributes, html, [])?,
             ))
         })
         .block_markdown_spec("details", BlockContent::Block)
@@ -47,7 +46,7 @@ fn open() -> ExtensionAttribute {
 
 #[derive(Default)]
 pub struct DetailsSummaryOptions {
-    pub html_attributes: Vec<(String, String)>,
+    pub html_attributes: Map,
 }
 
 pub fn details_summary(options: DetailsSummaryOptions) -> NodeExtension {
@@ -60,7 +59,7 @@ pub fn details_summary(options: DetailsSummaryOptions) -> NodeExtension {
         .render_html(move |_, html| {
             Ok(DomSpec::wrapping(
                 "summary",
-                merge_html_attributes(&options.html_attributes, html)?,
+                merge_configured(&options.html_attributes, html, [])?,
             ))
         })
         .block_markdown_spec("detailsSummary", BlockContent::Inline)
@@ -68,7 +67,7 @@ pub fn details_summary(options: DetailsSummaryOptions) -> NodeExtension {
 
 #[derive(Default)]
 pub struct DetailsContentOptions {
-    pub html_attributes: Vec<(String, String)>,
+    pub html_attributes: Map,
 }
 
 pub fn details_content(options: DetailsContentOptions) -> NodeExtension {
@@ -78,8 +77,8 @@ pub fn details_content(options: DetailsContentOptions) -> NodeExtension {
         .selectable(false)
         .parse_html([ParseHtml::tag(r#"div[data-type="detailsContent"]"#)])
         .render_html(move |_, html| {
-            let html = merge_html_attributes(&options.html_attributes, html)?;
-            let html = merge_attributes(html, [("data-type", "detailsContent".into())])?;
+            let data_type = [("data-type", "detailsContent".into())];
+            let html = merge_configured(&options.html_attributes, html, data_type)?;
             Ok(DomSpec::wrapping("div", html))
         })
         .block_markdown_spec("detailsContent", BlockContent::Block)

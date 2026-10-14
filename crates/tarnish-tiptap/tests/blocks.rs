@@ -9,7 +9,7 @@ mod own;
 
 use own::{Converter, input_of};
 use tarnish::js::stack::on_dirty_scheduler_stack;
-use tarnish::json::{Value, json};
+use tarnish::json::{Map, Value, json, object};
 use tarnish_fixtures::{expect, outcome, read, records, same};
 use tarnish_js::utf16;
 use tarnish_tiptap::extensions::audio::{AudioOptions, audio};
@@ -50,20 +50,9 @@ fn base() -> Vec<Extension> {
     ]
 }
 
-fn pairs(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
-    pairs
-        .iter()
-        .map(|(key, value)| ((*key).into(), (*value).into()))
-        .collect()
-}
-
 /// The `HTMLAttributes` the recorder gives the extensions whose options it varies.
-fn given() -> Vec<(String, String)> {
-    pairs(&[
-        ("class", "given more"),
-        ("style", "color: red"),
-        ("data-given", "yes"),
-    ])
+fn given() -> Map {
+    object!({"class": "given more", "style": "color: red", "data-given": "yes"})
 }
 
 fn emojis() -> Vec<EmojiItem> {
@@ -93,11 +82,7 @@ fn emojis() -> Vec<EmojiItem> {
     ]
 }
 
-fn details_trio(
-    options: DetailsOptions,
-    summary: Vec<(String, String)>,
-    content: Vec<(String, String)>,
-) -> Vec<Extension> {
+fn details_trio(options: DetailsOptions, summary: Map, content: Map) -> Vec<Extension> {
     vec![
         details(options).into(),
         details_summary(DetailsSummaryOptions {
@@ -123,8 +108,8 @@ fn added(name: &str) -> Vec<Extension> {
             ];
             all.extend(details_trio(
                 DetailsOptions::default(),
-                Vec::new(),
-                Vec::new(),
+                Map::new(),
+                Map::new(),
             ));
             all.extend(mathematics());
             all.extend([
@@ -183,14 +168,14 @@ fn added(name: &str) -> Vec<Extension> {
             })
             .into(),
         ],
-        "details" => details_trio(DetailsOptions::default(), Vec::new(), Vec::new()),
+        "details" => details_trio(DetailsOptions::default(), Map::new(), Map::new()),
         "detailsOptions" => details_trio(
             DetailsOptions {
                 persist: true,
                 html_attributes: given(),
             },
-            pairs(&[("class", "summary")]),
-            pairs(&[("class", "content"), ("data-type", "given")]),
+            object!({"class": "summary"}),
+            object!({"class": "content", "data-type": "given"}),
         ),
         "mathematics" => mathematics(),
         "emoji" | "emojiOptions" => vec![
@@ -199,7 +184,7 @@ fn added(name: &str) -> Vec<Extension> {
                 force_fallback_images: name == "emojiOptions",
                 html_attributes: match name {
                     "emojiOptions" => given(),
-                    _ => Vec::new(),
+                    _ => Map::new(),
                 },
             })
             .into(),

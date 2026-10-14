@@ -4,9 +4,10 @@
 use tarnish::chunk::{Kind, ValueRef};
 
 use crate::markdown::{ParseHelpers, Parsed, RenderContext, RenderHelpers};
+use crate::merge_attributes::merge_configured;
 use crate::{
     DomSpec, ExtensionAttribute, HtmlNode, NodeExtension, ParseHtml, PreserveWhitespace, SpecAttrs,
-    merge_html_attributes, node_attr,
+    node_attr,
 };
 use tarnish_js::json::{Map, Value, json};
 use tarnish_js::{self as js, Error, utf16, value};
@@ -16,7 +17,7 @@ pub struct CodeBlockOptions {
     /// `languageClassPrefix`, `None` for `null`.
     pub language_class_prefix: Option<&'static str>,
     pub default_language: Value,
-    pub html_attributes: Vec<(String, String)>,
+    pub html_attributes: Map,
 }
 
 impl Default for CodeBlockOptions {
@@ -24,7 +25,7 @@ impl Default for CodeBlockOptions {
         CodeBlockOptions {
             language_class_prefix: Some("language-"),
             default_language: Value::Null,
-            html_attributes: Vec::new(),
+            html_attributes: Map::new(),
         }
     }
 }
@@ -51,7 +52,7 @@ pub fn code_block(options: CodeBlockOptions) -> NodeExtension {
             }
             Ok(DomSpec::element(
                 "pre",
-                merge_html_attributes(&html_attributes, html)?,
+                merge_configured(&html_attributes, html, [])?,
                 vec![DomSpec::wrapping("code", code)],
             ))
         })

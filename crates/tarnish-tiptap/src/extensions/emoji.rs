@@ -6,7 +6,7 @@
 use crate::markdown::{RenderContext, RenderHelpers};
 use crate::{
     AttrValue, DomSpec, ExtensionAttribute, NodeExtension, ParseHtml, SpecAttrs, element_attrs,
-    html_attributes_object, merge_objects, node_attr, rendered_object,
+    merge_objects, node_attr, rendered_object,
 };
 use tarnish::chunk::ValueRef;
 use tarnish_js::json::{Map, Value, json};
@@ -23,7 +23,7 @@ pub struct EmojiItem {
 
 #[derive(Default)]
 pub struct EmojiOptions {
-    pub html_attributes: Vec<(String, String)>,
+    pub html_attributes: Map,
     pub emojis: Vec<EmojiItem>,
     pub force_fallback_images: bool,
 }
@@ -46,7 +46,7 @@ pub fn emoji(options: EmojiOptions) -> NodeExtension {
             let data_type = Map::from_iter([("data-type".into(), json!("emoji"))]);
             let attributes = merge_objects([
                 &rendered_object(&html),
-                &html_attributes_object(&options.html_attributes),
+                &options.html_attributes,
                 &data_type,
             ])?;
             let attributes = element_attrs(attributes)?;

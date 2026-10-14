@@ -25,7 +25,7 @@ pub fn italic(options: ItalicOptions) -> MarkExtension {
             ParseHtml::Style(ParseHtml::style("font-style=italic")),
         ])
         .render_html(move |_, html| {
-            let html = merge_configured(&options.html_attributes, html)?;
+            let html = merge_configured(&options.html_attributes, html, [])?;
             Ok(DomSpec::wrapping("em", html))
         })
         .markdown_token_name("em")

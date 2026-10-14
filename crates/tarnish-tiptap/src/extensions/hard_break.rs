@@ -22,7 +22,7 @@ pub fn hard_break(options: HardBreakOptions) -> NodeExtension {
         .linebreak_replacement()
         .parse_html([ParseHtml::tag("br")])
         .render_html(move |_, html| {
-            let html = merge_configured(&options.html_attributes, html)?;
+            let html = merge_configured(&options.html_attributes, html, [])?;
             Ok(DomSpec::element("br", html, Vec::new()))
         })
         .render_text(|_| Ok("\n".to_owned()))
