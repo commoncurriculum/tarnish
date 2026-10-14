@@ -37,7 +37,7 @@ pub fn truthy(value: Option<&Value>) -> bool {
     match value {
         None | Some(Value::Null) | Some(Value::Bool(false)) => false,
         Some(Value::String(string)) => !string.is_empty(),
-        Some(Value::Number(number)) => number.as_f64() != 0.0 && !number.as_f64().is_nan(),
+        Some(Value::Number(number)) => number_to_boolean(number.as_f64()),
         Some(_) => true,
     }
 }

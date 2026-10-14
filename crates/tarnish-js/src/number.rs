@@ -71,6 +71,11 @@ pub fn number(double: f64) -> Value {
     Value::Number(Number(double))
 }
 
+/// `Boolean(double)`.
+pub fn number_to_boolean(double: f64) -> bool {
+    double != 0.0 && !double.is_nan()
+}
+
 /// `String(double)`.
 pub fn number_to_string(double: f64) -> String {
     ryu_js::Buffer::new().format(double).to_string()

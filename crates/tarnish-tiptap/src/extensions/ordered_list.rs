@@ -120,8 +120,8 @@ fn parse_markdown(token: &Token, helpers: &ParseHelpers) -> Result<Parsed, Error
     // `token.start || 1`
     let start = list
         .start
-        .filter(|start| js::truthy(Some(&js::number(*start))));
-    let start = start.unwrap_or(1.0);
+        .filter(|start| js::number_to_boolean(*start))
+        .unwrap_or(1.0);
     let content = parse_list_items(&list.items, helpers)?;
     let mut attrs = Map::new();
     if start != 1.0 {
@@ -385,7 +385,7 @@ fn tokenize(src: &Units, _: &[Token], lexer: &mut Lexer) -> Result<Option<Token>
         return Ok(None);
     }
     // `listItems[0]?.number || 1`
-    let start = match js::truthy(Some(&js::number(first.number))) {
+    let start = match js::number_to_boolean(first.number) {
         true => first.number,
         false => 1.0,
     };

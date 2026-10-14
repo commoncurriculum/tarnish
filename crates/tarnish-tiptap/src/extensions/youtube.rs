@@ -219,7 +219,7 @@ fn embed_url_from_youtube_url(
     if options.enable_iframe_api {
         params.push("enablejsapi=1".into());
     }
-    if js::truthy(Some(&js::number(options.end_time))) {
+    if js::number_to_boolean(options.end_time) {
         params.push(format!("end={}", number(options.end_time)));
     }
     if let Some(language) = options
@@ -229,7 +229,7 @@ fn embed_url_from_youtube_url(
     {
         params.push(format!("hl={language}"));
     }
-    if js::truthy(Some(&js::number(options.iv_load_policy))) {
+    if js::number_to_boolean(options.iv_load_policy) {
         params.push(format!("iv_load_policy={}", number(options.iv_load_policy)));
     }
     if options.r#loop {
