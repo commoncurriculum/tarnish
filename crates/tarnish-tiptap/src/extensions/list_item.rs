@@ -53,15 +53,17 @@ fn parse_markdown(token: &Token, helpers: &ParseHelpers) -> Result<Parsed, Error
         }
         let first = &tokens[0];
         let inline = first.tokens.as_deref().filter(|inline| !inline.is_empty());
-        if tokens.iter().any(|token| token.kind == "paragraph") {
-            content = helpers.parse_block_children(tokens)?;
-        } else if let Some(inline) = inline.filter(|_| first.kind == "text") {
-            content.push(json!({ "type": "paragraph", "content": helpers.parse_inline(inline)? }));
-            if tokens.len() > 1 {
-                content.extend(helpers.parse_block_children(&tokens[1..])?);
+        let has_paragraph = tokens.iter().any(|token| token.kind == "paragraph");
+        match inline.filter(|_| first.kind == "text" && !has_paragraph) {
+            Some(inline) => {
+                let paragraph =
+                    json!({ "type": "paragraph", "content": helpers.parse_inline(inline)? });
+                content.push(paragraph);
+                if tokens.len() > 1 {
+                    content.extend(helpers.parse_block_children(&tokens[1..])?);
+                }
             }
-        } else {
-            content = helpers.parse_block_children(tokens)?;
+            None => content = helpers.parse_block_children(tokens)?,
         }
     }
     if content.is_empty() {
