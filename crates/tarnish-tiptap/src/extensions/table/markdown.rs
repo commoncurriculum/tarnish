@@ -279,18 +279,17 @@ pub fn render_table_to_markdown(
             .find_map(|row| row.get(column).and_then(|cell| cell.align))
     });
 
-    let mut out = String::from("\n");
-    let header = col_widths.iter().enumerate().map(|(column, &width)| {
-        pad(
-            if has_header {
-                text(&rows[0], column)
-            } else {
-                ""
-            },
-            width,
+    let row_line = |row: &[Cell]| {
+        let cells = col_widths.iter().enumerate();
+        line(
+            cells
+                .map(|(column, &width)| pad(text(row, column), width))
+                .collect(),
         )
-    });
-    out += &line(header.collect());
+    };
+
+    let mut out = String::from("\n");
+    out += &row_line(if has_header { &rows[0] } else { &[] });
     let separator = col_widths
         .iter()
         .zip(col_alignments)
@@ -305,12 +304,7 @@ pub fn render_table_to_markdown(
         });
     out += &line(separator.collect());
     for row in &rows[usize::from(has_header)..] {
-        let cells = col_widths.iter().enumerate();
-        out += &line(
-            cells
-                .map(|(column, &width)| pad(text(row, column), width))
-                .collect(),
-        );
+        out += &row_line(row);
     }
     Ok(out)
 }
