@@ -14,6 +14,7 @@ pub use nesting::{
     IndentedBlockConfig, IndentedBlocks, parse_indented_blocks, render_nested_markdown_content,
 };
 pub use parse::ParseHelpers;
+pub(crate) use parse::task_item_token;
 pub use types::*;
 
 use std::sync::Arc;

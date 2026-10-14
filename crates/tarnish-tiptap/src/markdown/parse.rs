@@ -65,6 +65,28 @@ fn task_item_checked(item: &Token) -> Option<bool> {
     )
 }
 
+/// The `taskItem` token `parseListToken` and TaskList's tokenizer make: its main content, the
+/// inline tokens lexed of it, whether it's checked, and its `nestedTokens`.
+pub(crate) fn task_item_token(
+    main_content: Units,
+    tokens: Vec<Token>,
+    checked: bool,
+    nested_tokens: Option<Vec<Token>>,
+) -> Token {
+    let nested = nested_tokens.map(|nested| Box::new(vec![("nestedTokens", Tokens::from(nested))]));
+    Token {
+        text: Some(main_content),
+        tokens: Some(tokens.into()),
+        data: TokenData::ListItem {
+            task: true,
+            checked: Some(checked),
+            loose: false,
+        },
+        child_tokens: nested,
+        ..Token::new("taskItem", Units::default())
+    }
+}
+
 impl ParseHelpers<'_> {
     /// `helpers.tokenizeInline(src)`.
     pub fn tokenize_inline(&self, src: &[u16]) -> Result<Vec<Token>, Error> {
@@ -252,20 +274,14 @@ impl ParseHelpers<'_> {
                 nested_tokens = Lexer::new(&self.manager.marked).lex(&source)?;
             }
         }
-        Ok(Token {
-            text: Some(Units::from(main_content)),
-            tokens: Some(self.tokenize_inline(main_content)?.into()),
-            data: TokenData::ListItem {
-                task: true,
-                checked: Some(checked),
-                loose: false,
-            },
-            child_tokens: Some(Box::new(vec![(
-                "nestedTokens",
-                Tokens::from(nested_tokens),
-            )])),
-            ..Token::new("taskItem", Units::default())
-        })
+        let tokens = self.tokenize_inline(main_content)?;
+        let main_content = Units::from(main_content);
+        Ok(task_item_token(
+            main_content,
+            tokens,
+            checked,
+            Some(nested_tokens),
+        ))
     }
 
     /// The first result of the token's handlers that holds something.

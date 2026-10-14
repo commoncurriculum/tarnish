@@ -4,14 +4,16 @@
 use std::sync::LazyLock;
 
 use super::bullet_list::render_list;
-use crate::markdown::{IndentedBlockConfig, ParseHelpers, Parsed, parse_indented_blocks};
+use crate::markdown::{
+    IndentedBlockConfig, ParseHelpers, Parsed, parse_indented_blocks, task_item_token,
+};
 use crate::merge_attributes::render_wrapping;
 use crate::{NodeExtension, ParseHtml};
 use tarnish_js::json::Map;
 use tarnish_js::regexp::RegExp;
 use tarnish_js::units::Units;
 use tarnish_js::{Error, utf16};
-use tarnish_markdown::marked::{Lexer, List, Token, TokenData, Tokens};
+use tarnish_markdown::marked::{Lexer, List, Token, TokenData};
 
 pub struct TaskListOptions {
     /// The node type of the list's items.
@@ -95,23 +97,17 @@ impl IndentedBlockConfig for TaskItems {
         lexer: &mut Lexer,
     ) -> Result<Token, Error> {
         let inline = lexer.inline_tokens(&item.main_content)?;
-        let nested = nested_tokens.map(|nested| vec![("nestedTokens", Tokens::from(nested))]);
-        Ok(Token {
-            text: Some(item.main_content),
-            tokens: Some(inline.into()),
-            data: TokenData::ListItem {
-                task: true,
-                checked: Some(item.checked),
-                loose: false,
-            },
-            child_tokens: nested.map(Box::new),
-            ..Token::new("taskItem", Units::default())
-        })
+        Ok(task_item_token(
+            item.main_content,
+            inline,
+            item.checked,
+            nested_tokens,
+        ))
     }
 
     /// `parseTaskListContent(content)`: the task list the content starts with and the blocks
     /// after it, or else the content's blocks.
-    fn nested(&self, content: Units, lexer: &mut Lexer) -> Result<Option<Vec<Token>>, Error> {
+    fn nested(&self, content: Units, lexer: &mut Lexer) -> Result<Vec<Token>, Error> {
         let mut tokens = Vec::new();
         match parse_indented_blocks(&content, self, lexer)? {
             Some(nested) => {
@@ -123,7 +119,7 @@ impl IndentedBlockConfig for TaskItems {
             }
             None => lexer.block_tokens(&content, &mut tokens, false)?,
         }
-        Ok(Some(tokens))
+        Ok(tokens)
     }
 }
 

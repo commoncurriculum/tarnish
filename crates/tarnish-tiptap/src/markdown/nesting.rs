@@ -62,10 +62,10 @@ pub trait IndentedBlockConfig {
     }
 
     /// `config.customNestedParser(dedented)`, or else `lexer.blockTokens(dedented)`.
-    fn nested(&self, dedented: Units, lexer: &mut Lexer) -> Result<Option<Vec<Token>>, Error> {
+    fn nested(&self, dedented: Units, lexer: &mut Lexer) -> Result<Vec<Token>, Error> {
         let mut tokens = Vec::new();
         lexer.block_tokens(&dedented, &mut tokens, false)?;
-        Ok(Some(tokens))
+        Ok(tokens)
     }
 }
 
@@ -131,7 +131,7 @@ pub fn parse_indented_blocks<C: IndentedBlockConfig>(
                 .collect();
             let dedented = utf16::join(&dedented, &[utf16::unit(b'\n')]);
             if !utf16::trim(&dedented).is_empty() {
-                nested_tokens = stack::grow(|| config.nested(Units::from(dedented), lexer))?;
+                nested_tokens = Some(stack::grow(|| config.nested(Units::from(dedented), lexer))?);
             }
         }
         items.push(config.create_token(item, nested_tokens, lexer)?);
