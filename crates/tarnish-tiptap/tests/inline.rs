@@ -11,6 +11,7 @@ use std::sync::Arc;
 use own::{Converter, input_of};
 use tarnish::json::{Map, Value, json, object};
 use tarnish_fixtures::{outcome, read, records, same};
+use tarnish_tiptap::extensions::link::{LinkOptions, link};
 use tarnish_tiptap::extensions::text_align::{TextAlignOptions, text_align};
 use tarnish_tiptap::extensions::text_style::{
     StyleOptions, TextStyleKitOptions, TextStyleOptions, background_color, color, font_family,
@@ -129,6 +130,42 @@ fn configuration(name: &str) -> Vec<Extension> {
             })
             .into(),
         ]),
+        "link" => own_with([link(LinkOptions::default()).into()]),
+        "linkOptions" => own_with([link(LinkOptions {
+            autolink: false,
+            protocols: ["ftp", "git", "web+x", "", "", "a|b", "C.D"]
+                .map(String::from)
+                .into(),
+            html_attributes: object!({
+                "target": null,
+                "rel": "noopener",
+                "class": "link",
+                "data-x": "y",
+            }),
+            ..LinkOptions::default()
+        })
+        .into()]),
+        "linkAllowed" => own_with([link(LinkOptions {
+            default_protocol: "https".into(),
+            protocols: vec!["web+y".into()],
+            is_allowed_uri: Some(Arc::new(|url, context| {
+                let url_is = |text: &str| url.and_then(Value::as_str) == Some(text);
+                let dotted = url
+                    .and_then(Value::as_str)
+                    .is_some_and(|url| url.starts_with("./"));
+                let counted = format!("{}:{}", context.default_protocol, context.protocols.len());
+                Ok(dotted
+                    || url_is(&counted)
+                    || (!url_is("https://rejected.example") && context.default_validate(url)?))
+            })),
+            ..LinkOptions::default()
+        })
+        .into()]),
+        "linkClass" => {
+            let mut options = LinkOptions::default();
+            options.html_attributes.insert("class".into(), json!(5));
+            own_with([link(options).into()])
+        }
         "kit" => kit(TextStyleKitOptions::default()),
         "kitOptions" => kit(TextStyleKitOptions {
             background_color: None,

@@ -18,6 +18,7 @@ pub mod highlight;
 pub mod horizontal_rule;
 pub mod image;
 pub mod italic;
+pub mod link;
 pub mod list_item;
 pub mod mathematics;
 pub mod ordered_list;

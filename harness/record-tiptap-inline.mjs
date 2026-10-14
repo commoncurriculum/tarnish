@@ -15,6 +15,7 @@ import { Heading } from "@tiptap/extension-heading"
 import { Highlight } from "@tiptap/extension-highlight"
 import { Image } from "@tiptap/extension-image"
 import { Italic } from "@tiptap/extension-italic"
+import { Link } from "@tiptap/extension-link"
 import { Paragraph } from "@tiptap/extension-paragraph"
 import { Strike } from "@tiptap/extension-strike"
 import { Subscript } from "@tiptap/extension-subscript"
@@ -127,6 +128,28 @@ const configurations = {
       defaultAlignment: "left",
     }),
   ],
+  link: [...own, Link],
+  linkOptions: [
+    ...own,
+    Link.configure({
+      autolink: false,
+      protocols: ["ftp", "git", { scheme: "web+x", optionalSlashes: true }, { scheme: "" }, "", "a|b", "C.D"],
+      HTMLAttributes: { target: null, rel: "noopener", class: "link", "data-x": "y" },
+    }),
+  ],
+  linkAllowed: [
+    ...own,
+    Link.configure({
+      defaultProtocol: "https",
+      protocols: ["web+y"],
+      isAllowedUri: (url, ctx) =>
+        (typeof url === "string" && url.startsWith("./")) ||
+        url === `${ctx.defaultProtocol}:${ctx.protocols.length}` ||
+        (url !== "https://rejected.example" && ctx.defaultValidate(url)),
+    }),
+  ],
+  // A class that isn't a string, which mergeAttributes can't split.
+  linkClass: [...own, Link.configure({ HTMLAttributes: { class: 5 } })],
 }
 
 const converters = Object.fromEntries(
@@ -250,9 +273,99 @@ const alignDocs = [
   },
 ]
 
+// Each href in a link of its own.
+const hrefs = [
+  "https://x.com/a?b=c&d#e",
+  "javascript:alert(1)",
+  "JavaScript:x",
+  " javascript:x",
+  "java&#x09;script:x",
+  "jav&#x0A;ascript:x",
+  "&#1;javascript:x",
+  "&#xA0;javascript:x",
+  "&#x2028;javascript:x",
+  "data:text/html,x",
+  "vbscript:x",
+  "/relative",
+  "#fragment",
+  "?query",
+  "./dot",
+  "x",
+  "1:x",
+  "-x:y",
+  "a.b:c",
+  "mailto:a@b.c",
+  "TEL:1",
+  "callto:x",
+  "sms:1",
+  "cid:x",
+  "xmpp:x",
+  "ftps://x",
+  "ftp://x",
+  "git://x",
+  "web+x:y",
+  "web+y:z",
+  "a|b:c",
+  "b:c",
+  "c.d:x",
+  "https:1",
+  "https:0",
+  "https://rejected.example",
+  "",
+]
+const linkHTML = [
+  `<p>${hrefs.map(href => `<a href="${href}">${href || "empty"}</a>`).join(" ")}</p>`,
+  ...hrefs.map(href => `<p><a href="${href}">a</a></p>`),
+  "<p><a>no href</a><a href>bare</a><a name=x>named</a></p>",
+  '<p><a href="https://x" target="_self" rel="nofollow" class="c d" title="T">all</a></p>',
+  '<p><a href="x" target="1" rel="true" class="-2.5" title="false">strings</a></p>',
+  '<p><a href="x" target="" rel="" class="" title="">empties</a></p>',
+  '<p><a href="x"><b>bold</b> and <span style="color: red">red</span></a></p>',
+  '<p><a href="1">a<a href="2">b</a>c</a></p>',
+  '<p><a href="x" HREF="y" href="z">duplicates</a></p>',
+  '<h1><a href="x">heading</a></h1><a href="loose">loose</a>',
+]
+const linkMarkdown = [
+  "[text](https://x.com)",
+  '[t](u "title") [t](u \'single\') [t](u (parens)) [t](u "")',
+  '[t](<u v> "t") [t]() [](u) [t](javascript:alert(1))',
+  "<https://auto.link> <a@b.c> <ftp://x.y>",
+  "https://bare.url www.example.com a@b.com ftp://x.y http://a.b/c?d=e&f",
+  "[**bold** link](u) **[link](u)** *[a](u) b*",
+  '[a][ref] [ref] [Ref][]\n\n[ref]: https://r "R"',
+  "[![i](a.png)](u) [a\\]b](c\\)d) [a](b c)",
+  "[a](u)[b](v) [c](u)",
+  "[`code`](u) [a  \nb](u)",
+  "[x](https://a.b/%20c?d=%3C) [y](<a b>)",
+]
+const linkDocs = [
+  ...["u", "javascript:x", "", null, 5, true, {}, [], ["a"]].map(href =>
+    paragraph({ type: "text", text: "x", marks: [{ type: "link", attrs: { href } }] }),
+  ),
+  ...["t", "", null, 0, 1, 'a"b'].map(title =>
+    paragraph({ type: "text", text: "x", marks: [{ type: "link", attrs: { href: "u", title } }] }),
+  ),
+  paragraph({
+    type: "text",
+    text: "x",
+    marks: [{ type: "link", attrs: { href: "u", target: null, rel: "me", class: "a b", title: "t" } }],
+  }),
+  paragraph({ type: "text", text: "x", marks: [{ type: "link", attrs: { href: "u", target: 0, class: 7 } }] }),
+  paragraph({ type: "text", text: "x", marks: [{ type: "link" }] }),
+  paragraph(
+    { type: "text", text: "a", marks: [{ type: "link", attrs: { href: "u" } }] },
+    { type: "text", text: "b", marks: [{ type: "bold" }, { type: "link", attrs: { href: "u" } }] },
+    { type: "text", text: "c", marks: [{ type: "link", attrs: { href: "v" } }] },
+    { type: "text", text: " d" },
+  ),
+  paragraph({ type: "text", text: "*a* [b]", marks: [{ type: "link", attrs: { href: "(u)", title: "T" } }] }),
+]
+
 const parsesMarkdown = each({
   globals: ["plain **bold**"],
   styles: ['<span style="color: red">x</span>', "plain *em*"],
+  link: [...linkMarkdown, ...markedMarkdown(/\[|<|https?:|www\.|@|ftp:/)],
+  linkOptions: linkMarkdown,
 }).map(([name, markdown]) => ({
   extensions: name,
   markdown,
@@ -271,6 +384,10 @@ const parsesHTML = each({
   textAlignNone: alignHTML,
   textAlign: [...alignHTML, ...domHTML(/style|align/i)],
   textAlignOptions: alignHTML,
+  link: [...linkHTML, ...domHTML(/<a\b/i)],
+  linkOptions: linkHTML,
+  linkAllowed: linkHTML,
+  linkClass: linkHTML.slice(0, 3),
 }).map(([name, html]) => ({
   extensions: name,
   html,
@@ -310,6 +427,10 @@ const docs = {
   textAlignNone: alignDocs,
   textAlign: alignDocs,
   textAlignOptions: alignDocs,
+  link: linkDocs,
+  linkOptions: linkDocs,
+  linkAllowed: linkDocs,
+  linkClass: linkDocs.slice(0, 3),
 }
 
 const serializesMarkdown = documents(docs).map(([name, doc]) => ({
