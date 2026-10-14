@@ -34,7 +34,7 @@ use tarnish_tiptap::{
     node_attr,
 };
 
-/// Tiptap's own extensions, as `harness/record-tiptap.mjs` gives them.
+/// Tiptap's own extensions, as `harness/tiptap.mjs` gives them.
 pub fn extensions() -> Vec<Extension> {
     vec![
         document().into(),
@@ -54,16 +54,19 @@ pub fn extensions() -> Vec<Extension> {
     ]
 }
 
-/// `otherAttributes` of harness/fixture.mjs, which the group recorders give each extension's
-/// HTMLAttributes, `undefined` as `null`.
+/// `otherAttributes` of `harness/tiptap.mjs`, HTMLAttributes of values that aren't strings,
+/// `undefined` as `null`.
 pub fn other_attributes() -> Map {
     object!({
         "class": 5,
+        "style": null,
         "data-null": null,
         "data-undefined": null,
         "data-zero": 0,
         "data-false": false,
+        "data-true": true,
         "data-number": 1.5,
+        "data-empty": "",
         "data-object": {},
         "data-array": [1, "a", null],
     })

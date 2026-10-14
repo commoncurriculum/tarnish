@@ -22,7 +22,18 @@ import { Superscript } from "@tiptap/extension-superscript"
 import { Text } from "@tiptap/extension-text"
 import { Color, TextStyle } from "@tiptap/extension-text-style"
 import { Underline } from "@tiptap/extension-underline"
-import { doc, domInputs, markedInputs, own, paragraph, record, text, unique, withParsed } from "./tiptap.mjs"
+import {
+  doc,
+  domInputs,
+  markedInputs,
+  otherAttributes,
+  own,
+  paragraph,
+  record,
+  text,
+  unique,
+  withParsed,
+} from "./tiptap.mjs"
 
 const Code = Mark.create({
   name: "code",
@@ -72,8 +83,7 @@ const Given = Extension.create({
     },
   ],
 })
-// HTMLAttributes of strings, which the JSX of Bold leaves `children` out of, and of other values,
-// each with what some extensions add or replace.
+// HTMLAttributes of strings, which the JSX of Bold leaves `children` out of.
 const strings = {
   class: "option more",
   style: "color: blue; font-size: 2px",
@@ -82,15 +92,6 @@ const strings = {
   "data-undefined": undefined,
   "data-number": 1,
   children: "child",
-}
-const others = {
-  class: 0,
-  style: undefined,
-  "data-given": null,
-  "data-true": true,
-  "data-object": {},
-  "data-array": [1, "a", null],
-  "data-empty": "",
 }
 // Tiptap's own extensions, each with `attributes` and what `extra` adds for it, Highlight with
 // its colors, and Given.
@@ -370,7 +371,10 @@ record("tiptap", {
   htmlAttributes: attributed(
     configured(strings, { image: { alt: "option", title: "option", width: 5 }, highlight: { "data-color": "option" } }),
   ),
-  htmlAttributeValues: attributed(configured(others, { subscript: { style: 5 }, superscript: { class: 5 } })),
+  // A falsy class and data-given give way to Given's.
+  htmlAttributeValues: attributed(
+    configured(otherAttributes, { subscript: { style: 5 }, superscript: { class: 0, "data-given": null } }),
+  ),
   levels: optioned(replaced(Heading, Heading.configure({ levels: [4, 2] })), /<h[1-6]/i, "heading"),
   noLevels: optioned(replaced(Heading, Heading.configure({ levels: [] })), /<h[1-6]/i, "heading"),
   // multicolor adds the color a mark parses and renders.

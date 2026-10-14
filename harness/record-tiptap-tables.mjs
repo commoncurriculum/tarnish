@@ -17,8 +17,18 @@ import { Italic } from "@tiptap/extension-italic"
 import { Paragraph } from "@tiptap/extension-paragraph"
 import { Table, TableCell, TableHeader, TableKit, TableRow } from "@tiptap/extension-table"
 import { Text } from "@tiptap/extension-text"
-import { otherAttributes } from "./fixture.mjs"
-import { body, doc, domInputs, markedInputs, paragraph, record, text, unique, withParsed } from "./tiptap.mjs"
+import {
+  body,
+  doc,
+  domInputs,
+  markedInputs,
+  otherAttributes,
+  paragraph,
+  record,
+  text,
+  unique,
+  withParsed,
+} from "./tiptap.mjs"
 
 const Code = Mark.create({
   name: "code",

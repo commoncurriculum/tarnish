@@ -28,8 +28,8 @@ import { Text } from "@tiptap/extension-text"
 import { Twitch } from "@tiptap/extension-twitch"
 import { Youtube } from "@tiptap/extension-youtube"
 import { common, createLowlight } from "lowlight"
-import { otherAttributes, outcome } from "./fixture.mjs"
-import { doc, domInputs, markedInputs, paragraph as p, record, text, withParsed } from "./tiptap.mjs"
+import { outcome } from "./fixture.mjs"
+import { doc, domInputs, markedInputs, otherAttributes, paragraph as p, record, text, withParsed } from "./tiptap.mjs"
 
 const base = [Document, Paragraph, Text, Heading, HardBreak, Bold, Italic]
 const details = [Details, DetailsSummary, DetailsContent]

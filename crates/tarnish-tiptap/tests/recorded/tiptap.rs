@@ -43,10 +43,10 @@ fn configuration(name: &str) -> Configuration {
             ],
         ),
         "htmlAttributeValues" => configured(
-            others(),
+            own::other_attributes(),
             &[
                 ("subscript", object!({"style": 5})),
-                ("superscript", object!({"class": 5})),
+                ("superscript", object!({"class": 0, "data-given": null})),
             ],
         ),
         "levels" => replaced(heading(HeadingOptions {
@@ -115,19 +115,6 @@ fn strings() -> Map {
         "data-undefined": null,
         "data-number": 1,
         "children": "child",
-    })
-}
-
-/// HTMLAttributes of values other than strings, `undefined` as `null`.
-fn others() -> Map {
-    object!({
-        "class": 0,
-        "style": null,
-        "data-given": null,
-        "data-true": true,
-        "data-object": {},
-        "data-array": [1, "a", null],
-        "data-empty": "",
     })
 }
 

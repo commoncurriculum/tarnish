@@ -1,19 +1,6 @@
 // What the recorders share: how a run is recorded, and how a fixture is written.
 import { writeFileSync } from "node:fs"
 
-// HTMLAttributes of values that aren't strings, which `mergeAttributes` keeps as they are: an
-// element gets each as `setAttribute` makes a string of it, but `null` and `undefined`.
-export const otherAttributes = {
-  class: 5,
-  "data-null": null,
-  "data-undefined": undefined,
-  "data-zero": 0,
-  "data-false": false,
-  "data-number": 1.5,
-  "data-object": {},
-  "data-array": [1, "a", null],
-}
-
 // The fields `run` gives, or its error: its class and message, and a DOMException's name.
 export function outcome(run) {
   try {

@@ -61,6 +61,23 @@ export const own = [
   TextStyle,
 ]
 
+// HTMLAttributes of values that aren't strings, which `mergeAttributes` keeps as they are, but
+// that a falsy one gives way to what an attribute renders under its name: an element gets each as
+// `setAttribute` makes a string of it, but `null` and `undefined`.
+export const otherAttributes = {
+  class: 5,
+  style: undefined,
+  "data-null": null,
+  "data-undefined": undefined,
+  "data-zero": 0,
+  "data-false": false,
+  "data-true": true,
+  "data-number": 1.5,
+  "data-empty": "",
+  "data-object": {},
+  "data-array": [1, "a", null],
+}
+
 // The text serializers a record of `generatesText` may name: `places` names each paragraph and
 // chip and where it is.
 export const textSerializers = {
