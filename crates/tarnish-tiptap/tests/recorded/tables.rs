@@ -75,12 +75,12 @@ fn with_table(options: TableOptions) -> Vec<Extension> {
     )
 }
 
-/// An application's `style` attribute on tables and cells.
+/// An application's `style` attribute on tables and cells, which renders even when it's falsy.
 fn style() -> PlainExtension {
     let style = ExtensionAttribute::new("style", Value::Null)
         .parse_html(|element| element.attribute("style").map(Value::String))
         .render_html(|attributes, rendered| match attributes.get("style") {
-            Some(style) if style.truthy() => rendered.merge("style", style),
+            Some(style) if !style.is_null() => rendered.merge("style", style),
             _ => Ok(()),
         });
     PlainExtension::create("style").add_global_attributes(vec![GlobalAttributes {

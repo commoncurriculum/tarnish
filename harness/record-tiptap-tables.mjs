@@ -49,6 +49,8 @@ const tables = (table = Table, row = TableRow, cell = TableCell, header = TableH
   cell,
   header,
 ]
+// An application's style on tables and cells, which renders even when it's falsy, so that Table
+// reads one that is.
 const Style = Extension.create({
   name: "style",
   addGlobalAttributes: () => [
@@ -58,7 +60,7 @@ const Style = Extension.create({
         style: {
           default: null,
           parseHTML: element => element.getAttribute("style"),
-          renderHTML: attributes => (attributes.style ? { style: attributes.style } : {}),
+          renderHTML: attributes => (attributes.style === null ? {} : { style: attributes.style }),
         },
       },
     },
