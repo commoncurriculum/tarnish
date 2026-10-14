@@ -140,8 +140,9 @@ pub fn find_marks_to_close_at_end<'a>(
 ) -> Result<Vec<SameValueKey<'a>>, Error> {
     let is_last_node = !js::truthy(next_node);
     let next_marks = value::optional(next_node, "marks").filter(|_| !is_last_node);
-    let next_node_has_no_marks =
-        !is_last_node && (!js::truthy(next_marks) || next_marks.is_some_and(has_zero_length));
+    let next_node_has_no_marks = !is_last_node
+        && (!js::truthy(next_marks)
+            || value::length(next_marks)?.as_deref() == Some(&js::number(0.0)));
     let next_node_has_different_marks = !is_last_node
         && js::truthy(next_marks)
         && !mark_sets_equal(
@@ -163,18 +164,6 @@ pub fn find_marks_to_close_at_end<'a>(
         }
     }
     Ok(marks_to_close_at_end)
-}
-
-/// `marks.length === 0` for truthy `marks`.
-fn has_zero_length(marks: &Value) -> bool {
-    match marks {
-        Value::Array(items) => items.is_empty(),
-        Value::Object(map) => map
-            .get("length")
-            .and_then(Value::as_f64)
-            .is_some_and(|length| length == 0.0),
-        _ => false,
-    }
 }
 
 /// `markdownManager.markSetsEqual`.

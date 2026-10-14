@@ -105,6 +105,21 @@ pub fn or_empty_array(value: Option<&Value>) -> Option<&Value> {
     Some(crate::or(value, &crate::EMPTY_ARRAY))
 }
 
+/// `value.length`: an array's, a string's in UTF-16 units, an object's own `length`, `undefined`
+/// for a boolean or a number, or a `TypeError` for `null` and `undefined`.
+pub fn length(value: Option<&Value>) -> Result<Option<Cow<'_, Value>>> {
+    if let Some(nullish) = Nullish::of(value) {
+        return Err(cannot_read(nullish, "length"));
+    }
+    let count = |count: usize| Some(Cow::Owned(crate::number(count as f64)));
+    Ok(match value {
+        Some(Value::Array(items)) => count(items.len()),
+        Some(Value::String(text)) => count(text.encode_utf16().count()),
+        Some(Value::Object(map)) => map.get("length").map(Cow::Borrowed),
+        _ => None,
+    })
+}
+
 /// How the JavaScript iterates a value, which decides how V8 words the `TypeError` for one that
 /// isn't iterable.
 #[derive(Clone, Copy, Debug)]

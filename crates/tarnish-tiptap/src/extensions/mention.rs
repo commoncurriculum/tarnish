@@ -245,28 +245,10 @@ fn render_markdown(
 /// as far as reading it fails where the JS does.
 fn content_text(node: &Value) -> Result<(), Error> {
     let content = node.get("content");
-    let length = match content {
-        Some(Value::Array(items)) => js::number(items.len() as f64),
-        Some(Value::String(text)) => js::number(utf16::from(text.as_str()).len() as f64),
-        Some(Value::Object(map)) => map.get("length").cloned().unwrap_or(Value::Null),
-        _ => return Ok(()),
-    };
-    if !js::truthy(content) || !greater_than_zero(&length)? {
-        return Ok(());
-    }
-    for child in value::array_method(content, "node.content.filter")? {
-        value::get(Some(child), "type")?;
+    if js::truthy(content) && js::to_number(value::length(content)?.as_deref())? > 0.0 {
+        for child in value::array_method(content, "node.content.filter")? {
+            value::get(Some(child), "type")?;
+        }
     }
     Ok(())
-}
-
-/// `length > 0`, of a `length` that's present.
-fn greater_than_zero(length: &Value) -> Result<bool, Error> {
-    Ok(match length {
-        Value::Null => false,
-        Value::Bool(bool) => *bool,
-        Value::Number(_) => length.as_f64().is_some_and(|length| length > 0.0),
-        Value::String(text) => js::string_to_number(text) > 0.0,
-        Value::Array(_) | Value::Object(_) => js::string_to_number(&js::to_string(length)?) > 0.0,
-    })
 }

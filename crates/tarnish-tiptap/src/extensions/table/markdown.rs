@@ -209,18 +209,6 @@ fn text(row: &[Cell], column: usize) -> &str {
     row.get(column).map_or("", |cell| &cell.text)
 }
 
-/// `node.content.length === 0`, of truthy content.
-fn has_no_length(content: &Value) -> bool {
-    match content {
-        Value::Array(items) => items.is_empty(),
-        Value::Object(map) => map
-            .get("length")
-            .and_then(Value::as_f64)
-            .is_some_and(|length| length == 0.0),
-        _ => false,
-    }
-}
-
 /// The text of a cell, its blocks' Markdown on one line.
 fn cell_text(cell: &Value, helpers: &dyn RenderHelpers) -> Result<String, Error> {
     let raw = match value::get(Some(cell), "content")? {
@@ -249,7 +237,7 @@ pub fn render_table_to_markdown(
     let Some(content) = content.filter(|content| js::truthy(Some(content))) else {
         return Ok(String::new());
     };
-    if has_no_length(content) {
+    if value::length(Some(content))?.as_deref() == Some(&js::number(0.0)) {
         return Ok(String::new());
     }
     let mut rows: Vec<Vec<Cell>> = Vec::new();
