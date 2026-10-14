@@ -71,17 +71,8 @@ fn parse_language(element: &HtmlNode, prefix: Option<&str>) -> Option<Value> {
     let prefix = prefix.filter(|prefix| !prefix.is_empty())?;
     let first = element.children().into_iter().next()?;
     let classes = first.attribute("class").unwrap_or_default();
-    let mut class_list: Vec<&str> = Vec::new();
-    for class in classes
+    let language = classes
         .split(['\t', '\n', '\u{C}', '\r', ' '])
-        .filter(|class| !class.is_empty())
-    {
-        if !class_list.contains(&class) {
-            class_list.push(class);
-        }
-    }
-    let language = class_list
-        .iter()
         .find_map(|class| class.strip_prefix(prefix))?;
     (!language.is_empty()).then(|| Value::String(language.to_string()))
 }
