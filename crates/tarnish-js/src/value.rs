@@ -120,6 +120,23 @@ pub fn length(value: Option<&Value>) -> Result<Option<Cow<'_, Value>>> {
     })
 }
 
+/// `value[index]`: an array's item, a string's UTF-16 unit, an object's own property of the
+/// index, `undefined` for a boolean or a number, or a `TypeError` for `null` and `undefined`.
+pub fn index(value: Option<&Value>, index: usize) -> Result<Option<Cow<'_, Value>>> {
+    if let Some(nullish) = Nullish::of(value) {
+        return Err(cannot_read(nullish, &index.to_string()));
+    }
+    Ok(match value {
+        Some(Value::Array(items)) => items.get(index).map(Cow::Borrowed),
+        Some(Value::String(text)) => text.encode_utf16().nth(index).map(|unit| {
+            // A lone surrogate, which a `String` can't hold, is U+FFFD.
+            Cow::Owned(Value::String(String::from_utf16_lossy(&[unit])))
+        }),
+        Some(Value::Object(map)) => map.get(index.to_string().as_str()).map(Cow::Borrowed),
+        _ => None,
+    })
+}
+
 /// How the JavaScript iterates a value, which decides how V8 words the `TypeError` for one that
 /// isn't iterable.
 #[derive(Clone, Copy, Debug)]

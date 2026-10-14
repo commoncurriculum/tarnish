@@ -175,6 +175,17 @@ pub fn to_number(value: Option<&Value>) -> Result<f64> {
     })
 }
 
+/// `Math.max(a, b)`: `NaN` if either is, and `+0` over `-0`.
+pub fn math_max(a: f64, b: f64) -> f64 {
+    if a.is_nan() || b.is_nan() {
+        f64::NAN
+    } else if a == b {
+        if a.is_sign_positive() { a } else { b }
+    } else {
+        a.max(b)
+    }
+}
+
 /// `Number(string)`.
 pub fn string_to_number(string: &str) -> f64 {
     let trimmed = trim(string);

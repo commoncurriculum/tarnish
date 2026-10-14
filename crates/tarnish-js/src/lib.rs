@@ -130,6 +130,22 @@ pub fn no_primitive() -> Error {
     Error::Type("Cannot convert object to primitive value".into())
 }
 
+/// `a + b`: both as strings, joined, where either is a string once an array or an object is
+/// converted to one, or else the sum of their numbers.
+pub fn plus(a: &Value, b: &Value) -> Result<Value> {
+    let primitive = |value: &Value| match value {
+        Value::Array(_) | Value::Object(_) => to_string(value).map(Value::String),
+        _ => Ok(value.clone()),
+    };
+    let (a, b) = (primitive(a)?, primitive(b)?);
+    Ok(match (&a, &b) {
+        (Value::String(_), _) | (_, Value::String(_)) => {
+            Value::String(to_string(&a)? + &to_string(&b)?)
+        }
+        _ => number(to_number(Some(&a))? + to_number(Some(&b))?),
+    })
+}
+
 /// [`to_string`], borrowing a string.
 pub fn string_of(value: &Value) -> Result<Cow<'_, str>> {
     Ok(match value {

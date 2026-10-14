@@ -2,6 +2,8 @@
 //! must give the same values and the same errors, and ask a sort's comparator for the same
 //! comparisons.
 
+use std::borrow::Cow;
+
 use tarnish_fixtures::{expect, outcome, read, records, same};
 use tarnish_js::json::{self, Event, Map, Value, json};
 use tarnish_js::value::{self, Iterating};
@@ -98,6 +100,10 @@ fn reads_and_builds_as_v8_does() {
         let input = input.as_ref();
         let found = match text(&record["read"]) {
             "get" => value::get(input, text(&record["key"])).map(Option::<&Value>::cloned),
+            "index" => {
+                let index = record["index"].as_u64().expect("an index") as usize;
+                value::index(input, index).map(|found| found.map(Cow::into_owned))
+            }
             "arrayMethod" => value::array_method(input, text(&record["callee"]))
                 .map(|items| Some(items.to_vec().into())),
             "iterate" => {
@@ -114,8 +120,18 @@ fn reads_and_builds_as_v8_does() {
             Some(result) => json!({ "result": result }),
             None => json!({}),
         });
-        let inputs = ["read", "key", "callee", "expression", "json"];
+        let inputs = ["read", "key", "index", "callee", "expression", "json"];
         expect(record, &inputs, outcome(found));
+    }
+    for record in records(&fixtures, "sums") {
+        let [a, b] = ["a", "b"].map(|key| json::from_str(text(&record[key])).expect("JSON"));
+        let sum = tarnish_js::plus(&a, &b).map(|result| json!({ "result": result }));
+        expect(record, &["a", "b"], outcome(sum));
+    }
+    for record in records(&fixtures, "maxima") {
+        let [a, b] = ["a", "b"].map(|key| text(&record[key]).parse().expect("a number"));
+        let max = json!({ "max": number_text(tarnish_js::math_max(a, b)) });
+        expect(record, &["a", "b"], max);
     }
     for record in records(&fixtures, "repeats") {
         let count: f64 = text(&record["count"]).parse().expect("a count");

@@ -1,8 +1,9 @@
 // Records what V8's built-ins that tarnish-js ports give, to fixtures/js.json, for tarnish-js's
 // tests to expect: JSON.parse, of chosen texts and of the texts random.rs's `json_texts` draws;
-// Number and parseInt of strings; reading, calling and iterating JSON values, and the TypeError
-// thrown where V8 can't; String of them; repeat and replaceAll; and Array.prototype.sort, as the
-// comparisons it asks its comparator for, and localeCompare.
+// Number and parseInt of strings; reading, indexing, calling and iterating JSON values, and the
+// TypeError thrown where V8 can't; String of them, and `+` of two; Math.max; repeat and
+// replaceAll; and Array.prototype.sort, as the comparisons it asks its comparator for, and
+// localeCompare.
 //
 // A number is written as String writes it, but -0 as "-0", which tells it from 0. A parse that
 // throws is recorded as its error's class, as tarnish-js's SyntaxError has no message.
@@ -329,16 +330,19 @@ const values = [
   "{}",
   '{"a":1}',
   '{"a":{"b":[1]},"color":"red"}',
+  '{"1":"one"}',
   '{"toString":1}',
   '[1,{"toString":1}]',
 ]
 
-// How tarnish-js's tests read a value: what `value.rs` has as `get`, `array_method`, `iterate`
-// over an expression or describing the value, and `String`. Each is JavaScript that reads the
-// value as `node.value`, as V8 words its TypeError from the source.
+// How tarnish-js's tests read a value: what `value.rs` has as `get`, `index`, `array_method`,
+// `iterate` over an expression or describing the value, and `String`. Each is JavaScript that
+// reads the value as `node.value`, as V8 words its TypeError from the source.
 const reads = [
   { read: "get", key: "a", source: "return node.value.a" },
   { read: "get", key: "color", source: "return node.value.color" },
+  { read: "index", index: 0, source: "return node.value[0]" },
+  { read: "index", index: 1, source: "return node.value[1]" },
   { read: "arrayMethod", callee: "node.value.map", source: "return node.value.map(item => item)" },
   {
     read: "iterate",
@@ -357,10 +361,22 @@ const readCases = reads.flatMap(({ source, ...read }) =>
       ...(json === undefined ? {} : { json }),
       ...outcome(() => {
         const result = new Function("node", source)(node)
-        return result === undefined ? {} : { result }
+        return result === undefined ? {} : { result: wellFormed(result) }
       }),
     }
   }),
+)
+
+// `a + b` of each two values.
+const defined = values.filter(json => json !== undefined)
+const sums = defined.flatMap(a =>
+  defined.map(b => ({ a, b, ...outcome(() => ({ result: wellFormed(JSON.parse(a) + JSON.parse(b)) })) })),
+)
+
+// `Math.max(a, b)` of each two numbers.
+const maxNumbers = [-0, 0, 1, -1.5, NaN, Infinity, -Infinity]
+const maxima = maxNumbers.flatMap(a =>
+  maxNumbers.map(b => ({ a: numberText(a), b: numberText(b), max: numberText(Math.max(a, b)) })),
 )
 
 // Each count past what memory holds is past what a Rust allocation can ask for, so that no test
@@ -441,6 +457,8 @@ writeFixture("js", {
     number: numberText(radix === undefined ? parseInt(string) : parseInt(string, radix)),
   })),
   reads: readCases,
+  sums,
+  maxima,
   repeats: repeatCases,
   replaces: replaceCases,
   sorts,
