@@ -42,10 +42,10 @@ pub trait Fields<'c>: Copy {
 impl<'c> Fields<'c> for NodeRef<'c> {
     #[inline]
     fn fields(self, mut field: impl FnMut(Field<'c>)) {
-        field(Field::Type(self.node_type().name()));
-        let attrs = self.attrs();
-        if !attrs.is_empty() {
-            field(Field::Attrs(attrs));
+        let node_type = self.node_type();
+        field(Field::Type(node_type.name()));
+        if !node_type.data().attrs.is_empty() {
+            field(Field::Attrs(self.attrs()));
         }
         if self.content_size() > 0 {
             field(Field::Content(self));
@@ -61,7 +61,7 @@ impl<'c> Fields<'c> for NodeRef<'c> {
 
     fn field_count(self) -> usize {
         field_count(
-            !self.attrs().is_empty(),
+            !self.node_type().data().attrs.is_empty(),
             self.content_size() > 0,
             !self.marks().is_empty(),
             self.is_text(),
@@ -72,19 +72,26 @@ impl<'c> Fields<'c> for NodeRef<'c> {
 impl<'c> Fields<'c> for MarkRef<'c> {
     #[inline]
     fn fields(self, mut field: impl FnMut(Field<'c>)) {
-        field(Field::Type(self.mark_type().name()));
-        let attrs = self.attrs();
-        if !attrs.is_empty() {
-            field(Field::Attrs(attrs));
+        let mark_type = self.mark_type();
+        field(Field::Type(mark_type.name()));
+        if !mark_type.data().attrs.is_empty() {
+            field(Field::Attrs(self.attrs()));
         }
     }
 
     fn field_count(self) -> usize {
-        field_count(!self.attrs().is_empty(), false, false, false)
+        field_count(
+            !self.mark_type().data().attrs.is_empty(),
+            false,
+            false,
+            false,
+        )
     }
 }
 
-/// How many fields `toJSON` writes: the type, and each other field that has something in it.
+/// How many fields `toJSON` writes: the type, the attributes where the type has any, as
+/// ProseMirror's hold each of the type's names, `undefined` ones too, and each other field that
+/// has something in it.
 pub(crate) fn field_count(attrs: bool, content: bool, marks: bool, text: bool) -> usize {
     1 + usize::from(attrs) + usize::from(content) + usize::from(marks) + usize::from(text)
 }

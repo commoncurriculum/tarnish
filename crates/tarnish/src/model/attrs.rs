@@ -28,8 +28,7 @@ pub enum AttributeDefault {
     #[default]
     Required,
     /// `undefined`, which a node or mark can't hold: it leaves the attribute out, where
-    /// ProseMirror keeps the name with no value, so its `toJSON` writes `"attrs": {}` and
-    /// `hasMarkup` sees the name.
+    /// ProseMirror keeps the name with no value, which `hasMarkup` sees.
     Undefined,
     Value(Value),
 }

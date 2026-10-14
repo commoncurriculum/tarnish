@@ -8,7 +8,7 @@ use super::attrs::{Computed, PropertyRef};
 use super::fields::field_count;
 use super::schema::Schema;
 use crate::chunk::{
-    ASCII, BINDING, Builder, Chunk, EMPTY_OBJECT, EMPTY_SET, HELD_AS_UNITS, Kid, Record, TEXT_NODE,
+    ASCII, BINDING, Builder, Chunk, EMPTY_SET, HELD_AS_UNITS, Kid, Record, TEXT_NODE,
 };
 use crate::js::text::Text;
 use crate::js::{stack, string, truthy};
@@ -270,7 +270,7 @@ impl<'s, 'a> Reader<'s, 'a> {
         );
         let read = ReadNode {
             index,
-            fields: field_count(attrs != EMPTY_OBJECT, size > 0, marks != EMPTY_SET, false),
+            fields: field_count(!attr_set.is_empty(), size > 0, marks != EMPTY_SET, false),
             children: kids,
             marks: mark_count,
             attrs: attr_set.keys(&computed),
@@ -385,19 +385,16 @@ impl<'s, 'a> Reader<'s, 'a> {
         });
         let computed = attr_set.resolve(&given)?;
         attr_set.check_computed(&computed)?;
-        let (mark, attrs) = match (&computed, mark_type.default_attrs()) {
-            (Computed::Defaults, Some(defaults)) => (
-                self.builder.instance(rank, defaults).0,
-                !defaults.is_empty(),
-            ),
+        let mark = match (&computed, mark_type.default_attrs()) {
+            (Computed::Defaults, Some(defaults)) => self.builder.instance(rank, defaults).0,
             _ => {
                 let attrs = attr_set.write(&mut self.builder, usize::MAX, &computed);
-                (self.builder.mark(rank as u32, attrs), attrs != EMPTY_OBJECT)
+                self.builder.mark(rank as u32, attrs)
             }
         };
         json.read_mark(&ReadMark {
             rank,
-            fields: field_count(attrs, false, false, false),
+            fields: field_count(!attr_set.is_empty(), false, false, false),
             attrs: attr_set.keys(&computed),
         });
         Ok((rank as u32, mark))
@@ -431,5 +428,125 @@ impl<'s, 'a> Reader<'s, 'a> {
         let members: Vec<u32> = read.iter().map(|&(_, mark)| mark).collect();
         self.marks.truncate(base);
         Ok((self.builder.set(&members), count))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::borrow::Cow;
+    use std::cell::RefCell;
+
+    use super::{Given, Json, ReadMark, ReadNode};
+    use crate::json::{self, Key, Value};
+    use crate::model::{AttributeDefault, AttributeSpec, MarkSpec, NodeSpec, Schema, SchemaSpec};
+    use crate::{Node, Result};
+    use tarnish_fixtures::assert_same;
+
+    /// JSON read as a [`Value`] is, telling `counts` how many fields each node and mark read is
+    /// said to write.
+    #[derive(Clone, Copy)]
+    struct Counted<'a> {
+        value: &'a Value,
+        counts: &'a RefCell<Vec<usize>>,
+    }
+
+    impl<'a> Counted<'a> {
+        fn of(self, value: &'a Value) -> Counted<'a> {
+            Counted { value, ..self }
+        }
+    }
+
+    impl<'a> Json<'a> for Counted<'a> {
+        fn truthy(self) -> bool {
+            self.value.truthy()
+        }
+
+        fn fields<const N: usize>(self, keys: [&'static str; N]) -> [Option<Self>; N] {
+            self.value
+                .fields(keys)
+                .map(|field| field.map(|value| self.of(value)))
+        }
+
+        fn string(self) -> Result<Cow<'a, str>> {
+            self.value.string()
+        }
+
+        fn text(self) -> Option<Cow<'a, str>> {
+            self.value.text()
+        }
+
+        fn items(self) -> Option<impl Iterator<Item = Self>> {
+            Some(self.value.items()?.map(move |value| self.of(value)))
+        }
+
+        fn attrs(self, names: &[Key]) -> Given<'a> {
+            self.value.attrs(names)
+        }
+
+        fn read_node(self, node: &ReadNode) -> bool {
+            self.counts.borrow_mut().push(node.fields);
+            false
+        }
+
+        fn read_mark(self, mark: &ReadMark) {
+            self.counts.borrow_mut().push(mark.fields);
+        }
+    }
+
+    /// A type whose every attribute is `undefined` writes `"attrs": {}`, and reading tells a
+    /// binding so, which compares the fields it read with those.
+    #[test]
+    fn undefined_attributes_are_written_and_counted() -> Result<()> {
+        let undefined = || {
+            let spec = AttributeSpec {
+                default: AttributeDefault::Undefined,
+                validate: None,
+            };
+            vec![("a".to_owned(), spec)]
+        };
+        let schema = Schema::new(SchemaSpec {
+            nodes: vec![
+                (
+                    "doc".into(),
+                    NodeSpec {
+                        content: Some("item*".into()),
+                        ..NodeSpec::default()
+                    },
+                ),
+                (
+                    "item".into(),
+                    NodeSpec {
+                        content: Some("text*".into()),
+                        attrs: undefined(),
+                        ..NodeSpec::default()
+                    },
+                ),
+                ("text".into(), NodeSpec::default()),
+            ],
+            marks: vec![(
+                "m".into(),
+                MarkSpec {
+                    attrs: undefined(),
+                    ..MarkSpec::default()
+                },
+            )],
+            top_node: None,
+        })?;
+        let given = r#"{"type": "doc", "content": [{"type": "item", "content": [
+            {"type": "text", "text": "x", "marks": [{"type": "m"}]}]}]}"#;
+        let given = json::from_str(given).expect("JSON");
+        let counts = RefCell::new(Vec::new());
+        let doc = Node::from_json(
+            &schema,
+            Counted {
+                value: &given,
+                counts: &counts,
+            },
+        )?;
+        let written = r#"{"type": "doc", "content": [{"type": "item", "attrs": {}, "content": [
+            {"type": "text", "marks": [{"type": "m", "attrs": {}}], "text": "x"}]}]}"#;
+        assert_same(&json::from_str(written).expect("JSON"), &doc.to_json());
+        assert_eq!(*counts.borrow(), [2, 3, 3, 2]);
+        Ok(())
     }
 }
