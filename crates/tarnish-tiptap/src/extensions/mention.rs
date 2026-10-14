@@ -7,7 +7,7 @@ use std::sync::{Arc, LazyLock};
 
 use tarnish::Node;
 use tarnish::chunk::ValueRef;
-use tarnish_js::json::{Map, Value, json, object};
+use tarnish_js::json::{Map, Value, json};
 use tarnish_js::regexp::RegExp;
 use tarnish_js::units::Units;
 use tarnish_js::{self as js, Error, utf16, value};
@@ -15,8 +15,7 @@ use tarnish_markdown::marked::{Lexer, Token};
 
 use crate::markdown::{ParseHelpers, Parsed, RenderContext, RenderHelpers};
 use crate::{
-    DomSpec, ExtensionAttribute, NodeExtension, ParseHtml, SpecAttrs, element_attrs, merge_objects,
-    node_attr, rendered_object,
+    DomSpec, ExtensionAttribute, NodeExtension, ParseHtml, SpecAttrs, merge_attributes, node_attr,
 };
 
 /// A `renderText` or `renderLabel` option, given the node and the `char` of its suggestion.
@@ -122,30 +121,24 @@ pub fn mention(options: MentionOptions) -> NodeExtension {
         .parse_html([ParseHtml::tag(r#"span[data-type="mention"]"#)])
         .render_html(move |node, html| {
             let char = options.char_of(node);
-            let typed = object!({"data-type": "mention"});
-            let configured = &options.html_attributes;
-            let merged = merge_objects([&typed, configured, &rendered_object(&html)])?;
+            let configured = SpecAttrs::from(&options.html_attributes);
+            let typed = SpecAttrs::from([("data-type", "mention".into())]);
+            let merged = merge_attributes(merge_attributes(typed, configured.clone())?, html)?;
             if let Some(render_label) = &options.render_label {
                 let label = render_label(node, char)?;
-                return Ok(DomSpec::element(
-                    "span",
-                    element_attrs(merged)?,
-                    vec![text(label)],
-                ));
+                return Ok(DomSpec::element("span", merged, vec![text(label)]));
             }
             let html = match &options.render_html {
-                Some(render_html) => render_html(node, char, element_attrs(merged.clone())?)?,
+                Some(render_html) => render_html(node, char, merged.clone())?,
                 None => {
-                    let attrs = element_attrs(merge_objects([configured, &merged])?)?;
+                    let attrs = merge_attributes(configured, merged)?;
                     let label = label_text(node, char)?;
-                    MentionHtml::Spec(DomSpec::element("span", attrs, vec![text(label)]))
+                    return Ok(DomSpec::element("span", attrs, vec![text(label)]));
                 }
             };
             Ok(match html {
                 MentionHtml::Spec(spec) => spec,
-                MentionHtml::Text(html) => {
-                    DomSpec::element("span", element_attrs(merged)?, vec![text(html)])
-                }
+                MentionHtml::Text(html) => DomSpec::element("span", merged, vec![text(html)]),
             })
         })
         .render_text(move |props| texts.text(props.node))

@@ -5,11 +5,11 @@
 
 use crate::markdown::{RenderContext, RenderHelpers};
 use crate::{
-    AttrValue, DomSpec, ExtensionAttribute, NodeExtension, ParseHtml, SpecAttrs, element_attrs,
-    merge_objects, node_attr, rendered_object,
+    AttrValue, DomSpec, ExtensionAttribute, NodeExtension, ParseHtml, SpecAttrs, merge_attributes,
+    node_attr,
 };
 use tarnish::chunk::ValueRef;
-use tarnish_js::json::{Map, Value, json};
+use tarnish_js::json::{Map, Value};
 use tarnish_js::{self as js, Error, value};
 
 /// `EmojiItem`, as far as the node renders it.
@@ -43,13 +43,8 @@ pub fn emoji(options: EmojiOptions) -> NodeExtension {
         ])
         .parse_html([ParseHtml::tag(r#"span[data-type="emoji"]"#)])
         .render_html(move |node, html| {
-            let data_type = Map::from_iter([("data-type".into(), json!("emoji"))]);
-            let attributes = merge_objects([
-                &rendered_object(&html),
-                &options.html_attributes,
-                &data_type,
-            ])?;
-            let attributes = element_attrs(attributes)?;
+            let attributes = merge_attributes(html, SpecAttrs::from(&options.html_attributes))?;
+            let attributes = merge_attributes(attributes, [("data-type", "emoji".into())])?;
             let name = node_attr(node, "name");
             let child = match shortcode_to_emoji(name, &options.emojis) {
                 None => DomSpec::Text(format!(":{}:", name.to_js_string()?).into()),

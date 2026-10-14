@@ -7,10 +7,10 @@ use tarnish_js::Result;
 use tarnish_js::json::{Map, Value};
 use tarnish_js::value::nullable_string;
 
-use crate::DomSpec;
+use crate::merge_attributes::render_wrapping;
 use crate::{
     Extension, ExtensionAttribute, GlobalAttributes, GlobalTypes, MarkExtension, ParseHtml,
-    PlainExtension, element_attrs, get_style_property, merge_objects, rendered_object,
+    PlainExtension, get_style_property,
 };
 
 pub struct TextStyleOptions {
@@ -30,7 +30,6 @@ impl Default for TextStyleOptions {
 
 pub fn text_style(options: TextStyleOptions) -> MarkExtension {
     let merge = options.merge_nested_span_styles;
-    let configured = options.html_attributes;
     MarkExtension::create("textStyle")
         .priority(101)
         .parse_html([ParseHtml::tag("span")
@@ -44,14 +43,7 @@ pub fn text_style(options: TextStyleOptions) -> MarkExtension {
                 }
                 Ok(Some(Map::new()))
             })])
-        .render_html(move |_, html| {
-            let html = if configured.is_empty() {
-                html
-            } else {
-                element_attrs(merge_objects([&configured, &rendered_object(&html)])?)?
-            };
-            Ok(DomSpec::wrapping("span", html))
-        })
+        .render_html(render_wrapping("span", options.html_attributes, []))
 }
 
 /// The options of each extension that gives types a style: the types it gives it to.

@@ -2,10 +2,9 @@
 
 use std::sync::LazyLock;
 
-use crate::DomSpec;
 use crate::markdown::{RenderContext, RenderHelpers};
-use crate::merge_attributes::merge_configured;
-use crate::{GetAttrsResult, MarkExtension, ParseHtml};
+use crate::merge_attributes::render_wrapping;
+use crate::{GetAttrsResult, HtmlAttributesOptions, MarkExtension, ParseHtml};
 use tarnish_js::Error;
 use tarnish_js::json::Map;
 use tarnish_js::json::Value;
@@ -14,10 +13,7 @@ use tarnish_js::units::Units;
 use tarnish_js::utf16;
 use tarnish_markdown::marked::{Lexer, Token};
 
-#[derive(Default)]
-pub struct UnderlineOptions {
-    pub html_attributes: Map,
-}
+pub type UnderlineOptions = HtmlAttributesOptions;
 
 pub fn underline(options: UnderlineOptions) -> MarkExtension {
     MarkExtension::create("underline")
@@ -35,10 +31,7 @@ pub fn underline(options: UnderlineOptions) -> MarkExtension {
                     }),
             ),
         ])
-        .render_html(move |_, html| {
-            let html = merge_configured(&options.html_attributes, html, [])?;
-            Ok(DomSpec::wrapping("u", html))
-        })
+        .render_html(render_wrapping("u", options.html_attributes, []))
         .parse_markdown(|token, helpers| {
             let content = helpers.parse_inline(token.tokens.as_deref().unwrap_or_default())?;
             Ok(helpers.apply_mark("underline", content, None))

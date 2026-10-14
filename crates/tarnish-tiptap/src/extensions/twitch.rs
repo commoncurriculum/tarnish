@@ -5,8 +5,8 @@ use std::sync::LazyLock;
 
 use crate::web_url::{WebUrl, with_search_params};
 use crate::{
-    DomSpec, ExtensionAttribute, HtmlNode, NodeExtension, ParseHtml, SpecAttrs, element_attrs,
-    merge_objects, rendered_object,
+    AttrValue, DomSpec, ExtensionAttribute, HtmlNode, NodeExtension, ParseHtml, SpecAttrs,
+    merge_attributes,
 };
 use tarnish_js::json::{Map, Value, json};
 use tarnish_js::regexp::RegExp;
@@ -65,9 +65,10 @@ pub fn twitch(options: TwitchOptions) -> NodeExtension {
         .draggable()
         .add_attributes(attributes)
         .parse_html([ParseHtml::tag("div[data-twitch-video] iframe")])
-        .render_html(move |_, html| {
-            let mut html = rendered_object(&html);
-            let or_option = |key: &str, option: Value| js::coalesce(html.get(key), &option).clone();
+        .render_html(move |_, mut html| {
+            let value = |key: &str| html.get(key).map(AttrValue::to_value);
+            let or_option =
+                |key: &str, option: Value| js::coalesce(value(key).as_ref(), &option).clone();
             let embed = Embed {
                 allow_fullscreen: options.allow_fullscreen,
                 autoplay: or_option("autoplay", json!(options.autoplay)),
@@ -78,25 +79,25 @@ pub fn twitch(options: TwitchOptions) -> NodeExtension {
                 ),
                 parent: &options.parent,
             };
-            let Some(embed_url) = embed_url_from_twitch_url(html.get("src"), &embed)? else {
+            let Some(embed_url) = embed_url_from_twitch_url(value("src").as_ref(), &embed)? else {
                 let invalid = DomSpec::Text("Invalid Twitch URL".into());
                 return Ok(DomSpec::element("div", SpecAttrs::new(), vec![invalid]));
             };
-            html.insert("src".into(), Value::String(embed_url));
-            let frame = Map::from_iter([
-                ("width".into(), options.width.clone()),
-                ("height".into(), options.height.clone()),
-                ("allowfullscreen".into(), json!(options.allow_fullscreen)),
-                ("scrolling".into(), json!("no")),
-                ("frameborder".into(), json!("0")),
+            html.set("src", embed_url);
+            let frame = SpecAttrs::from([
+                ("width", options.width.clone().into()),
+                ("height", options.height.clone().into()),
+                ("allowfullscreen", json!(options.allow_fullscreen).into()),
+                ("scrolling", "no".into()),
+                ("frameborder", "0".into()),
             ]);
-            let iframe = merge_objects([&options.html_attributes, &frame, &html])?;
+            let iframe = merge_attributes(SpecAttrs::from(&options.html_attributes), frame)?;
             Ok(DomSpec::element(
                 "div",
                 SpecAttrs::from([("data-twitch-video", "".into())]),
                 vec![DomSpec::element(
                     "iframe",
-                    element_attrs(iframe)?,
+                    merge_attributes(iframe, html)?,
                     Vec::new(),
                 )],
             ))

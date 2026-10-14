@@ -4,9 +4,9 @@
 use crate::markdown::{
     ParseHelpers, Parsed, RenderContext, RenderHelpers, render_nested_markdown_content,
 };
-use crate::merge_attributes::merge_configured;
+use crate::merge_attributes::merge_html_attributes;
 use crate::{AttrValue, DomSpec, ExtensionAttribute, NodeExtension, ParseHtml};
-use crate::{SpecAttrs, node_attr};
+use crate::{SpecAttrs, merge_attributes, node_attr};
 use tarnish_js::json::{Map, Value, json};
 use tarnish_js::{self as js, Error, utf16, value};
 use tarnish_markdown::marked::{Token, TokenData};
@@ -45,8 +45,8 @@ pub fn task_item(options: TaskItemOptions) -> NodeExtension {
                     .unwrap_or_else(|| element.clone()))
             })])
         .render_html(move |node, html| {
-            let data_type = [("data-type", AttrValue::from("taskItem"))];
-            let html = merge_configured(&attributes, html, data_type)?;
+            let html = merge_html_attributes(&attributes, html)?;
+            let html = merge_attributes(html, [("data-type", AttrValue::from("taskItem"))])?;
             let mut checkbox = SpecAttrs::from([("type", AttrValue::from("checkbox"))]);
             // `checked: node.attrs.checked ? 'checked' : null`
             if node_attr(node, "checked").truthy() {

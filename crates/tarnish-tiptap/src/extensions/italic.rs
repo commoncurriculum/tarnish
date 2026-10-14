@@ -1,17 +1,13 @@
 //! `@tiptap/extension-italic`.
 
-use crate::DomSpec;
 use crate::markdown::{RenderContext, RenderHelpers};
-use crate::merge_attributes::merge_configured;
-use crate::{MarkExtension, ParseHtml};
+use crate::merge_attributes::render_wrapping;
+use crate::{HtmlAttributesOptions, MarkExtension, ParseHtml};
 use tarnish_js::Error;
 use tarnish_js::json::Map;
 use tarnish_js::json::Value;
 
-#[derive(Default)]
-pub struct ItalicOptions {
-    pub html_attributes: Map,
-}
+pub type ItalicOptions = HtmlAttributesOptions;
 
 pub fn italic(options: ItalicOptions) -> MarkExtension {
     MarkExtension::create("italic")
@@ -24,10 +20,7 @@ pub fn italic(options: ItalicOptions) -> MarkExtension {
             ParseHtml::Style(ParseHtml::style("font-style=normal").clears_mark()),
             ParseHtml::Style(ParseHtml::style("font-style=italic")),
         ])
-        .render_html(move |_, html| {
-            let html = merge_configured(&options.html_attributes, html, [])?;
-            Ok(DomSpec::wrapping("em", html))
-        })
+        .render_html(render_wrapping("em", options.html_attributes, []))
         .markdown_token_name("em")
         .html_reopen("<em>", "</em>")
         .parse_markdown(|token, helpers| {

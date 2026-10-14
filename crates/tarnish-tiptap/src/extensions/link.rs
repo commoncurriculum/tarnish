@@ -4,11 +4,9 @@
 
 use std::sync::Arc;
 
-use crate::DomSpec;
 use crate::markdown::{ParseHelpers, Parsed, RenderContext, RenderHelpers};
-use crate::{
-    ExtensionAttribute, MarkExtension, ParseHtml, element_attrs, merge_objects, rendered_object,
-};
+use crate::merge_attributes::merge_html_attributes;
+use crate::{AttrValue, DomSpec, ExtensionAttribute, MarkExtension, ParseHtml};
 use tarnish_js::json::{Map, Value, json};
 use tarnish_js::regexp::RegExp;
 use tarnish_js::{self as js, Error, utf16, value};
@@ -177,13 +175,13 @@ pub fn link(options: LinkOptions) -> MarkExtension {
             };
             Ok(allowed.then(Map::new))
         })])
-        .render_html(move |_, html| {
-            let mut html = rendered_object(&html);
-            if !configured.is_allowed_uri(html.get("href"))? {
-                html.insert("href".into(), json!(""));
+        .render_html(move |_, mut html| {
+            let href = html.get("href").map(AttrValue::to_value);
+            if !configured.is_allowed_uri(href.as_ref())? {
+                html.set("href", "");
             }
-            let merged = merge_objects([&configured.html_attributes, &html])?;
-            Ok(DomSpec::wrapping("a", element_attrs(merged)?))
+            let html = merge_html_attributes(&configured.html_attributes, html)?;
+            Ok(DomSpec::wrapping("a", html))
         })
         .markdown_token_name("link")
         .parse_markdown(parse_markdown)

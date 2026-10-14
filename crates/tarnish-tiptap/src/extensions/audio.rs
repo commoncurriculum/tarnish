@@ -5,8 +5,7 @@ use std::sync::LazyLock;
 
 use crate::web_url::WebUrl;
 use crate::{
-    DomSpec, ExtensionAttribute, NodeExtension, ParseHtml, element_attrs, merge_objects,
-    rendered_object,
+    AttrValue, DomSpec, ExtensionAttribute, NodeExtension, ParseHtml, SpecAttrs, merge_attributes,
 };
 use tarnish_js::json::{Map, Value, json};
 use tarnish_js::regexp::RegExp;
@@ -78,32 +77,30 @@ pub fn audio(options: AudioOptions) -> NodeExtension {
         .draggable()
         .add_attributes(attributes)
         .parse_html([ParseHtml::tag(tag)])
-        .render_html(move |_, html| {
-            let mut html = rendered_object(&html);
-            let src = sanitize_audio_src(html.get("src"), options.allow_base64)?;
-            html.insert("src".into(), src.map_or(Value::Null, Value::String));
+        .render_html(move |_, mut html| {
+            let src = html.get("src").map(AttrValue::to_value);
+            let src = sanitize_audio_src(src.as_ref(), options.allow_base64)?;
+            html.set("src", src.map_or(Value::Null, Value::String));
             let optional =
                 |value: &Option<String>| value.clone().map_or(Value::Null, Value::String);
-            let defaults = Map::from_iter([
-                ("controls".into(), json!(options.controls)),
-                ("autoplay".into(), json!(options.autoplay)),
-                ("loop".into(), json!(options.r#loop)),
-                ("muted".into(), json!(options.muted)),
-                ("preload".into(), options.preload.clone()),
-                ("controlslist".into(), optional(&options.controlslist)),
-                ("crossorigin".into(), optional(&options.crossorigin)),
+            let defaults = [
+                ("controls", json!(options.controls)),
+                ("autoplay", json!(options.autoplay)),
+                ("loop", json!(options.r#loop)),
+                ("muted", json!(options.muted)),
+                ("preload", options.preload.clone()),
+                ("controlslist", optional(&options.controlslist)),
+                ("crossorigin", optional(&options.crossorigin)),
                 (
-                    "disableremoteplayback".into(),
+                    "disableremoteplayback",
                     json!(options.disable_remote_playback),
                 ),
-            ]);
-            let mut merged = merge_objects([&options.html_attributes, &defaults, &html])?;
-            merged.retain(|_, value| !matches!(value, Value::Null | Value::Bool(false)));
-            Ok(DomSpec::element(
-                "audio",
-                element_attrs(merged)?,
-                Vec::new(),
-            ))
+            ];
+            let defaults = defaults.map(|(name, value)| (name, value.into()));
+            let merged = merge_attributes(SpecAttrs::from(&options.html_attributes), defaults)?;
+            let mut merged = merge_attributes(merged, html)?;
+            merged.retain(|_, value| !matches!(value.to_value(), Value::Null | Value::Bool(false)));
+            Ok(DomSpec::element("audio", merged, Vec::new()))
         })
         .atom_block_markdown_spec(
             "audio",

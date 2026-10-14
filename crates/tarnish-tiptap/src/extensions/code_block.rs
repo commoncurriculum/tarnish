@@ -4,7 +4,7 @@
 use tarnish::chunk::{Kind, ValueRef};
 
 use crate::markdown::{ParseHelpers, Parsed, RenderContext, RenderHelpers};
-use crate::merge_attributes::merge_configured;
+use crate::merge_attributes::merge_html_attributes;
 use crate::{
     DomSpec, ExtensionAttribute, HtmlNode, NodeExtension, ParseHtml, PreserveWhitespace, SpecAttrs,
     node_attr,
@@ -52,7 +52,7 @@ pub fn code_block(options: CodeBlockOptions) -> NodeExtension {
             }
             Ok(DomSpec::element(
                 "pre",
-                merge_configured(&html_attributes, html, [])?,
+                merge_html_attributes(&html_attributes, html)?,
                 vec![DomSpec::wrapping("code", code)],
             ))
         })

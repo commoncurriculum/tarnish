@@ -53,7 +53,7 @@ pub use extension::{
     ExtendNodeSchema, Extension, Kind, MarkConfig, MarkExtension, NodeConfig, NodeExtension,
     PlainExtension, RenderMark, RenderNode,
 };
-pub use merge_attributes::{element_attrs, merge_attributes, merge_objects, rendered_object};
+pub use merge_attributes::{HtmlAttributesOptions, merge_attributes};
 pub use parse_html::{ParseHtml, StyleRule, TagRule};
 pub use schema::{TiptapSchema, get_schema, sort_extensions};
 pub use text::{TextOptions, TextSerializer, TextSerializerProps, generate_text, get_text};

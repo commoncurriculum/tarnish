@@ -5,8 +5,8 @@ use std::sync::LazyLock;
 
 use super::bullet_list::render_list;
 use crate::markdown::{IndentedBlockConfig, ParseHelpers, Parsed, parse_indented_blocks};
-use crate::merge_attributes::merge_configured;
-use crate::{AttrValue, DomSpec, NodeExtension, ParseHtml};
+use crate::merge_attributes::render_wrapping;
+use crate::{NodeExtension, ParseHtml};
 use tarnish_js::json::Map;
 use tarnish_js::regexp::RegExp;
 use tarnish_js::units::Units;
@@ -29,16 +29,12 @@ impl Default for TaskListOptions {
 }
 
 pub fn task_list(options: TaskListOptions) -> NodeExtension {
-    let attributes = options.html_attributes;
+    let data_type = [("data-type", "taskList")];
     NodeExtension::create("taskList")
         .group("block list")
         .content(format!("{}+", options.item_type_name))
         .parse_html([ParseHtml::tag(r#"ul[data-type="taskList"]"#).priority(51)])
-        .render_html(move |_, html| {
-            let data_type = [("data-type", AttrValue::from("taskList"))];
-            let html = merge_configured(&attributes, html, data_type)?;
-            Ok(DomSpec::wrapping("ul", html))
-        })
+        .render_html(render_wrapping("ul", options.html_attributes, data_type))
         .parse_markdown(parse_markdown)
         .render_markdown(render_list)
         .markdown_block_tokenizer(start, tokenize)

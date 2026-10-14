@@ -1,17 +1,13 @@
 //! `@tiptap/extension-bold`.
 
-use crate::DomSpec;
 use crate::markdown::{RenderContext, RenderHelpers};
-use crate::merge_attributes::merge_configured;
-use crate::{GetAttrsResult, MarkExtension, ParseHtml, element_attrs, rendered_object};
+use crate::merge_attributes::merge_html_attributes;
+use crate::{DomSpec, GetAttrsResult, HtmlAttributesOptions, MarkExtension, ParseHtml};
 use tarnish_js::Error;
 use tarnish_js::json::Map;
 use tarnish_js::json::Value;
 
-#[derive(Default)]
-pub struct BoldOptions {
-    pub html_attributes: Map,
-}
+pub type BoldOptions = HtmlAttributesOptions;
 
 pub fn bold(options: BoldOptions) -> MarkExtension {
     MarkExtension::create("bold")
@@ -31,13 +27,9 @@ pub fn bold(options: BoldOptions) -> MarkExtension {
             })),
         ])
         .render_html(move |_, html| {
-            let mut html = merge_configured(&options.html_attributes, html, [])?;
+            let mut html = merge_html_attributes(&options.html_attributes, html)?;
             // The JSX runtime takes `children` for the element's content.
-            if html.get("children").is_some() {
-                let mut object = rendered_object(&html);
-                object.shift_remove("children");
-                html = element_attrs(object)?;
-            }
+            html.remove("children");
             Ok(DomSpec::wrapping("strong", html))
         })
         .markdown_token_name("strong")

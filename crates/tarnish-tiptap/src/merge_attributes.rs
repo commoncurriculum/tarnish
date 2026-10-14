@@ -1,71 +1,107 @@
-//! `mergeAttributes`.
+//! `mergeAttributes`, and the `HTMLAttributes` option it merges into an element's attributes.
 
 use std::borrow::Cow;
 
 use indexmap::IndexMap;
 
-use crate::{AttrValue, SpecAttrs};
+use crate::{AttrValue, DomSpec, SpecAttrs};
 use tarnish_js::json::{Map, Value};
 use tarnish_js::{self as js, Error, value};
 
-/// `mergeAttributes(html, extra)`.
-pub fn merge_attributes<'a, const N: usize>(
-    mut html: SpecAttrs<'a>,
-    extra: [(&'a str, AttrValue<'a>); N],
+/// The options of an extension whose only option is `HTMLAttributes`: attributes its element
+/// gets ahead of those its node or mark renders, of any JSON, `null` standing for `undefined`.
+#[derive(Clone, Default)]
+pub struct HtmlAttributesOptions {
+    pub html_attributes: Map,
+}
+
+/// `mergeAttributes(attrs, extra)`: each entry of `extra` in turn replaces the value of its name,
+/// but a `class` or `style` joins a truthy one.
+pub fn merge_attributes<'a, K: Into<Cow<'a, str>>>(
+    mut attrs: SpecAttrs<'a>,
+    extra: impl IntoIterator<Item = (K, AttrValue<'a>)>,
 ) -> Result<SpecAttrs<'a>, Error> {
     for (key, value) in extra {
-        merge_entry(&mut html, Cow::Borrowed(key), value)?;
+        merge_entry(&mut attrs, key.into(), value)?;
     }
-    Ok(html)
+    Ok(attrs)
 }
 
-/// `mergeAttributes(...objects)` of objects whose values are any JSON, such as the options an
-/// embed gives its iframe ahead of what its node renders. `null` stands for `undefined` too,
-/// which an element is given no more than `null`.
-pub fn merge_objects<'m>(objects: impl IntoIterator<Item = &'m Map>) -> Result<Map, Error> {
-    let mut merged = Map::new();
-    for object in objects {
-        for (key, value) in object.iter() {
-            let joined = match merged.get(key) {
-                Some(existing) if js::truthy(Some(existing)) => match key.as_ref() {
-                    "class" => Value::String(joined_classes(existing, value)?),
-                    "style" => Value::String(joined_styles(existing, value)?),
-                    _ => value.clone(),
-                },
-                _ => value.clone(),
-            };
-            merged.insert(key.clone(), joined);
-        }
-    }
-    Ok(merged)
-}
-
-/// `mergeAttributes(this.options.HTMLAttributes, HTMLAttributes, extra)` of an `HTMLAttributes`
-/// option whose values are any JSON, as [`merge_objects`] merges them.
-pub(crate) fn merge_configured<'a, const N: usize>(
-    configured: &Map,
+/// `mergeAttributes(this.options.HTMLAttributes, HTMLAttributes)`, which is `html` itself while
+/// the option is empty, as it is by default.
+pub(crate) fn merge_html_attributes<'a>(
+    html_attributes: &Map,
     html: SpecAttrs<'a>,
-    extra: [(&'a str, AttrValue<'a>); N],
 ) -> Result<SpecAttrs<'a>, Error> {
-    if configured.is_empty() {
-        return merge_attributes(html, extra);
+    if html_attributes.is_empty() {
+        return Ok(html);
     }
-    let extra = rendered_object(&SpecAttrs::from(extra));
-    element_attrs(merge_objects([
-        configured,
-        &rendered_object(&html),
-        &extra,
-    ])?)
+    merge_attributes(SpecAttrs::from(html_attributes), html)
+}
+
+/// `renderHTML({ HTMLAttributes }) { return [tag, mergeAttributes(this.options.HTMLAttributes,
+/// HTMLAttributes, extra), 0] }`.
+pub(crate) fn render_wrapping<T, const N: usize>(
+    tag: &'static str,
+    html_attributes: Map,
+    extra: [(&'static str, &'static str); N],
+) -> impl for<'a> Fn(&'a T, SpecAttrs<'a>) -> Result<DomSpec<'a>, Error> + Send + Sync + 'static {
+    render_plain(html_attributes, extra, move |attrs| {
+        DomSpec::wrapping(tag, attrs)
+    })
+}
+
+/// That `renderHTML` without the `0`, of an element that holds nothing, such as `br`.
+pub(crate) fn render_element<T, const N: usize>(
+    tag: &'static str,
+    html_attributes: Map,
+    extra: [(&'static str, &'static str); N],
+) -> impl for<'a> Fn(&'a T, SpecAttrs<'a>) -> Result<DomSpec<'a>, Error> + Send + Sync + 'static {
+    render_plain(html_attributes, extra, move |attrs| {
+        DomSpec::element(tag, attrs, Vec::new())
+    })
+}
+
+fn render_plain<T, const N: usize>(
+    html_attributes: Map,
+    extra: [(&'static str, &'static str); N],
+    spec: impl for<'a> Fn(SpecAttrs<'a>) -> DomSpec<'a> + Send + Sync + 'static,
+) -> impl for<'a> Fn(&'a T, SpecAttrs<'a>) -> Result<DomSpec<'a>, Error> + Send + Sync + 'static {
+    move |_, html| {
+        let attrs = merge_html_attributes(&html_attributes, html)?;
+        let extra = extra.map(|(key, value)| (key, AttrValue::from(value)));
+        Ok(spec(merge_attributes(attrs, extra)?))
+    }
+}
+
+/// Merges an entry into `merged` as `mergeAttributes` does.
+pub(super) fn merge_entry<'a>(
+    merged: &mut SpecAttrs<'a>,
+    key: Cow<'a, str>,
+    value: AttrValue<'a>,
+) -> Result<(), Error> {
+    match merged.get_mut(&key) {
+        Some(existing) if existing.truthy() => {
+            *existing = match key.as_ref() {
+                "class" => joined_classes(existing, &value)?.into(),
+                "style" => joined_styles(existing, &value)?.into(),
+                _ => value,
+            };
+        }
+        Some(existing) => *existing = value,
+        None => merged.push(key, value),
+    }
+    Ok(())
 }
 
 /// The classes of a truthy `existing` with those of `value` it doesn't hold after them. `value`'s
 /// string is made first, and an `existing` that isn't a string has no `split` to call.
-fn joined_classes(existing: &Value, value: &Value) -> Result<String, Error> {
-    let value = match js::truthy(Some(value)) {
-        true => Some(js::to_string(value)?),
+fn joined_classes(existing: &AttrValue, value: &AttrValue) -> Result<String, Error> {
+    let value = match value.truthy() {
+        true => Some(value.to_js_string()?),
         false => None,
     };
-    let Value::String(existing) = existing else {
+    let Some(existing) = existing.as_str() else {
         return Err(value::not_a_function("mergedAttributes[key].split"));
     };
     let mut classes: Vec<&str> = existing.split(' ').collect();
@@ -80,10 +116,13 @@ fn joined_classes(existing: &Value, value: &Value) -> Result<String, Error> {
 
 /// Each property of `existing`'s styles and then `value`'s, where it first comes, with the value
 /// it last has.
-fn joined_styles(existing: &Value, value: &Value) -> Result<String, Error> {
+fn joined_styles(existing: &AttrValue, value: &AttrValue) -> Result<String, Error> {
     let mut styles = IndexMap::new();
-    let existing = parse_style_entries(existing)?;
-    for (property, style) in existing.into_iter().chain(parse_style_entries(value)?) {
+    let existing = parse_style_entries(&existing.to_value())?;
+    for (property, style) in existing
+        .into_iter()
+        .chain(parse_style_entries(&value.to_value())?)
+    {
         styles.insert(property, style);
     }
     let joined: Vec<String> = styles
@@ -91,61 +130,6 @@ fn joined_styles(existing: &Value, value: &Value) -> Result<String, Error> {
         .map(|(property, style)| format!("{property}: {style}"))
         .collect();
     Ok(joined.join("; "))
-}
-
-/// The attributes rendered for a node or mark, as an object of their values.
-pub fn rendered_object(html: &SpecAttrs) -> Map {
-    html.iter()
-        .map(|(key, value)| (key.into(), attr_value(value)))
-        .collect()
-}
-
-fn attr_value(value: &AttrValue) -> Value {
-    match value {
-        AttrValue::Json(value) => value.to_value(),
-        AttrValue::Text(text) => Value::String(text.to_string()),
-    }
-}
-
-/// An object of attributes as an element's, which leaves out those `null` or `undefined`.
-pub fn element_attrs(object: Map) -> Result<SpecAttrs<'static>, Error> {
-    let mut attrs = SpecAttrs::new();
-    for (key, value) in object.iter() {
-        if !value.is_null() {
-            attrs.push(key.to_string(), AttrValue::from(js::to_string(value)?));
-        }
-    }
-    Ok(attrs)
-}
-
-/// Merges an entry of an object into `merged` as `mergeAttributes` does: its value replaces a
-/// falsy one, and a `class` or `style` joins the one there.
-pub(super) fn merge_entry<'a>(
-    merged: &mut SpecAttrs<'a>,
-    key: Cow<'a, str>,
-    value: AttrValue<'a>,
-) -> Result<(), Error> {
-    match merged.get_mut(&key) {
-        Some(existing) if existing.truthy() => {
-            *existing = joined(&key, existing, value)?;
-        }
-        Some(existing) => *existing = value,
-        None => merged.push(key, value),
-    }
-    Ok(())
-}
-
-/// What an entry's `value` makes of a truthy value its key already has.
-fn joined<'a>(
-    key: &str,
-    existing: &AttrValue<'a>,
-    value: AttrValue<'a>,
-) -> Result<AttrValue<'a>, Error> {
-    Ok(match key {
-        "class" => joined_classes(&attr_value(existing), &attr_value(&value))?.into(),
-        "style" => joined_styles(&attr_value(existing), &attr_value(&value))?.into(),
-        _ => value,
-    })
 }
 
 /// `parseStyleEntries(styles)`: the `property: value` pairs of `styles || ''`'s declarations.

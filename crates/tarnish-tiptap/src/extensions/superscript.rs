@@ -1,14 +1,9 @@
 //! `@tiptap/extension-superscript`.
 
-use crate::DomSpec;
-use crate::merge_attributes::merge_configured;
-use crate::{GetAttrsResult, MarkExtension, ParseHtml};
-use tarnish_js::json::Map;
+use crate::merge_attributes::render_wrapping;
+use crate::{GetAttrsResult, HtmlAttributesOptions, MarkExtension, ParseHtml};
 
-#[derive(Default)]
-pub struct SuperscriptOptions {
-    pub html_attributes: Map,
-}
+pub type SuperscriptOptions = HtmlAttributesOptions;
 
 pub fn superscript(options: SuperscriptOptions) -> MarkExtension {
     MarkExtension::create("superscript")
@@ -22,8 +17,5 @@ pub fn superscript(options: SuperscriptOptions) -> MarkExtension {
                 })
             })),
         ])
-        .render_html(move |_, html| {
-            let html = merge_configured(&options.html_attributes, html, [])?;
-            Ok(DomSpec::wrapping("sup", html))
-        })
+        .render_html(render_wrapping("sup", options.html_attributes, []))
 }

@@ -122,23 +122,30 @@ pub struct Rendered<N> {
     pub content_dom: Option<N>,
 }
 
-/// The value of an attribute a spec sets: one of the node's or mark's attributes, or text.
+/// The value of an attribute a spec sets: one of the node's or mark's attributes, text, or JSON
+/// of the spec's own, such as an option's.
 #[derive(Clone)]
 pub enum AttrValue<'a> {
     Json(ValueRef<'a>),
     Text(Cow<'a, str>),
+    Owned(Value),
 }
 
 impl AttrValue<'_> {
     /// Whether it's `null`, which a spec's attributes leave unset.
     pub fn is_null(&self) -> bool {
-        matches!(self, AttrValue::Json(value) if value.is_null())
+        match self {
+            AttrValue::Json(value) => value.is_null(),
+            AttrValue::Text(_) => false,
+            AttrValue::Owned(value) => value.is_null(),
+        }
     }
 
     pub fn truthy(&self) -> bool {
         match self {
             AttrValue::Json(value) => value.truthy(),
             AttrValue::Text(text) => !text.is_empty(),
+            AttrValue::Owned(value) => js::truthy(Some(value)),
         }
     }
 
@@ -147,6 +154,7 @@ impl AttrValue<'_> {
         match self {
             AttrValue::Json(value) => value.to_js_string(),
             AttrValue::Text(text) => Ok(Cow::Borrowed(text)),
+            AttrValue::Owned(value) => js::string_of(value),
         }
     }
 
@@ -155,14 +163,22 @@ impl AttrValue<'_> {
         match self {
             AttrValue::Json(value) => value.as_str(),
             AttrValue::Text(text) => Some(text),
+            AttrValue::Owned(value) => value.as_str(),
         }
     }
 
-    fn to_value(&self) -> Value {
+    pub fn to_value(&self) -> Value {
         match self {
             AttrValue::Json(value) => value.to_value(),
             AttrValue::Text(text) => Value::String(text.as_ref().into()),
+            AttrValue::Owned(value) => value.clone(),
         }
+    }
+}
+
+impl From<Value> for AttrValue<'_> {
+    fn from(value: Value) -> Self {
+        AttrValue::Owned(value)
     }
 }
 
@@ -224,12 +240,44 @@ impl<'a> SpecAttrs<'a> {
         self.0.push((name, value));
     }
 
+    /// `delete attrs[name]`, giving the value it had.
+    pub fn remove(&mut self, name: &str) -> Option<AttrValue<'a>> {
+        let index = self.0.iter().position(|(set, _)| set == name)?;
+        Some(self.0.remove(index).1)
+    }
+
+    /// The attributes `keep` keeps, in order.
+    pub fn retain(&mut self, mut keep: impl FnMut(&str, &AttrValue<'a>) -> bool) {
+        self.0.retain(|(name, value)| keep(name, value));
+    }
+
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = (&str, &AttrValue<'a>)> {
         self.0.iter().map(|(name, value)| (name.as_ref(), value))
     }
 
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+}
+
+impl<'a> IntoIterator for SpecAttrs<'a> {
+    type Item = (Cow<'a, str>, AttrValue<'a>);
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+/// An object's entries as attributes of the spec's own.
+impl From<&Map> for SpecAttrs<'_> {
+    fn from(object: &Map) -> Self {
+        let entries = object.iter();
+        SpecAttrs(
+            entries
+                .map(|(name, value)| (Cow::Owned(name.to_string()), value.clone().into()))
+                .collect(),
+        )
     }
 }
 

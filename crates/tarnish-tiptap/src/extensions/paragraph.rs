@@ -1,20 +1,16 @@
 //! `@tiptap/extension-paragraph`.
 
-use crate::DomSpec;
 use crate::markdown::{ParseHelpers, Parsed, RenderContext, RenderHelpers};
-use crate::merge_attributes::merge_configured;
-use crate::{NodeExtension, ParseHtml};
+use crate::merge_attributes::render_wrapping;
+use crate::{HtmlAttributesOptions, NodeExtension, ParseHtml};
 use tarnish_js::Error;
-use tarnish_js::json::{Map, Value};
+use tarnish_js::json::Value;
 use tarnish_js::{self as js, utf16};
 use tarnish_markdown::marked::Token;
 
 pub const EMPTY_PARAGRAPH_MARKDOWN: &str = "&nbsp;";
 
-#[derive(Default)]
-pub struct ParagraphOptions {
-    pub html_attributes: Map,
-}
+pub type ParagraphOptions = HtmlAttributesOptions;
 
 pub fn paragraph(options: ParagraphOptions) -> NodeExtension {
     NodeExtension::create("paragraph")
@@ -22,10 +18,7 @@ pub fn paragraph(options: ParagraphOptions) -> NodeExtension {
         .group("block")
         .content("inline*")
         .parse_html([ParseHtml::tag("p")])
-        .render_html(move |_, html| {
-            let html = merge_configured(&options.html_attributes, html, [])?;
-            Ok(DomSpec::wrapping("p", html))
-        })
+        .render_html(render_wrapping("p", options.html_attributes, []))
         .parse_markdown(parse_markdown)
         .render_markdown(render_markdown)
 }

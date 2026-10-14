@@ -1,8 +1,7 @@
 //! `@tiptap/extension-image`.
 
-use crate::DomSpec;
 use crate::markdown::{ParseHelpers, Parsed, RenderContext, RenderHelpers};
-use crate::merge_attributes::merge_configured;
+use crate::merge_attributes::render_element;
 use crate::{ExtensionAttribute, NodeExtension, ParseHtml};
 use tarnish_js::json::{Map, Value, json};
 use tarnish_js::{self as js, Error, utf16, value};
@@ -20,7 +19,6 @@ pub struct ImageOptions {
 pub fn image(options: ImageOptions) -> NodeExtension {
     let attributes = ["src", "alt", "title", "width", "height"]
         .map(|name| ExtensionAttribute::new(name, Value::Null));
-    let configured = options.html_attributes;
     NodeExtension::create("image")
         .inline(options.inline)
         .group(if options.inline { "inline" } else { "block" })
@@ -31,10 +29,7 @@ pub fn image(options: ImageOptions) -> NodeExtension {
         } else {
             r#"img[src]:not([src^="data:"])"#
         })])
-        .render_html(move |_, html| {
-            let html = merge_configured(&configured, html, [])?;
-            Ok(DomSpec::element("img", html, Vec::new()))
-        })
+        .render_html(render_element("img", options.html_attributes, []))
         .parse_markdown(parse_markdown)
         .render_markdown(render_markdown)
 }

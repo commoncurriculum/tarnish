@@ -1,8 +1,8 @@
 //! `@tiptap/extension-list`'s `BulletList`, which `@tiptap/extension-bullet-list` exports.
 
 use crate::markdown::{ParseHelpers, Parsed, RenderContext, RenderHelpers};
-use crate::merge_attributes::merge_configured;
-use crate::{DomSpec, NodeExtension, ParseHtml};
+use crate::merge_attributes::render_wrapping;
+use crate::{NodeExtension, ParseHtml};
 use tarnish_js::Error;
 use tarnish_js::json::{Map, Value, json};
 use tarnish_markdown::marked::Token;
@@ -23,17 +23,11 @@ impl Default for BulletListOptions {
 }
 
 pub fn bullet_list(options: BulletListOptions) -> NodeExtension {
-    let attributes = options.html_attributes;
     NodeExtension::create("bulletList")
         .group("block list")
         .content(format!("{}+", options.item_type_name))
         .parse_html([ParseHtml::tag("ul")])
-        .render_html(move |_, html| {
-            Ok(DomSpec::wrapping(
-                "ul",
-                merge_configured(&attributes, html, [])?,
-            ))
-        })
+        .render_html(render_wrapping("ul", options.html_attributes, []))
         .markdown_token_name("list")
         .parse_markdown(parse_markdown)
         .render_markdown(render_list)

@@ -5,8 +5,8 @@ use std::sync::LazyLock;
 
 use crate::web_url::WebUrl;
 use crate::{
-    DomSpec, ExtensionAttribute, HtmlNode, NodeExtension, ParseHtml, SpecAttrs, element_attrs,
-    merge_objects, rendered_object,
+    AttrValue, DomSpec, ExtensionAttribute, HtmlNode, NodeExtension, ParseHtml, SpecAttrs,
+    merge_attributes,
 };
 use tarnish_js::json::{Map, Value, json};
 use tarnish_js::regexp::RegExp;
@@ -82,21 +82,20 @@ pub fn youtube(options: YoutubeOptions) -> NodeExtension {
         .draggable()
         .add_attributes(attributes)
         .parse_html([ParseHtml::tag("div[data-youtube-video] iframe")])
-        .render_html(move |_, html| {
-            let mut html = rendered_object(&html);
-            let zero = json!(0);
-            let start = js::or(html.get("start"), &zero).clone();
-            let src = html.get("src").cloned();
+        .render_html(move |_, mut html| {
+            let start = html.get("start").filter(|start| start.truthy());
+            let start = start.map_or(json!(0), AttrValue::to_value);
+            let src = html.get("src").map(AttrValue::to_value);
             let embed_url = embed_url_from_youtube_url(src.as_ref(), &options, &start)?;
-            html.insert("src".into(), embed_url.map_or(Value::Null, Value::String));
-            let iframe =
-                merge_objects([&options.html_attributes, &iframe_options(&options), &html])?;
+            html.set("src", embed_url.map_or(Value::Null, Value::String));
+            let configured = SpecAttrs::from(&options.html_attributes);
+            let iframe = merge_attributes(configured, iframe_options(&options))?;
             Ok(DomSpec::element(
                 "div",
                 SpecAttrs::from([("data-youtube-video", "".into())]),
                 vec![DomSpec::element(
                     "iframe",
-                    element_attrs(iframe)?,
+                    merge_attributes(iframe, html)?,
                     Vec::new(),
                 )],
             ))
@@ -105,39 +104,31 @@ pub fn youtube(options: YoutubeOptions) -> NodeExtension {
 }
 
 /// The options the iframe is given ahead of the node's attributes.
-fn iframe_options(options: &YoutubeOptions) -> Map {
+fn iframe_options<'a>(options: &YoutubeOptions) -> SpecAttrs<'a> {
     let optional = |value: &Option<String>| value.clone().map_or(Value::Null, Value::String);
-    Map::from_iter([
-        ("width".into(), options.width.clone()),
-        ("height".into(), options.height.clone()),
-        ("allowfullscreen".into(), json!(options.allow_fullscreen)),
-        ("autoplay".into(), json!(options.autoplay)),
-        ("ccLanguage".into(), optional(&options.cc_language)),
+    let entries = [
+        ("width", options.width.clone()),
+        ("height", options.height.clone()),
+        ("allowfullscreen", json!(options.allow_fullscreen)),
+        ("autoplay", json!(options.autoplay)),
+        ("ccLanguage", optional(&options.cc_language)),
         (
-            "ccLoadPolicy".into(),
+            "ccLoadPolicy",
             options.cc_load_policy.map_or(Value::Null, Value::Bool),
         ),
-        (
-            "disableKBcontrols".into(),
-            json!(options.disable_kb_controls),
-        ),
-        ("enableIFrameApi".into(), json!(options.enable_iframe_api)),
-        ("endTime".into(), js::number(options.end_time)),
-        (
-            "interfaceLanguage".into(),
-            optional(&options.interface_language),
-        ),
-        ("ivLoadPolicy".into(), js::number(options.iv_load_policy)),
-        ("loop".into(), json!(options.r#loop)),
-        ("modestBranding".into(), json!(options.modest_branding)),
-        ("origin".into(), json!(options.origin.clone())),
-        ("playlist".into(), json!(options.playlist.clone())),
-        (
-            "progressBarColor".into(),
-            optional(&options.progress_bar_color),
-        ),
-        ("rel".into(), options.rel.map_or(Value::Null, js::number)),
-    ])
+        ("disableKBcontrols", json!(options.disable_kb_controls)),
+        ("enableIFrameApi", json!(options.enable_iframe_api)),
+        ("endTime", js::number(options.end_time)),
+        ("interfaceLanguage", optional(&options.interface_language)),
+        ("ivLoadPolicy", js::number(options.iv_load_policy)),
+        ("loop", json!(options.r#loop)),
+        ("modestBranding", json!(options.modest_branding)),
+        ("origin", json!(options.origin.clone())),
+        ("playlist", json!(options.playlist.clone())),
+        ("progressBarColor", optional(&options.progress_bar_color)),
+        ("rel", options.rel.map_or(Value::Null, js::number)),
+    ];
+    SpecAttrs::from(entries.map(|(name, value)| (name, value.into())))
 }
 
 static YOUTUBE_REGEX: LazyLock<RegExp> = LazyLock::new(|| {

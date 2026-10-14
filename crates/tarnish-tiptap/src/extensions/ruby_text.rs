@@ -1,16 +1,13 @@
 //! `@tiptap/extension-ruby-text`: a mark whose `rt` annotates its text, rendered as a `ruby`
 //! element with the text in an `rb` and the annotation in an `rt`.
 
-use crate::merge_attributes::merge_configured;
+use crate::merge_attributes::merge_html_attributes;
 use crate::{DomSpec, MarkExtension, ParseHtml, SpecAttrs, mark_attr};
-use crate::{ExtensionAttribute, HtmlNode};
+use crate::{ExtensionAttribute, HtmlAttributesOptions, HtmlNode};
 use tarnish_js::Result;
 use tarnish_js::json::{Map, Value, json};
 
-#[derive(Default)]
-pub struct RubyTextOptions {
-    pub html_attributes: Map,
-}
+pub type RubyTextOptions = HtmlAttributesOptions;
 
 pub fn ruby_text(options: RubyTextOptions) -> MarkExtension {
     MarkExtension::create("rubyText")
@@ -28,7 +25,7 @@ pub fn ruby_text(options: RubyTextOptions) -> MarkExtension {
                 )])))
             })])
         .render_html(move |mark, html| {
-            let html = merge_configured(&options.html_attributes, html, [])?;
+            let html = merge_html_attributes(&options.html_attributes, html)?;
             let mut children = vec![DomSpec::wrapping("rb", SpecAttrs::new())];
             let rt = mark_attr(mark, "rt");
             if !rt.is_null() {

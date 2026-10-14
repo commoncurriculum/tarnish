@@ -4,29 +4,20 @@ use super::ordered_list::list_marker;
 use crate::markdown::{
     ParseHelpers, Parsed, RenderContext, RenderHelpers, render_nested_markdown_content,
 };
-use crate::merge_attributes::merge_configured;
-use crate::{DomSpec, NodeExtension, ParseHtml};
-use tarnish_js::json::{Map, Value, json};
+use crate::merge_attributes::render_wrapping;
+use crate::{HtmlAttributesOptions, NodeExtension, ParseHtml};
+use tarnish_js::json::{Value, json};
 use tarnish_js::{self as js, Error, value};
 use tarnish_markdown::marked::Token;
 
-#[derive(Default)]
-pub struct ListItemOptions {
-    pub html_attributes: Map,
-}
+pub type ListItemOptions = HtmlAttributesOptions;
 
 pub fn list_item(options: ListItemOptions) -> NodeExtension {
-    let attributes = options.html_attributes;
     NodeExtension::create("listItem")
         .content("paragraph block*")
         .defining()
         .parse_html([ParseHtml::tag("li")])
-        .render_html(move |_, html| {
-            Ok(DomSpec::wrapping(
-                "li",
-                merge_configured(&attributes, html, [])?,
-            ))
-        })
+        .render_html(render_wrapping("li", options.html_attributes, []))
         .markdown_token_name("list_item")
         .parse_markdown(parse_markdown)
         .render_markdown(render_markdown)

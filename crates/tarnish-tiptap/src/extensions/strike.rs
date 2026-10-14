@@ -1,17 +1,13 @@
 //! `@tiptap/extension-strike`.
 
-use crate::DomSpec;
 use crate::markdown::{RenderContext, RenderHelpers};
-use crate::merge_attributes::merge_configured;
-use crate::{GetAttrsResult, MarkExtension, ParseHtml};
+use crate::merge_attributes::render_wrapping;
+use crate::{GetAttrsResult, HtmlAttributesOptions, MarkExtension, ParseHtml};
 use tarnish_js::Error;
 use tarnish_js::json::Map;
 use tarnish_js::json::Value;
 
-#[derive(Default)]
-pub struct StrikeOptions {
-    pub html_attributes: Map,
-}
+pub type StrikeOptions = HtmlAttributesOptions;
 
 pub fn strike(options: StrikeOptions) -> MarkExtension {
     MarkExtension::create("strike")
@@ -31,10 +27,7 @@ pub fn strike(options: StrikeOptions) -> MarkExtension {
                     }),
             ),
         ])
-        .render_html(move |_, html| {
-            let html = merge_configured(&options.html_attributes, html, [])?;
-            Ok(DomSpec::wrapping("s", html))
-        })
+        .render_html(render_wrapping("s", options.html_attributes, []))
         .markdown_token_name("del")
         .parse_markdown(|token, helpers| {
             let content = helpers.parse_inline(token.tokens.as_deref().unwrap_or_default())?;

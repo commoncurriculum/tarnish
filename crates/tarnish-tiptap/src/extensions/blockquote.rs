@@ -1,16 +1,13 @@
 //! `@tiptap/extension-blockquote`.
 
 use crate::markdown::{ParseHelpers, Parsed, RenderContext, RenderHelpers};
-use crate::merge_attributes::merge_configured;
-use crate::{DomSpec, NodeExtension, ParseHtml, element_attrs, rendered_object};
-use tarnish_js::json::{Map, Value};
+use crate::merge_attributes::merge_html_attributes;
+use crate::{DomSpec, HtmlAttributesOptions, NodeExtension, ParseHtml};
+use tarnish_js::json::Value;
 use tarnish_js::{self as js, Error, value};
 use tarnish_markdown::marked::Token;
 
-#[derive(Default)]
-pub struct BlockquoteOptions {
-    pub html_attributes: Map,
-}
+pub type BlockquoteOptions = HtmlAttributesOptions;
 
 pub fn blockquote(options: BlockquoteOptions) -> NodeExtension {
     NodeExtension::create("blockquote")
@@ -19,13 +16,9 @@ pub fn blockquote(options: BlockquoteOptions) -> NodeExtension {
         .defining()
         .parse_html([ParseHtml::tag("blockquote")])
         .render_html(move |_, html| {
-            let mut html = merge_configured(&options.html_attributes, html, [])?;
+            let mut html = merge_html_attributes(&options.html_attributes, html)?;
             // The JSX runtime takes `children` for the element's content.
-            if html.get("children").is_some() {
-                let mut object = rendered_object(&html);
-                object.shift_remove("children");
-                html = element_attrs(object)?;
-            }
+            html.remove("children");
             Ok(DomSpec::wrapping("blockquote", html))
         })
         .parse_markdown(parse_markdown)

@@ -1,9 +1,8 @@
 //! `@tiptap/extension-heading`.
 
-use crate::DomSpec;
 use crate::markdown::{ParseHelpers, Parsed, RenderContext, RenderHelpers};
-use crate::merge_attributes::merge_configured;
-use crate::{ExtensionAttribute, NodeExtension, ParseHtml};
+use crate::merge_attributes::merge_html_attributes;
+use crate::{DomSpec, ExtensionAttribute, NodeExtension, ParseHtml};
 use tarnish_js::json::{Map, Value, json, object};
 use tarnish_js::{self as js, Error, value};
 use tarnish_markdown::marked::Token;
@@ -51,8 +50,10 @@ pub fn heading(options: HeadingOptions) -> NodeExtension {
                 .or_else(|| levels.first().copied());
             // `h${level}`, where `this.options.levels[0]` is `undefined` without levels.
             let tag = level.map_or_else(|| "hundefined".to_owned(), |level| format!("h{level}"));
-            let html = merge_configured(&html_attributes, html, [])?;
-            Ok(DomSpec::wrapping(tag, html))
+            Ok(DomSpec::wrapping(
+                tag,
+                merge_html_attributes(&html_attributes, html)?,
+            ))
         })
         .parse_markdown(parse_markdown)
         .render_markdown(render_markdown)

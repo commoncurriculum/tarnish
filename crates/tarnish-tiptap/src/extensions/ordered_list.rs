@@ -6,9 +6,8 @@ use std::sync::LazyLock;
 
 use super::bullet_list::render_list;
 use crate::markdown::{Lines, ParseHelpers, Parsed};
-use crate::merge_attributes::merge_configured;
-use crate::{AttrValue, DomSpec, ExtensionAttribute, HtmlNode, NodeExtension};
-use crate::{ParseHtml, SpecAttrs};
+use crate::merge_attributes::merge_html_attributes;
+use crate::{AttrValue, DomSpec, ExtensionAttribute, HtmlNode, NodeExtension, ParseHtml};
 use tarnish_js::json::{Map, Value, json};
 use tarnish_js::regexp::RegExp;
 use tarnish_js::units::Units;
@@ -45,17 +44,10 @@ pub fn ordered_list(options: OrderedListOptions) -> NodeExtension {
             ExtensionAttribute::new("type", Value::Null).parse_html(html_type),
         ])
         .parse_html([ParseHtml::tag("ol")])
-        .render_html(move |_, html| {
-            let start = html.get("start").cloned();
-            let kind = html.get("type").cloned();
-            let mut rest = SpecAttrs::new();
-            for (key, value) in html
-                .iter()
-                .filter(|(key, _)| !matches!(*key, "start" | "type"))
-            {
-                rest.set(key.to_owned(), value.clone());
-            }
-            let mut attrs = merge_configured(&attributes, rest, [])?;
+        .render_html(move |_, mut html| {
+            let start = html.remove("start");
+            let kind = html.remove("type");
+            let mut attrs = merge_html_attributes(&attributes, html)?;
             if let Some(start) = start.filter(|start| !is_one(start)) {
                 attrs.set("start", start);
             }
@@ -77,6 +69,7 @@ pub fn ordered_list(options: OrderedListOptions) -> NodeExtension {
 fn is_one(start: &AttrValue) -> bool {
     match start {
         AttrValue::Json(start) => start.as_f64() == Some(1.0),
+        AttrValue::Owned(start) => start.as_f64() == Some(1.0),
         AttrValue::Text(_) => false,
     }
 }

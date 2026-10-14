@@ -1,14 +1,9 @@
 //! `@tiptap/extension-subscript`.
 
-use crate::DomSpec;
-use crate::merge_attributes::merge_configured;
-use crate::{GetAttrsResult, MarkExtension, ParseHtml};
-use tarnish_js::json::Map;
+use crate::merge_attributes::render_wrapping;
+use crate::{GetAttrsResult, HtmlAttributesOptions, MarkExtension, ParseHtml};
 
-#[derive(Default)]
-pub struct SubscriptOptions {
-    pub html_attributes: Map,
-}
+pub type SubscriptOptions = HtmlAttributesOptions;
 
 pub fn subscript(options: SubscriptOptions) -> MarkExtension {
     MarkExtension::create("subscript")
@@ -22,8 +17,5 @@ pub fn subscript(options: SubscriptOptions) -> MarkExtension {
                 })
             })),
         ])
-        .render_html(move |_, html| {
-            let html = merge_configured(&options.html_attributes, html, [])?;
-            Ok(DomSpec::wrapping("sub", html))
-        })
+        .render_html(render_wrapping("sub", options.html_attributes, []))
 }
