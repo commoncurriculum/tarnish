@@ -74,9 +74,18 @@ impl<'m> Lexer<'m> {
         tokens: &mut Vec<Token>,
         mut last_paragraph_clipped: bool,
     ) -> Result<(), Error> {
+        let marked = self.marked;
         let mut src = src.clone();
-        while !src.is_empty() {
+        'blocks: while !src.is_empty() {
             self.deadline.turn(src.len())?;
+            for extension in &marked.block {
+                if let Some(token) = (extension.tokenizer)(self, &src, tokens)? {
+                    src = src.substring(token.raw.len());
+                    tokens.push(token);
+                    continue 'blocks;
+                }
+            }
+
             if let Some(token) = self.space(&src) {
                 src = src.substring(token.raw.len());
                 match tokens.last_mut() {
@@ -169,10 +178,15 @@ impl<'m> Lexer<'m> {
                 continue;
             }
 
+            // A top-level paragraph stops short of where an extension's block may start.
+            let cut = match marked.block_start(&src.substring(1)) {
+                Some(start) => src.slice(0..(start + 1).min(src.len())),
+                None => src.clone(),
+            };
             if self.state.top
-                && let Some(token) = self.paragraph(&src)
+                && let Some(token) = self.paragraph(&cut)
             {
-                src = src.substring(token.raw.len());
+                let length = token.raw.len();
                 match tokens.last_mut() {
                     Some(last) if last_paragraph_clipped && last.kind == "paragraph" => {
                         self.inline_queue.pop();
@@ -180,7 +194,8 @@ impl<'m> Lexer<'m> {
                     }
                     _ => tokens.push(token),
                 }
-                last_paragraph_clipped = false;
+                last_paragraph_clipped = cut.len() != src.len();
+                src = src.substring(length);
                 continue;
             }
 

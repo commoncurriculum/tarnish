@@ -29,6 +29,18 @@ pub struct TokenizerExtension {
     pub tokenizer: ExtensionTokenizer,
 }
 
+/// A block extension's `start(src)`: where in `src` its tokens may start, `None` for a result
+/// that is negative or not a number.
+pub type BlockStart = Box<dyn Fn(&Units) -> Option<usize> + Send + Sync>;
+
+/// A block tokenizer extension, as `marked.use({ extensions })` takes one with `level: 'block'`.
+/// The lexer tries its tokenizer at the start of each block, before its own, and a top-level
+/// paragraph stops short of where its `start` says one may start.
+pub struct BlockExtension {
+    pub start: Option<BlockStart>,
+    pub tokenizer: ExtensionTokenizer,
+}
+
 /// A marked instance, with the list tokenizer `marked.use({ tokenizer: { list } })` gave it:
 /// marked's own isn't ported.
 pub struct Marked {
@@ -37,6 +49,8 @@ pub struct Marked {
     inline: Vec<TokenizerExtension>,
     /// Which ASCII units the extensions' start strings begin with.
     first_units: [bool; 128],
+    /// `defaults.extensions.block`, the last added first, as marked tries them.
+    block: Vec<BlockExtension>,
 }
 
 impl Marked {
@@ -45,7 +59,22 @@ impl Marked {
             list,
             inline: Vec::new(),
             first_units: [false; 128],
+            block: Vec::new(),
         }
+    }
+
+    /// `marked.use({ extensions })` of a block extension: its tokenizer runs before those added
+    /// earlier.
+    pub fn use_block_extension(&mut self, extension: BlockExtension) {
+        self.block.insert(0, extension);
+    }
+
+    /// `startBlock`'s least start in `src`, which each extension's `start` is given.
+    fn block_start(&self, src: &Units) -> Option<usize> {
+        self.block
+            .iter()
+            .filter_map(|extension| extension.start.as_ref()?(src))
+            .min()
     }
 
     /// Whether an extension's start string begins with `unit`.
