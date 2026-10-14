@@ -507,6 +507,7 @@ fn fill(tokens: &mut [Token], lexed: &mut [Option<Vec<Token>>]) {
             }
             TokenData::None
             | TokenData::Heading { .. }
+            | TokenData::Code { .. }
             | TokenData::Link(_)
             | TokenData::Html { .. }
             | TokenData::Def(_)

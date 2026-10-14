@@ -34,6 +34,11 @@ pub enum TokenData {
     Heading {
         depth: usize,
     },
+    /// A code block's `lang`, which a fenced one has, or `None` for an indented one, whose
+    /// `codeBlockStyle` is `indented`.
+    Code {
+        lang: Option<Vec<u16>>,
+    },
     /// A link's or an image's.
     Link(Box<Destination>),
     Html {
@@ -221,6 +226,19 @@ impl Token {
         let fields = self.child_tokens.as_deref()?;
         let (_, tokens) = fields.iter().find(|(field, _)| *field == key)?;
         Some(tokens)
+    }
+
+    /// `token.lang`, a fenced code block's.
+    pub fn lang(&self) -> Option<&[u16]> {
+        match &self.data {
+            TokenData::Code { lang } => lang.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// `token.codeBlockStyle`, an indented code block's.
+    pub fn code_block_style(&self) -> Option<&'static str> {
+        matches!(self.data, TokenData::Code { lang: None }).then_some("indented")
     }
 
     /// `token.depth`.

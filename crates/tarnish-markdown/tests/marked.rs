@@ -42,9 +42,12 @@ fn tokens_match_marked() {
 static CONTAINER: LazyLock<RegExp> =
     LazyLock::new(|| RegExp::new(r"^:::([^\n]*)\n([\s\S]*?)\n:::(?:\n|$)", ""));
 static LINE: LazyLock<RegExp> = LazyLock::new(|| RegExp::new(r"^:::x[^\n]*(?:\n|$)", ""));
+static FENCED_START: LazyLock<RegExp> = LazyLock::new(|| RegExp::new(r"^\+\+\+", "m"));
+static FENCED: LazyLock<RegExp> =
+    LazyLock::new(|| RegExp::new(r"^\+\+\+(\w*)\n([\s\S]*?)\n\+\+\+(?:\n|$)", ""));
 
-/// `harness/record-marked.mjs`'s two block extensions: containers, whose start ends paragraphs,
-/// and `:::x` lines, which are tried first.
+/// `harness/record-marked.mjs`'s three block extensions: containers, whose start ends paragraphs,
+/// `:::x` lines, which are tried first, and `+++` fenced blocks, whose blocks are their `tokens`.
 #[test]
 fn block_extensions_lex_as_in_marked() {
     let mut marked = Marked::new(more_lists());
@@ -73,6 +76,24 @@ fn block_extensions_lex_as_in_marked() {
             Ok(LINE
                 .exec(src)
                 .map(|cap| Token::new("line", src.slice_of(cap.all()))))
+        }),
+    });
+    marked.use_block_extension(BlockExtension {
+        start: Some(Box::new(|src| {
+            FENCED_START.exec(src).map(|found| found.index())
+        })),
+        tokenizer: Box::new(|lexer, src, _| {
+            let Some(found) = FENCED.exec(src) else {
+                return Ok(None);
+            };
+            let mut tokens = Vec::new();
+            let content = src.slice_of(found.get(2).unwrap_or_default());
+            lexer.block_tokens(&content, &mut tokens, false)?;
+            Ok(Some(Token {
+                text: Some(src.slice_of(found.get(1).unwrap_or_default())),
+                tokens: Some(tokens.into()),
+                ..Token::new("fenced", src.slice_of(found.all()))
+            }))
         }),
     });
     check(&marked, &["extended"]);

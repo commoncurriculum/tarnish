@@ -1,7 +1,6 @@
 //! A token as marked's JSON has it, as far as the lexer makes it: without the fields nothing
-//! after the lexer reads, `lang` and `codeBlockStyle` (code), `pre` (paragraph, html), `escaped`
-//! (text), `inLink` and `inRawBlock` (inline html), `listType` (list), and cells' `text`,
-//! `header` and `align` (table).
+//! after the lexer reads, `pre` (paragraph, html), `escaped` (text), `inLink` and `inRawBlock`
+//! (inline html), `listType` (list), and cells' `text`, `header` and `align` (table).
 
 use tarnish_js::json::{Map, Value, json};
 use tarnish_js::{stack, utf16};
@@ -38,6 +37,12 @@ impl Token {
             TokenData::None => {}
             TokenData::Heading { depth } => {
                 set("depth", json!(depth));
+            }
+            TokenData::Code { lang: Some(lang) } => {
+                set("lang", string(lang));
+            }
+            TokenData::Code { lang: None } => {
+                set("codeBlockStyle", json!("indented"));
             }
             TokenData::Link(link) => {
                 set("href", string(&link.href));

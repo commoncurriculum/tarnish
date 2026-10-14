@@ -280,6 +280,10 @@ function project(token) {
   if (typeof token.text === "string") out.text = token.text
   if (Array.isArray(token.tokens)) out.tokens = token.tokens.map(project)
   if (token.type === "heading") out.depth = token.depth
+  if (token.type === "code") {
+    if (token.codeBlockStyle) out.codeBlockStyle = token.codeBlockStyle
+    else out.lang = token.lang
+  }
   if (token.type === "link" || token.type === "image") {
     out.href = token.href
     out.title = token.title ?? null
@@ -314,10 +318,12 @@ function project(token) {
   return out
 }
 
-// Two block extensions, which the lexer tries before its own tokenizers, the one added last
+// Three block extensions, which the lexer tries before its own tokenizers, the one added last
 // first. A container is `:::` lines around blocks, the first naming it, whose name's inline tokens
 // and blocks its token holds in fields of their own; it may start wherever `:::` is, which ends a
-// paragraph there. A `:::x` line, which has no start, is a token of its own.
+// paragraph there. A `:::x` line, which has no start, is a token of its own. A fenced block is
+// `+++` lines around blocks, as Tiptap's Markdown specs make theirs: its blocks are its `tokens`,
+// and it starts only at the start of a line.
 const container = {
   name: "container",
   level: "block",
@@ -336,9 +342,18 @@ const line = {
     return cap ? { type: "line", raw: cap[0] } : undefined
   },
 }
+const fenced = {
+  name: "fenced",
+  level: "block",
+  start: src => src.match(/^\+\+\+/m)?.index,
+  tokenizer(src) {
+    const match = /^\+\+\+(\w*)\n([\s\S]*?)\n\+\+\+(?:\n|$)/.exec(src)
+    if (match) return { type: "fenced", raw: match[0], text: match[1], tokens: this.lexer.blockTokens(match[2]) }
+  },
+}
 const extended = new Marked()
 extended.use(moreLists())
-extended.use({ extensions: [container, line] })
+extended.use({ extensions: [container, line, fenced] })
 const extendedInputs = [
   ":::note\nbody\n:::",
   ":::*em* name\n- a\n- b\n:::",
@@ -356,6 +371,24 @@ const extendedInputs = [
   ":::[ref]\n[ref]\n:::\n\n[ref]: http://x",
   "a\n\n:::t\n**b**\n:::\n\n# c",
   ":::a\n:::b\nc\n:::\n:::",
+  "+++a\nx\n+++",
+  "para\n+++a\nx\n+++\nafter",
+  "para\n+++unclosed\nmore",
+  "para +++a\nx\n+++",
+  "+++a\n+++b\nx\n+++\n+++",
+  "+++a\n# heading\n\n- item\n+++",
+  "> quoted\n+++a\nx\n+++",
+  "> +++a\n> x\n> +++",
+  "- item\n+++a\nx\n+++",
+  "+++a\npara\nlazy\n+++\n\ntext",
+  "a\n\n+++\nb\n+++",
+  "text\n+++a\n[ref]\n+++\n\n[ref]: /url",
+  "    code\n+++a\nx\n+++",
+  "```\n+++a\n```",
+  "+++a\n```\nx\n+++\n```",
+  "one\ntwo\n+++a\nx\n+++\nthree\nfour",
+  "+++a\n:::n\nx\n:::\n+++",
+  ":::n\n+++a\nx\n+++\n:::",
 ]
 
 const lexer = marked => input => ({ input, ...outcome(() => ({ tokens: marked.lexer(input).map(project) })) })

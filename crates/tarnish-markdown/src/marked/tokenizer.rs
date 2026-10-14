@@ -75,6 +75,7 @@ impl Lexer<'_> {
         let text = OTHER.code_remove_indent.replace_units(&raw, "");
         Some(Token {
             text: Some(text.slice_of(rtrim(&text, b'\n'))),
+            data: TokenData::Code { lang: None },
             ..Token::new("code", raw)
         })
     }
@@ -83,8 +84,12 @@ impl Lexer<'_> {
         let cap = BLOCK.fences.exec(src)?;
         let raw = cap.all();
         let text = indent_code_compensation(raw, &src.slice_of(cap.get(3).unwrap_or_default()));
+        // `cap[2] ? cap[2].trim().replace(anyPunctuation, '$1') : cap[2]`, where the info
+        // string's group always takes part.
+        let lang = unescape(utf16::trim(cap.get(2).unwrap_or_default()));
         Some(Token {
             text: Some(text),
+            data: TokenData::Code { lang: Some(lang) },
             ..Token::new("code", src.slice_of(raw))
         })
     }
