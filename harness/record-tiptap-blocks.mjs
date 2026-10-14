@@ -10,12 +10,13 @@
 // - parsesHTML: the document DOMParser parses the body of a linkedom document holding each input
 //   to: the embeds' sources run `new URL` through their edge inputs.
 // - serializesHTML: the innerHTML of an element DOMSerializer fills in linkedom.
+// - generatesText: the text `generateText` makes of documents with emojis.
 // - attributes: what `parseAttributes` makes of each string, and `serializeAttributes` of each
 //   object.
 // RubyText's parse rule makes its content element with the page's global `document`, which is
 // linkedom's here, as a browser's would be its own.
 import { readFileSync } from "node:fs"
-import { getSchema, parseAttributes, serializeAttributes } from "@tiptap/core"
+import { generateText, getSchema, parseAttributes, serializeAttributes } from "@tiptap/core"
 import { Audio } from "@tiptap/extension-audio"
 import { Blockquote } from "@tiptap/extension-blockquote"
 import { Bold } from "@tiptap/extension-bold"
@@ -765,6 +766,23 @@ const serializesHTML = allDocuments.map(([name, doc]) => ({
   }),
 }))
 
+// Emojis of each name, and of names that aren't strings, in blocks beside other text.
+const emojiTexts = [
+  ...docs.emoji,
+  ...[["smile"], {}, true].map(name => doc(p(node("emoji", { name })))),
+  doc(
+    p(node("emoji", { name: "star" }), node("hardBreak"), node("emoji", { name: "custom" })),
+    p(text("x"), node("emoji", { name: "glow" })),
+  ),
+]
+const generatesText = ["emoji", "emojiOptions"].flatMap(name =>
+  emojiTexts.map(doc => ({
+    extensions: name,
+    doc,
+    ...outcome(() => ({ text: generateText(doc, configurations[name]) })),
+  })),
+)
+
 const attributeStrings = [
   "",
   "   ",
@@ -824,5 +842,6 @@ writeFixture("tiptap-blocks", {
   serializesMarkdown,
   parsesHTML,
   serializesHTML,
+  generatesText,
   attributes,
 })

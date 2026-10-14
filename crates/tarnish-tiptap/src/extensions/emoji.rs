@@ -29,6 +29,7 @@ pub struct EmojiOptions {
 }
 
 pub fn emoji(options: EmojiOptions) -> NodeExtension {
+    let emojis = options.emojis.clone();
     NodeExtension::create("emoji")
         .inline(true)
         .group("inline")
@@ -55,6 +56,14 @@ pub fn emoji(options: EmojiOptions) -> NodeExtension {
                 Some(item) => render_item(item, options.force_fallback_images),
             };
             Ok(DomSpec::element("span", attributes, vec![child]))
+        })
+        .render_text(move |props| {
+            let name = node_attr(props.node, "name");
+            let emoji = shortcode_to_emoji(name, &emojis).and_then(|item| item.emoji.as_deref());
+            match emoji.filter(|emoji| !emoji.is_empty()) {
+                Some(emoji) => Ok(emoji.to_owned()),
+                None => Ok(format!(":{}:", name.to_js_string()?)),
+            }
         })
         .render_markdown(render_markdown)
 }

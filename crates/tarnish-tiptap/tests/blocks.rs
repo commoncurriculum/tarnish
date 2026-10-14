@@ -12,7 +12,6 @@ use tarnish::js::stack::on_dirty_scheduler_stack;
 use tarnish::json::{Value, json};
 use tarnish_fixtures::{expect, outcome, read, records, same};
 use tarnish_js::utf16;
-use tarnish_tiptap::Extension;
 use tarnish_tiptap::extensions::audio::{AudioOptions, audio};
 use tarnish_tiptap::extensions::blockquote::{BlockquoteOptions, blockquote};
 use tarnish_tiptap::extensions::bold::bold;
@@ -36,6 +35,7 @@ use tarnish_tiptap::extensions::text::text;
 use tarnish_tiptap::extensions::twitch::{TwitchOptions, twitch};
 use tarnish_tiptap::extensions::youtube::{YoutubeOptions, youtube};
 use tarnish_tiptap::markdown::specs::{parse_attributes, serialize_attributes};
+use tarnish_tiptap::{Extension, TextOptions, generate_text};
 
 /// Document, Paragraph, Text, Heading, HardBreak, Bold and Italic.
 fn base() -> Vec<Extension> {
@@ -305,10 +305,14 @@ fn added(name: &str) -> Vec<Extension> {
     }
 }
 
-fn converter(name: &str) -> Converter {
+fn extensions(name: &str) -> Vec<Extension> {
     let mut extensions = base();
     extensions.extend(added(name));
-    Converter::of(&extensions)
+    extensions
+}
+
+fn converter(name: &str) -> Converter {
+    Converter::of(&extensions(name))
 }
 
 /// The configuration a record names.
@@ -374,6 +378,33 @@ fn parses_html_as_tiptap_does() {
 #[test]
 fn serializes_html_as_tiptap_does() {
     check("serializesHTML");
+}
+
+/// The text `generateText` makes of each document, with the extensions the record names.
+#[test]
+fn generates_text_as_tiptap_does() {
+    let fixtures = read("tiptap-blocks");
+    let mut failures = Vec::new();
+    for record in records(&fixtures, "generatesText") {
+        let (name, doc) = (named(record), &record["doc"]);
+        let text = generate_text(doc, &extensions(name), &TextOptions::default());
+        let actual = outcome(text.map(|text| json!({ "text": text })));
+        let mut expected = record.clone();
+        let fields = expected.as_object_mut().expect("a record");
+        fields.shift_remove("extensions");
+        fields.shift_remove("doc");
+        if !same(&expected, &actual) {
+            failures.push(format!(
+                "{name} {doc}\n  Tiptap: {expected}\n  tarnish-tiptap: {actual}"
+            ));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} failures:\n\n{}",
+        failures.len(),
+        failures.join("\n\n")
+    );
 }
 
 /// `parseAttributes` of each string, and `serializeAttributes` of each value.
