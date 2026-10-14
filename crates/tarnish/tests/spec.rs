@@ -5,11 +5,40 @@ use std::sync::Arc;
 use tarnish::dom::{ParseRule, Rule, StyleRule, TagRule, schema_rules};
 use tarnish::js::json::stringify;
 use tarnish::json::{self, Map, Value};
-use tarnish::{Schema, api, js};
+use tarnish::{Node, Schema, api, js};
 use tarnish_fixtures::{assert_same, read, records};
 
 fn schema(spec: &str) -> Schema {
     api::schema(&json::from_str(spec).expect("JSON")).expect("a schema")
+}
+
+/// A document of one item with no attributes given, of a type whose attributes are `attrs`, read
+/// and written back as JSON.
+fn item_read_back(attrs: &str) -> String {
+    let schema = schema(&format!(
+        r#"{{"nodes": {{"doc": {{"content": "item*"}}, "item": {{"attrs": {attrs}}}, "text": {{}}}}}}"#
+    ));
+    let doc = json::from_str(r#"{"type": "doc", "content": [{"type": "item", "attrs": {}}]}"#)
+        .expect("JSON");
+    Node::from_json(&schema, &doc)
+        .map_or_else(|error| error.to_string(), |doc| stringify(&doc.to_json()))
+}
+
+#[test]
+fn reads_has_default_with_no_default_as_a_default_of_undefined() {
+    // As ProseMirror reads `{default: undefined}`, `{}` and `{default: 0}`.
+    assert_eq!(
+        item_read_back(r#"{"indent": {"hasDefault": true}}"#),
+        r#"{"type":"doc","content":[{"type":"item","attrs":{}}]}"#
+    );
+    assert_eq!(
+        item_read_back(r#"{"indent": {}}"#),
+        "RangeError: No value supplied for attribute indent"
+    );
+    assert_eq!(
+        item_read_back(r#"{"indent": {"hasDefault": true, "default": 0}}"#),
+        r#"{"type":"doc","content":[{"type":"item","attrs":{"indent":0}}]}"#
+    );
 }
 
 #[test]

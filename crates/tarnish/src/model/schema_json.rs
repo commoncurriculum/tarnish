@@ -122,10 +122,15 @@ fn attributes(spec: &Map) -> Result<Vec<(String, AttributeSpec)>> {
             Ok((
                 name.to_string(),
                 AttributeSpec {
-                    default: attr
-                        .get("default")
-                        .cloned()
-                        .map_or(AttributeDefault::Required, AttributeDefault::Value),
+                    // Data can't hold `default: undefined`, so it says so as ProseMirror's
+                    // `Attribute` does: `hasDefault` with no `default`.
+                    default: match attr.get("default") {
+                        Some(value) => AttributeDefault::Value(value.clone()),
+                        None if attr.get("hasDefault") == Some(&Value::Bool(true)) => {
+                            AttributeDefault::Undefined
+                        }
+                        None => AttributeDefault::Required,
+                    },
                     validate: validate(attr, name),
                 },
             ))

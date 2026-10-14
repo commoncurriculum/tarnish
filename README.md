@@ -610,7 +610,9 @@ hold:
   - A document written as JSON text keeps it, as `JSON.stringify` does.
   - In Elixir, `to_json` gives U+FFFD, one UTF-16 unit, so positions stay where they were.
 - **`default: undefined`.** An attribute whose spec's default is `undefined` is left out.
-  ProseMirror keeps its name with no value.
+  ProseMirror keeps its name with no value. A spec written as JSON or as Elixir terms, which
+  can't hold `undefined`, says so as ProseMirror's `Attribute` does: `"hasDefault": true` and no
+  `"default"`. With neither, the attribute is required.
 - **Spec properties.** A spec's properties that ProseMirror doesn't read are kept in
   `NodeSpec::extra` and `MarkSpec::extra`.
 
