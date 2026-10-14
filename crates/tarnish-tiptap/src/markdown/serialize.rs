@@ -127,10 +127,7 @@ impl MarkdownManager {
             Value::Array(nodes) => {
                 self.render_nodes_with_mark_boundaries(nodes, parent, separator, level)
             }
-            _ if js::truthy(value::get(Some(nodes), "type")?) => {
-                self.render_node(nodes, parent, index, level)
-            }
-            _ => Ok(String::new()),
+            _ => self.render_node_to_markdown(nodes, parent, index, level),
         }
     }
 
@@ -152,7 +149,8 @@ impl MarkdownManager {
         self.render_node(node, parent, index, level)
     }
 
-    /// `renderNodeToMarkdown`, for a node whose `type` the caller has read.
+    /// `renderNodeToMarkdown`, for a node whose `type` the caller has read, and found not to be
+    /// `text`.
     fn render_node(
         &self,
         node: &Value,
@@ -160,11 +158,7 @@ impl MarkdownManager {
         index: usize,
         level: usize,
     ) -> Result<String, Error> {
-        let kind = value::optional(Some(node), "type");
-        if kind.is_some_and(|kind| kind == "text") {
-            return self.encode_text_for_markdown(node, parent);
-        }
-        let Some(spec) = kind
+        let Some(spec) = value::optional(Some(node), "type")
             .and_then(Value::as_str)
             .and_then(|kind| self.handler_for_token(kind))
         else {
