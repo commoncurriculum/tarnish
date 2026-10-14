@@ -77,10 +77,31 @@ pub struct List {
 #[derive(Clone, Debug)]
 pub struct Table {
     pub header: Vec<Cell>,
+    /// Each column's alignment, as its delimiter's colons give it.
+    pub align: Vec<Option<Align>>,
     pub rows: Vec<Vec<Cell>>,
 }
 
-/// `Tokens.TableCell`, without the `text` its tokens are lexed from.
+/// A table column's alignment: `'left'`, `'right'` or `'center'`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Align {
+    Left,
+    Right,
+    Center,
+}
+
+impl Align {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Align::Left => "left",
+            Align::Right => "right",
+            Align::Center => "center",
+        }
+    }
+}
+
+/// `Tokens.TableCell`, without the `text` its tokens are lexed from, and its `header` and
+/// `align`, which its table has.
 #[derive(Clone, Debug)]
 pub struct Cell {
     pub tokens: Tokens,

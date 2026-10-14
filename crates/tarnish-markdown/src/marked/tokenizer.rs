@@ -8,7 +8,7 @@ use super::helpers::{find_closing_bracket, rtrim, split_cells};
 use super::lexer::Lexer;
 use super::matchers;
 use super::rules::{BLOCK, INLINE, OTHER};
-use super::{Cell, Def, Destination, Table, Token, TokenData};
+use super::{Align, Cell, Def, Destination, Table, Token, TokenData};
 use tarnish_js::Error;
 use tarnish_js::units::Units;
 use tarnish_js::utf16;
@@ -280,6 +280,20 @@ impl Lexer<'_> {
             // Header and align columns must be equal; rows can differ.
             return None;
         }
+        let align = aligns
+            .iter()
+            .map(|align| {
+                if OTHER.table_align_right.test(align) {
+                    Some(Align::Right)
+                } else if OTHER.table_align_center.test(align) {
+                    Some(Align::Center)
+                } else if OTHER.table_align_left.test(align) {
+                    Some(Align::Left)
+                } else {
+                    None
+                }
+            })
+            .collect();
         let raw = src.slice_of(cap.all());
         let header: Vec<Cell> = headers.into_iter().map(|text| self.cell(text)).collect();
         let columns = header.len();
@@ -293,7 +307,11 @@ impl Lexer<'_> {
             })
             .collect();
         Some(Token {
-            data: TokenData::Table(Box::new(Table { header, rows })),
+            data: TokenData::Table(Box::new(Table {
+                header,
+                align,
+                rows,
+            })),
             ..Token::new("table", raw)
         })
     }

@@ -304,6 +304,7 @@ function project(token) {
   if (token.type === "table") {
     const cell = cell => ({ tokens: cell.tokens.map(project) })
     out.header = token.header.map(cell)
+    out.align = token.align
     out.rows = token.rows.map(row => row.map(cell))
   }
   return out

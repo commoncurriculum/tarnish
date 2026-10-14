@@ -1,12 +1,12 @@
 //! A token as marked's JSON has it, as far as the lexer makes it: without the fields nothing
 //! after the lexer reads, `lang` and `codeBlockStyle` (code), `pre` (paragraph, html), `escaped`
-//! (text), `inLink` and `inRawBlock` (inline html), `listType` (list), and `align` and cells'
-//! `text` and `header` (table).
+//! (text), `inLink` and `inRawBlock` (inline html), `listType` (list), and cells' `text`,
+//! `header` and `align` (table).
 
 use tarnish_js::json::{Map, Value, json};
 use tarnish_js::{stack, utf16};
 
-use super::{Cell, Token, TokenData};
+use super::{Align, Cell, Token, TokenData};
 
 impl Token {
     /// The token's fields, its children's among them, as `JSON.stringify` writes marked's.
@@ -70,6 +70,12 @@ impl Token {
                     Value::Array(cells.iter().map(cell).collect())
                 };
                 set("header", cells(&table.header));
+                let align =
+                    |align: &Option<Align>| align.map_or(Value::Null, |a| json!(a.as_str()));
+                set(
+                    "align",
+                    Value::Array(table.align.iter().map(align).collect()),
+                );
                 set(
                     "rows",
                     Value::Array(table.rows.iter().map(|row| cells(row)).collect()),
