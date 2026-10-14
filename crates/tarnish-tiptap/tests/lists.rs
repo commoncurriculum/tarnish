@@ -4,6 +4,7 @@
 //! or fail with the same error, and lists nested far deeper than a small stack could recurse
 //! through convert as the recorded ones fold to.
 
+#[allow(dead_code)]
 mod own;
 
 use own::{Converter, input_of, named};

@@ -4,14 +4,16 @@
 
 mod own;
 
-use own::{Converter, input_of, named};
+use own::{Converter, OPTIONED, input_of, named};
 use tarnish_fixtures::{read, records, same, version};
 
 /// Holds each record of `section` to what its conversion makes of the record's input, with the
 /// extensions the record names.
 fn check(section: &str) {
     let fixtures = read("tiptap");
-    let converters = [None, Some("colors"), Some("code")].map(|name| (name, Converter::new(name)));
+    let names = [None, Some("colors"), Some("code")];
+    let names = names.into_iter().chain(OPTIONED.map(Some));
+    let converters: Vec<_> = names.map(|name| (name, Converter::new(name))).collect();
     let mut failures = Vec::new();
     for mut record in records(&fixtures, section).to_vec() {
         let (_, converter) = converters

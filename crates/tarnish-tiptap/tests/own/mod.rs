@@ -1,6 +1,7 @@
 //! The extensions `harness/record-tiptap.mjs` gives the `MarkdownManager` and `getSchema`: Tiptap's
-//! own, and the others a record names, and the conversions it records with them. [`lists`] has
-//! the configurations `harness/record-tiptap-lists.mjs` names.
+//! own, with their options or with an option set, and the others a record names, and the
+//! conversions it records with them. [`lists`] has the configurations
+//! `harness/record-tiptap-lists.mjs` names.
 
 pub mod lists;
 
@@ -27,18 +28,21 @@ use tarnish_tiptap::extensions::text_style::{ColorOptions, TextStyleOptions, col
 use tarnish_tiptap::extensions::underline::{UnderlineOptions, underline};
 use tarnish_tiptap::markdown::MarkdownManager;
 use tarnish_tiptap::{
-    DomSpec, Extension, ExtensionAttribute, MarkExtension, NodeExtension, ParseHtml, TiptapSchema,
-    get_schema, html,
+    DomSpec, Extension, ExtensionAttribute, GlobalAttributes, GlobalTypes, MarkExtension,
+    NodeExtension, ParseHtml, PlainExtension, TiptapSchema, get_schema, html,
 };
 
-/// Tiptap's own extensions, but Highlight.
-fn own_but_highlight() -> Vec<Extension> {
+/// Tiptap's own extensions, but Highlight, with Heading's and Image's options.
+fn own_but_highlight(
+    heading_options: HeadingOptions,
+    image_options: ImageOptions,
+) -> Vec<Extension> {
     vec![
         document().into(),
         paragraph(ParagraphOptions::default()).into(),
         text().into(),
-        heading(HeadingOptions::default()).into(),
-        image(ImageOptions::default()).into(),
+        heading(heading_options).into(),
+        image(image_options).into(),
         hard_break(HardBreakOptions::default()).into(),
         bold(BoldOptions::default()).into(),
         italic(ItalicOptions::default()).into(),
@@ -49,24 +53,237 @@ fn own_but_highlight() -> Vec<Extension> {
     ]
 }
 
-pub fn extensions() -> Vec<Extension> {
-    let mut own = own_but_highlight();
-    own.push(highlight(HighlightOptions::default()).into());
+/// Tiptap's own extensions, with Heading's, Image's and Highlight's options.
+fn own(
+    heading_options: HeadingOptions,
+    image_options: ImageOptions,
+    highlight_options: HighlightOptions,
+) -> Vec<Extension> {
+    let mut own = own_but_highlight(heading_options, image_options);
+    own.push(highlight(highlight_options).into());
     own.push(text_style(TextStyleOptions::default()).into());
     own
 }
 
+pub fn extensions() -> Vec<Extension> {
+    own(
+        HeadingOptions::default(),
+        ImageOptions::default(),
+        HighlightOptions::default(),
+    )
+}
+
 /// Tiptap's own extensions, Highlight with its colors and after TextStyle, and Color.
 fn colors() -> Vec<Extension> {
-    let mut colors = own_but_highlight();
+    let mut colors = own_but_highlight(HeadingOptions::default(), ImageOptions::default());
     colors.push(text_style(TextStyleOptions::default()).into());
-    let highlight_options = HighlightOptions {
-        multicolor: true,
-        ..HighlightOptions::default()
-    };
-    colors.push(highlight(highlight_options).into());
+    colors.push(
+        highlight(HighlightOptions {
+            multicolor: true,
+            ..HighlightOptions::default()
+        })
+        .into(),
+    );
     colors.push(color(ColorOptions::default()).into());
     colors
+}
+
+/// The configurations of Tiptap's own extensions with an option set, which record the inputs of
+/// Tiptap's own.
+pub const OPTIONED: [&str; 7] = [
+    "htmlAttributes",
+    "htmlAttributeValues",
+    "levels",
+    "noLevels",
+    "multicolor",
+    "inline",
+    "base64",
+];
+
+/// The extensions of a configuration of [`OPTIONED`].
+fn optioned(name: &str) -> Option<Vec<Extension>> {
+    let heading_levels = |levels| HeadingOptions {
+        levels,
+        ..HeadingOptions::default()
+    };
+    Some(match name {
+        "htmlAttributes" => configured(
+            strings(),
+            &[
+                (
+                    "image",
+                    object!({"alt": "option", "title": "option", "width": 5}),
+                ),
+                ("highlight", object!({"data-color": "option"})),
+            ],
+        ),
+        "htmlAttributeValues" => configured(
+            others(),
+            &[
+                ("subscript", object!({"style": 5})),
+                ("superscript", object!({"class": 5})),
+            ],
+        ),
+        "levels" => own(
+            heading_levels(&[4, 2]),
+            ImageOptions::default(),
+            HighlightOptions::default(),
+        ),
+        "noLevels" => own(
+            heading_levels(&[]),
+            ImageOptions::default(),
+            HighlightOptions::default(),
+        ),
+        "multicolor" => own(
+            HeadingOptions::default(),
+            ImageOptions::default(),
+            HighlightOptions {
+                multicolor: true,
+                ..HighlightOptions::default()
+            },
+        ),
+        "inline" => own(
+            HeadingOptions::default(),
+            ImageOptions {
+                inline: true,
+                ..ImageOptions::default()
+            },
+            HighlightOptions::default(),
+        ),
+        "base64" => own(
+            HeadingOptions::default(),
+            ImageOptions {
+                allow_base64: true,
+                ..ImageOptions::default()
+            },
+            HighlightOptions::default(),
+        ),
+        _ => return None,
+    })
+}
+
+/// HTMLAttributes of strings, which Bold's JSX leaves `children` out of, `undefined` as `null`.
+fn strings() -> Map {
+    object!({
+        "class": "option more",
+        "style": "color: blue; font-size: 2px",
+        "data-given": "option",
+        "data-null": null,
+        "data-undefined": null,
+        "data-number": 1,
+        "children": "child",
+    })
+}
+
+/// HTMLAttributes of values other than strings, `undefined` as `null`.
+fn others() -> Map {
+    object!({
+        "class": 0,
+        "style": null,
+        "data-given": null,
+        "data-true": true,
+        "data-object": {},
+        "data-array": [1, "a", null],
+        "data-empty": "",
+    })
+}
+
+/// Tiptap's own extensions, each with `attributes` and what `extra` adds for it, Highlight with
+/// its colors, and [`given`].
+fn configured(attributes: Map, extra: &[(&str, Map)]) -> Vec<Extension> {
+    let html = |name: &str| {
+        let mut html = attributes.clone();
+        if let Some((_, added)) = extra.iter().find(|(extended, _)| *extended == name) {
+            html.extend(added.clone());
+        }
+        html
+    };
+    vec![
+        document().into(),
+        paragraph(ParagraphOptions {
+            html_attributes: html("paragraph"),
+        })
+        .into(),
+        text().into(),
+        heading(HeadingOptions {
+            html_attributes: html("heading"),
+            ..HeadingOptions::default()
+        })
+        .into(),
+        image(ImageOptions {
+            html_attributes: html("image"),
+            ..ImageOptions::default()
+        })
+        .into(),
+        hard_break(HardBreakOptions {
+            html_attributes: html("hardBreak"),
+        })
+        .into(),
+        bold(BoldOptions {
+            html_attributes: html("bold"),
+        })
+        .into(),
+        italic(ItalicOptions {
+            html_attributes: html("italic"),
+        })
+        .into(),
+        strike(StrikeOptions {
+            html_attributes: html("strike"),
+        })
+        .into(),
+        underline(UnderlineOptions {
+            html_attributes: html("underline"),
+        })
+        .into(),
+        subscript(SubscriptOptions {
+            html_attributes: html("subscript"),
+        })
+        .into(),
+        superscript(SuperscriptOptions {
+            html_attributes: html("superscript"),
+        })
+        .into(),
+        highlight(HighlightOptions {
+            multicolor: true,
+            html_attributes: html("highlight"),
+        })
+        .into(),
+        text_style(TextStyleOptions::default()).into(),
+        given().into(),
+    ]
+}
+
+/// An application's attribute on each type with HTMLAttributes, which renders a class, a style and
+/// an attribute of the options'.
+fn given() -> PlainExtension {
+    let given =
+        ExtensionAttribute::new("given", Value::Null).render_html(|attributes, rendered| {
+            match attributes.get("given") {
+                Some(given) if given.truthy() => {
+                    rendered.merge("class", given)?;
+                    rendered.merge("style", format!("color: {}", given.to_js_string()?))?;
+                    rendered.merge("data-given", given)
+                }
+                _ => Ok(()),
+            }
+        });
+    let types = &[
+        "paragraph",
+        "heading",
+        "image",
+        "hardBreak",
+        "bold",
+        "italic",
+        "strike",
+        "underline",
+        "subscript",
+        "superscript",
+        "highlight",
+    ];
+    PlainExtension::create("given").add_global_attributes(vec![GlobalAttributes {
+        types: GlobalTypes::Named(types),
+        attributes: vec![given],
+    }])
 }
 
 /// An application's code mark and code block, whose text stays as it is, and a figure whose
@@ -123,9 +340,12 @@ impl Converter {
             None => (self::extensions(), None),
             Some("colors") => (colors(), None),
             Some("code") => (code(), None),
-            Some(other) => {
-                lists::configuration(other).unwrap_or_else(|| panic!("no extensions {other}"))
-            }
+            Some(other) => match optioned(other) {
+                Some(extensions) => (extensions, None),
+                None => {
+                    lists::configuration(other).unwrap_or_else(|| panic!("no extensions {other}"))
+                }
+            },
         };
         let converter = Converter::of(&extensions);
         match indentation {
