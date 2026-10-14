@@ -71,10 +71,7 @@ pub fn twitch(options: TwitchOptions) -> NodeExtension {
                 allow_fullscreen: options.allow_fullscreen,
                 autoplay: or_option("autoplay", json!(options.autoplay)),
                 muted: or_option("muted", json!(options.muted)),
-                time: or_option(
-                    "time",
-                    options.time.clone().map_or(Value::Null, Value::String),
-                ),
+                time: or_option("time", options.time.clone().into()),
                 parent: &options.parent,
             };
             let Some(embed_url) = embed_url_from_twitch_url(value("src").as_ref(), &embed)? else {

@@ -59,7 +59,7 @@ impl Token {
             TokenData::List(list) => {
                 let start = list.start.filter(|start| start.is_finite());
                 set("ordered", json!(list.ordered));
-                set("start", start.map_or(Value::Null, tarnish_js::number));
+                set("start", Value::from(start));
                 set("loose", json!(list.loose));
                 set("items", tokens(&list.items));
             }
@@ -69,7 +69,7 @@ impl Token {
                 loose,
             } => {
                 set("task", json!(task));
-                set("checked", checked.map_or(Value::Null, Value::Bool));
+                set("checked", Value::from(*checked));
                 set("loose", json!(loose));
             }
             TokenData::Table(table) => {

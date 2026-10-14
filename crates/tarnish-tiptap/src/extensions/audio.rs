@@ -77,17 +77,15 @@ pub fn audio(options: AudioOptions) -> NodeExtension {
         .render_html(move |_, mut html| {
             let src = html.get("src").map(AttrValue::to_value);
             let src = sanitize_audio_src(src.as_ref(), options.allow_base64)?;
-            html.set("src", src.map_or(Value::Null, Value::String));
-            let optional =
-                |value: &Option<String>| value.clone().map_or(Value::Null, Value::String);
+            html.set("src", Value::from(src));
             let defaults = [
                 ("controls", json!(options.controls)),
                 ("autoplay", json!(options.autoplay)),
                 ("loop", json!(options.r#loop)),
                 ("muted", json!(options.muted)),
                 ("preload", options.preload.clone()),
-                ("controlslist", optional(&options.controlslist)),
-                ("crossorigin", optional(&options.crossorigin)),
+                ("controlslist", options.controlslist.clone().into()),
+                ("crossorigin", options.crossorigin.clone().into()),
                 (
                     "disableremoteplayback",
                     json!(options.disable_remote_playback),

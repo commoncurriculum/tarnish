@@ -182,6 +182,12 @@ impl From<Map> for Value {
     }
 }
 
+impl<T: Into<Value>> From<Option<T>> for Value {
+    fn from(value: Option<T>) -> Value {
+        value.map_or(Value::Null, Into::into)
+    }
+}
+
 impl From<Vec<Value>> for Value {
     fn from(items: Vec<Value>) -> Value {
         Value::Array(items)

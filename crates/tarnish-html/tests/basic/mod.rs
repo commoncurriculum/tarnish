@@ -39,7 +39,7 @@ fn clearing(style: &str, mark_type: &'static str) -> ParseRule<HtmlNode> {
 
 /// `dom.getAttribute(name)`, `null` when there is none.
 fn attribute(dom: &HtmlNode, name: &str) -> Value {
-    dom.attribute(name).map_or(Value::Null, Value::String)
+    Value::from(dom.attribute(name))
 }
 
 fn attrs(entries: impl IntoIterator<Item = (&'static str, Value)>) -> GetAttrsResult {

@@ -87,7 +87,7 @@ pub fn youtube(options: YoutubeOptions) -> NodeExtension {
             let start = start.map_or(json!(0), AttrValue::to_value);
             let src = html.get("src").map(AttrValue::to_value);
             let embed_url = embed_url_from_youtube_url(src.as_ref(), &options, &start)?;
-            html.set("src", embed_url.map_or(Value::Null, Value::String));
+            html.set("src", Value::from(embed_url));
             let configured = SpecAttrs::from(&options.html_attributes);
             let iframe = merge_attributes(configured, iframe_options(&options))?;
             Ok(DomSpec::element(
@@ -105,28 +105,30 @@ pub fn youtube(options: YoutubeOptions) -> NodeExtension {
 
 /// The options the iframe is given ahead of the node's attributes.
 fn iframe_options<'a>(options: &YoutubeOptions) -> SpecAttrs<'a> {
-    let optional = |value: &Option<String>| value.clone().map_or(Value::Null, Value::String);
     let entries = [
         ("width", options.width.clone()),
         ("height", options.height.clone()),
         ("allowfullscreen", json!(options.allow_fullscreen)),
         ("autoplay", json!(options.autoplay)),
-        ("ccLanguage", optional(&options.cc_language)),
-        (
-            "ccLoadPolicy",
-            options.cc_load_policy.map_or(Value::Null, Value::Bool),
-        ),
+        ("ccLanguage", options.cc_language.clone().into()),
+        ("ccLoadPolicy", options.cc_load_policy.into()),
         ("disableKBcontrols", json!(options.disable_kb_controls)),
         ("enableIFrameApi", json!(options.enable_iframe_api)),
         ("endTime", js::number(options.end_time)),
-        ("interfaceLanguage", optional(&options.interface_language)),
+        (
+            "interfaceLanguage",
+            options.interface_language.clone().into(),
+        ),
         ("ivLoadPolicy", js::number(options.iv_load_policy)),
         ("loop", json!(options.r#loop)),
         ("modestBranding", json!(options.modest_branding)),
         ("origin", json!(options.origin.clone())),
         ("playlist", json!(options.playlist.clone())),
-        ("progressBarColor", optional(&options.progress_bar_color)),
-        ("rel", options.rel.map_or(Value::Null, js::number)),
+        (
+            "progressBarColor",
+            options.progress_bar_color.clone().into(),
+        ),
+        ("rel", options.rel.into()),
     ];
     SpecAttrs::from(entries.map(|(name, value)| (name, value.into())))
 }
