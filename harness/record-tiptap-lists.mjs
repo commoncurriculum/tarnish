@@ -424,8 +424,27 @@ const listHTML = [
   '<ul data-type="taskList"><li data-type="taskItem" data-checked="true"><label><input type="checkbox"></label><div></div></li></ul>',
   ...deepHTML,
 ]
+// Lines of list markers, indentation, blocks and text, drawn by a seeded generator, for the
+// forms no hand-picked input combines.
+let seed = 7
+const random = () => {
+  seed = (seed * 48271) % 2147483647
+  return seed / 2147483647
+}
+const pick = items => items[Math.floor(random() * items.length)]
+const repeated = (most, make) => Array.from({ length: 1 + Math.floor(random() * most) }, make)
+const pieces = [
+  ["- ", "* ", "+ ", "1. ", "2) ", "a. ", "iv. ", "- [ ] ", "- [x] ", "* [X] ", "1. [ ] "],
+  ["", "", " ", "  ", "   ", "    ", "\t", "\xa0"],
+  ["a", "b c", "**b**", "> q", "# h", "```", "---", "$$", "1.", "- ", "[ ] d", "<b>x</b>"],
+]
+const generatedMarkdown = Array.from({ length: 300 }, () =>
+  repeated(5, () => pick(pieces[1]) + repeated(2, () => pick(pieces[0])).join("") + pick(pieces[2])).join(
+    pick(["\n", "\n", "\n\n"]),
+  ),
+)
 const parsesMarkdown = [
-  ...named(["lists"], [...fixture("marked").lexed.map(record => record.input), ...listMarkdown]),
+  ...named(["lists"], [...fixture("marked").lexed.map(record => record.input), ...listMarkdown, ...generatedMarkdown]),
   ...named(["nested", "bullets", "ordered", "tasks", "paragraphs", "flat"], listMarkdown),
 ].map(([name, markdown]) => ({
   extensions: name,
@@ -434,7 +453,7 @@ const parsesMarkdown = [
 }))
 
 const ordered = (start, type) => doc(numbers({ start, type }, item(p("a")), item(p("b"))))
-const starts = [1, 0, -2, 3, 26, 27, 702, 703, 3999, 1.5, "3", "x", null, true]
+const starts = [1, 0, -2, 3, 26, 27, 702, 703, 3999, 1.5, "3", "x", null, true, [], [5], {}]
 const types = [null, "1", "a", "A", "i", "I", "x", 1, ""]
 const docs = [
   doc(bullets(item(p("a")), item(p("b")))),
@@ -479,6 +498,19 @@ const docs = [
   doc(bullets(task(true, p("a")))),
   doc(numbers({ start: 5 }, task(true, p("a")), item(p("b")))),
   doc(bullets(paragraph(text("a")), p("b"))),
+  // Lists and items whose content or attributes aren't what a schema gives them.
+  doc({ type: "bulletList", content: "x" }),
+  doc({ type: "bulletList", content: item(p("a")) }),
+  doc(bullets({ type: "listItem", content: "x" })),
+  doc(bullets({ type: "listItem", content: { type: "paragraph" } })),
+  doc({ type: "orderedList", attrs: "x", content: [item(p("a"))] }),
+  doc({ type: "orderedList", attrs: [], content: [item(p("a"))] }),
+  doc({ type: "orderedList", attrs: { start: 2, type: "i" }, content: [item(p("a")), item(p("b")), item(p("c"))] }),
+  doc(numbers({ start: 10000000, type: "i" }, item(p("a")))),
+  doc(numbers({ start: 1e21 }, item(p("a")))),
+  doc(tasks({ type: "taskItem", attrs: "x", content: [p("a")] })),
+  doc(bullets(item(paragraph(text("a ", { type: "bold" })), paragraph(text("b", { type: "bold" }))))),
+  doc(bullets(item(p("a")), item(p("b"), bullets(item(p("c")), item(p("d"))), p("e")), item(p("f")))),
 ]
 const orderedDocs = starts.flatMap(start => types.map(type => ordered(start, type)))
 // Text whose marks are of the list types, which the manager renders as it does marks.
@@ -543,12 +575,15 @@ const parsesHTML = unique([...htmlInputs, ...roundTrips].map(entry => JSON.strin
     }),
   }))
 
+// The parses whose documents a configuration serializes: `lists` serializes those of its Markdown
+// and its HTML, and the others those of their HTML, whose Markdown makes much what `lists`' does.
+const serialized = name => (name === "lists" ? [...parsesMarkdown, ...parsesHTML] : parsesHTML)
 const serializesMarkdown = names
-  .flatMap(name => documents(name, docsFor(name), [...parsesMarkdown, ...parsesHTML]))
+  .flatMap(name => documents(name, docsFor(name), serialized(name)))
   .map(([name, doc]) => ({ extensions: name, doc, ...outcome(() => ({ markdown: converters[name].manager.serialize(doc) })) }))
 
 const serializesHTML = schemas
-  .flatMap(name => documents(name, docsFor(name), [...parsesMarkdown, ...parsesHTML]))
+  .flatMap(name => documents(name, docsFor(name), serialized(name)))
   .map(([name, doc]) => ({ extensions: name, doc, ...serializeHTML(name, doc) }))
 
 // Each configuration's node and mark types in the schema's order, with the fields of their specs
