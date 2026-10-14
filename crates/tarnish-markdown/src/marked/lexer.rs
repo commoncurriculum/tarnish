@@ -79,7 +79,7 @@ impl<'m> Lexer<'m> {
         'blocks: while !src.is_empty() {
             self.deadline.turn(src.len())?;
             for extension in &marked.block {
-                if let Some(token) = (extension.tokenizer)(self, &src, tokens)? {
+                if let Some(token) = stack::grow(|| (extension.tokenizer)(self, &src, tokens))? {
                     src = src.substring(token.raw.len());
                     tokens.push(token);
                     continue 'blocks;
@@ -485,6 +485,13 @@ fn mask(masked: &mut Vec<u16>, start: usize, end: usize) {
 fn fill(tokens: &mut [Token], lexed: &mut [Option<Vec<Token>>]) {
     for token in tokens {
         if let Some(children) = token.tokens.as_mut() {
+            fill_tokens(children, lexed);
+        }
+        for (_, children) in token
+            .child_tokens
+            .iter_mut()
+            .flat_map(|fields| fields.iter_mut())
+        {
             fill_tokens(children, lexed);
         }
         match &mut token.data {

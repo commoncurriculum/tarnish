@@ -2,10 +2,13 @@
 //! `harness/record-marked.mjs` records: tarnish-markdown's lexer must make the same tokens, or
 //! fail with the same error.
 
+use std::sync::LazyLock;
+
 use tarnish_fixtures::{outcome, read, records, same, version};
 use tarnish_js::json::{Value, json};
+use tarnish_js::regexp::RegExp;
 use tarnish_js::utf16;
-use tarnish_markdown::marked::{Lexer, Marked, Token};
+use tarnish_markdown::marked::{BlockExtension, Lexer, Marked, Token, Tokens};
 use tarnish_markdown::marked_more_lists::more_lists;
 
 fn lexed(marked: &Marked, input: &str) -> Value {
@@ -33,14 +36,60 @@ fn ports_the_installed_marked() {
 /// The inputs of each kind of block and inline, and lists of each marker marked-more-lists reads.
 #[test]
 fn tokens_match_marked() {
-    let marked = Marked::new(more_lists());
+    check(&Marked::new(more_lists()), &["lexed", "markers"]);
+}
+
+static CONTAINER: LazyLock<RegExp> =
+    LazyLock::new(|| RegExp::new(r"^:::([^\n]*)\n([\s\S]*?)\n:::(?:\n|$)", ""));
+static LINE: LazyLock<RegExp> = LazyLock::new(|| RegExp::new(r"^:::x[^\n]*(?:\n|$)", ""));
+
+/// `harness/record-marked.mjs`'s two block extensions: containers, whose start ends paragraphs,
+/// and `:::x` lines, which are tried first.
+#[test]
+fn block_extensions_lex_as_in_marked() {
+    let mut marked = Marked::new(more_lists());
+    marked.use_block_extension(BlockExtension {
+        start: Some(Box::new(|src| utf16::index_of_str(src, ":::", 0))),
+        tokenizer: Box::new(|lexer, src, _| {
+            let Some(cap) = CONTAINER.exec(src) else {
+                return Ok(None);
+            };
+            let name = lexer.inline_tokens(&src.slice_of(cap.get(1).unwrap_or_default()))?;
+            let mut body = Vec::new();
+            let body_src = src.slice_of(cap.get(2).unwrap_or_default());
+            lexer.block_tokens(&body_src, &mut body, false)?;
+            Ok(Some(Token {
+                child_tokens: Some(Box::new(vec![
+                    ("name", Tokens::from(name)),
+                    ("body", Tokens::from(body)),
+                ])),
+                ..Token::new("container", src.slice_of(cap.all()))
+            }))
+        }),
+    });
+    marked.use_block_extension(BlockExtension {
+        start: None,
+        tokenizer: Box::new(|_, src, _| {
+            Ok(LINE
+                .exec(src)
+                .map(|cap| Token::new("line", src.slice_of(cap.all()))))
+        }),
+    });
+    check(&marked, &["extended"]);
+}
+
+/// Holds each record of the sections to what `marked` lexes of its input.
+fn check(marked: &Marked, sections: &[&str]) {
     let fixtures = read("marked");
     let mut failures = Vec::new();
-    let sections = ["lexed", "markers"].map(|section| records(&fixtures, section));
+    let sections: Vec<&[Value]> = sections
+        .iter()
+        .map(|section| records(&fixtures, section))
+        .collect();
     for mut record in sections.concat() {
         let input = record.as_object_mut().expect("a record").remove("input");
         let input = input.as_ref().and_then(Value::as_str).expect("an input");
-        let actual = lexed(&marked, input);
+        let actual = lexed(marked, input);
         if !same(&record, &actual) {
             failures.push(format!(
                 "{input:?}\n  marked: {record}\n  tarnish-markdown: {actual}"

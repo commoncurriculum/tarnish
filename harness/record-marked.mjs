@@ -307,8 +307,60 @@ function project(token) {
     out.align = token.align
     out.rows = token.rows.map(row => row.map(cell))
   }
+  if (token.type === "container") {
+    out.name = token.name.map(project)
+    out.body = token.body.map(project)
+  }
   return out
 }
 
-const lex = input => ({ input, ...outcome(() => ({ tokens: marked.lexer(input).map(project) })) })
-writeFixture("marked", { lexed: inputs.map(lex), markers: listed.map(lex) })
+// Two block extensions, which the lexer tries before its own tokenizers, the one added last
+// first. A container is `:::` lines around blocks, the first naming it, whose name's inline tokens
+// and blocks its token holds in fields of their own; it may start wherever `:::` is, which ends a
+// paragraph there. A `:::x` line, which has no start, is a token of its own.
+const container = {
+  name: "container",
+  level: "block",
+  start: src => src.indexOf(":::"),
+  tokenizer(src) {
+    const cap = /^:::([^\n]*)\n([\s\S]*?)\n:::(?:\n|$)/.exec(src)
+    if (!cap) return undefined
+    return { type: "container", raw: cap[0], name: this.lexer.inlineTokens(cap[1]), body: this.lexer.blockTokens(cap[2]) }
+  },
+}
+const line = {
+  name: "line",
+  level: "block",
+  tokenizer(src) {
+    const cap = /^:::x[^\n]*(?:\n|$)/.exec(src)
+    return cap ? { type: "line", raw: cap[0] } : undefined
+  },
+}
+const extended = new Marked()
+extended.use(moreLists())
+extended.use({ extensions: [container, line] })
+const extendedInputs = [
+  ":::note\nbody\n:::",
+  ":::*em* name\n- a\n- b\n:::",
+  ":::\n\n:::",
+  ":::\nunclosed",
+  "a :::\nb",
+  "a\n:::y\nb\n:::\nc",
+  "para ::: and more ::: end",
+  "- a\n  :::t\n  b\n  :::\n  c",
+  "> :::q\n> body\n> :::",
+  ":::x one line",
+  ":::x\nb\n:::\nc",
+  "    :::\n    code\n    :::",
+  "[ref]: http://x\n\n:::[ref]\n[ref]\n:::",
+  ":::[ref]\n[ref]\n:::\n\n[ref]: http://x",
+  "a\n\n:::t\n**b**\n:::\n\n# c",
+  ":::a\n:::b\nc\n:::\n:::",
+]
+
+const lexer = marked => input => ({ input, ...outcome(() => ({ tokens: marked.lexer(input).map(project) })) })
+writeFixture("marked", {
+  lexed: inputs.map(lexer(marked)),
+  markers: listed.map(lexer(marked)),
+  extended: extendedInputs.map(lexer(extended)),
+})

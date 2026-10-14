@@ -19,7 +19,13 @@ pub struct Token {
     pub data: TokenData,
     /// The fields an extension's tokenizer puts on its token beyond marked's, which few do.
     pub extra: Option<Box<Map>>,
+    /// The fields of an extension's token that hold tokens, besides `tokens`, which the lexer
+    /// fills as it fills `tokens`.
+    pub child_tokens: Option<Box<ChildTokens>>,
 }
+
+/// An extension token's fields of tokens, by name, in the order the token has them.
+pub type ChildTokens = Vec<(&'static str, Tokens)>;
 
 #[derive(Clone, Debug, Default)]
 pub enum TokenData {
@@ -208,6 +214,13 @@ impl Token {
     /// A field an extension's tokenizer put on the token.
     pub fn extra(&self, key: &str) -> Option<&Value> {
         self.extra.as_deref().and_then(|extra| extra.get(key))
+    }
+
+    /// A field of tokens an extension's tokenizer put on the token.
+    pub fn child_tokens(&self, key: &str) -> Option<&[Token]> {
+        let fields = self.child_tokens.as_deref()?;
+        let (_, tokens) = fields.iter().find(|(field, _)| *field == key)?;
+        Some(tokens)
     }
 
     /// `token.depth`.

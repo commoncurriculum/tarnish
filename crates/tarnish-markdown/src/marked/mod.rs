@@ -12,7 +12,9 @@ mod tokens;
 
 pub use lexer::Lexer;
 pub(crate) use matchers::{hr, indent, run};
-pub use tokens::{Align, Cell, Def, Destination, List, Table, Token, TokenData, Tokens};
+pub use tokens::{
+    Align, Cell, ChildTokens, Def, Destination, List, Table, Token, TokenData, Tokens,
+};
 
 use tarnish_js::units::Units;
 use tarnish_js::{Error, random, utf16};

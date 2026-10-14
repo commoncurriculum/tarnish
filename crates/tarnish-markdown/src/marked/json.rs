@@ -31,6 +31,9 @@ impl Token {
         if let Some(children) = &self.tokens {
             set("tokens", tokens(children));
         }
+        for (key, children) in self.child_tokens.iter().flat_map(|fields| fields.iter()) {
+            set(key, tokens(children));
+        }
         match &self.data {
             TokenData::None => {}
             TokenData::Heading { depth } => {
