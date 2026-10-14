@@ -87,6 +87,29 @@ impl ExtensionAttribute {
         self.parse_html = Some(Arc::new(parse));
         self
     }
+
+    /// `parseHTML: element => element.getAttribute(html)`, and `renderHTML: attributes =>
+    /// ({ [html]: attributes[name] })`.
+    pub fn html_attribute(self, html: impl Into<Cow<'static, str>>) -> Self {
+        self.in_html(html.into(), false)
+    }
+
+    /// [`html_attribute`](Self::html_attribute), rendered only where the value is truthy.
+    pub fn html_attribute_when_truthy(self, html: impl Into<Cow<'static, str>>) -> Self {
+        self.in_html(html.into(), true)
+    }
+
+    fn in_html(self, html: Cow<'static, str>, when_truthy: bool) -> Self {
+        let name = self.name;
+        let parsed = html.clone();
+        self.parse_html(move |element| element.attribute(&parsed).map(Value::String))
+            .render_html(move |attributes, rendered| match attributes.get(name) {
+                Some(value) if value.truthy() || !when_truthy => {
+                    rendered.merge(html.clone(), value)
+                }
+                _ => Ok(()),
+            })
+    }
 }
 
 /// `default: this.options[name]` of an option that is `undefined` where it's `None`.

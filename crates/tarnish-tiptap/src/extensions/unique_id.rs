@@ -66,14 +66,8 @@ fn uuid_v4() -> String {
 
 pub fn unique_id(options: UniqueIdOptions) -> PlainExtension {
     let name = options.attribute_name;
-    let data = format!("data-{name}");
-    let rendered = data.clone();
     let attribute = ExtensionAttribute::new(name, Value::Null)
-        .parse_html(move |element| element.attribute(&data).map(Value::String))
-        .render_html(move |attributes, html| match attributes.get(name) {
-            Some(id) if id.truthy() => html.merge(rendered.clone(), id),
-            _ => Ok(()),
-        });
+        .html_attribute_when_truthy(format!("data-{name}"));
     let types = match options.types {
         UniqueIdTypes::Named(names) => GlobalTypes::Named(names),
         UniqueIdTypes::All => GlobalTypes::NodesBut(&["doc", "text"]),

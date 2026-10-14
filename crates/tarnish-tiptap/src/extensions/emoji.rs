@@ -35,11 +35,7 @@ pub fn emoji(options: EmojiOptions) -> NodeExtension {
         .group("inline")
         .selectable(false)
         .add_attributes(vec![
-            ExtensionAttribute::new("name", Value::Null)
-                .parse_html(|element| element.attribute("data-name").map(Value::String))
-                .render_html(|attributes, rendered| {
-                    rendered.merge("data-name", attributes.get("name").expect("its attribute"))
-                }),
+            ExtensionAttribute::new("name", Value::Null).html_attribute("data-name"),
         ])
         .parse_html([ParseHtml::tag(r#"span[data-type="emoji"]"#)])
         .render_html(move |node, html| {

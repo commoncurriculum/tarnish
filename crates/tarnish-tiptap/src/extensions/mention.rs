@@ -105,18 +105,10 @@ pub fn mention(options: MentionOptions) -> NodeExtension {
         .selectable(false)
         .atom()
         .add_attributes(vec![
-            data_attribute("id", Value::Null, "data-id"),
-            data_attribute("label", Value::Null, "data-label"),
+            ExtensionAttribute::new("id", Value::Null).html_attribute_when_truthy("data-id"),
+            ExtensionAttribute::new("label", Value::Null).html_attribute_when_truthy("data-label"),
             ExtensionAttribute::new("mentionSuggestionChar", json!("@"))
-                .parse_html(|element| {
-                    element
-                        .attribute("data-mention-suggestion-char")
-                        .map(Value::String)
-                })
-                .render_html(|attributes, rendered| {
-                    let char = attributes.get("mentionSuggestionChar");
-                    rendered.merge("data-mention-suggestion-char", char.expect("its attribute"))
-                }),
+                .html_attribute("data-mention-suggestion-char"),
         ])
         .parse_html([ParseHtml::tag(r#"span[data-type="mention"]"#)])
         .render_html(move |node, html| {
@@ -149,16 +141,6 @@ pub fn mention(options: MentionOptions) -> NodeExtension {
 
 fn text<'a>(text: String) -> DomSpec<'a> {
     DomSpec::Text(Cow::Owned(text))
-}
-
-/// An attribute read from the element's attribute `data`, which it renders as when it's truthy.
-fn data_attribute(name: &'static str, default: Value, data: &'static str) -> ExtensionAttribute {
-    ExtensionAttribute::new(name, default)
-        .parse_html(move |element| element.attribute(data).map(Value::String))
-        .render_html(move |attributes, rendered| match attributes.get(name) {
-            Some(value) if value.truthy() => rendered.merge(data, value),
-            _ => Ok(()),
-        })
 }
 
 static TOKEN: LazyLock<RegExp> = LazyLock::new(|| RegExp::new(r"^\[@\s*([^\]]*)\]", ""));

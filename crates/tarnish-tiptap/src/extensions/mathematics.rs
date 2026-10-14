@@ -25,14 +25,7 @@ pub fn mathematics() -> Vec<Extension> {
 }
 
 fn latex() -> ExtensionAttribute {
-    ExtensionAttribute::new("latex", json!(""))
-        .parse_html(|element| element.attribute("data-latex").map(Value::String))
-        .render_html(|attributes, rendered| {
-            rendered.merge(
-                "data-latex",
-                attributes.get("latex").expect("its attribute"),
-            )
-        })
+    ExtensionAttribute::new("latex", json!("")).html_attribute("data-latex")
 }
 
 pub fn inline_math() -> NodeExtension {
