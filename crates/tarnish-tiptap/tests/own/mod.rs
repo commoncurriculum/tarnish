@@ -117,10 +117,20 @@ impl Converter {
             Some("code") => code(),
             Some(other) => panic!("no extensions {other}"),
         };
+        Converter::of(&extensions)
+    }
+
+    /// The converter of `extensions`.
+    pub fn of(extensions: &[Extension]) -> Converter {
         Converter {
-            schema: get_schema(&extensions).expect("the schema"),
-            markdown: MarkdownManager::new(&extensions, Marked::new(more_lists())),
+            schema: get_schema(extensions).expect("the schema"),
+            markdown: MarkdownManager::new(extensions, Marked::new(more_lists())),
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn schema(&self) -> &TiptapSchema {
+        &self.schema
     }
 
     /// What the conversion a `section` records makes of an input, as a record of it holds it.

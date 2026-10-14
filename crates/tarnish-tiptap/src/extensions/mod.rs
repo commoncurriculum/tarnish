@@ -14,6 +14,7 @@ pub mod paragraph;
 pub mod strike;
 pub mod subscript;
 pub mod superscript;
+pub mod table;
 pub mod text;
 pub mod text_style;
 pub mod underline;
