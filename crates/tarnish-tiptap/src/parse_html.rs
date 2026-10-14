@@ -4,8 +4,8 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use tarnish::dom::{
-    Content, ContentElement, ElementRule, GetAttrsResult, GetContentHook, Namespace, ParseRule,
-    PreserveWhitespace, Rule, StyleAttrsHook, StyleRule as DomStyleRule, TagRule as DomTagRule,
+    Content, ContentElement, ElementRule, GetAttrsResult, Namespace, ParseRule, PreserveWhitespace,
+    Rule, StyleAttrsHook, StyleRule as DomStyleRule, TagRule as DomTagRule,
 };
 use tarnish::{Fragment, Schema};
 use tarnish_html::HtmlNode;
@@ -16,8 +16,6 @@ use super::attributes::ExtensionAttribute;
 
 /// A tag rule's `getAttrs`, given the element: `None` for `false`.
 type TagAttrs = Arc<dyn Fn(&HtmlNode) -> Result<Option<Map>> + Send + Sync>;
-/// A tag rule's `contentElement`, given the element.
-type ContentHook = Arc<dyn Fn(&HtmlNode) -> Result<HtmlNode> + Send + Sync>;
 
 #[derive(Clone)]
 pub enum ParseHtml {
@@ -35,9 +33,8 @@ pub struct TagRule {
     /// `None` for `false`, and empty attributes for `null`, as the attributes Tiptap spreads
     /// over it make of it.
     get_attrs: Option<TagAttrs>,
-    content_element: Option<ContentHook>,
-    get_content: Option<GetContentHook<HtmlNode>>,
-    preserve_whitespace: Option<PreserveWhitespace>,
+    /// Where the content comes from, and how its whitespace is kept.
+    element: ElementRule<HtmlNode>,
 }
 
 /// `{ style, ... }`.
@@ -58,9 +55,7 @@ impl ParseHtml {
             consuming: true,
             attrs: Map::new(),
             get_attrs: None,
-            content_element: None,
-            get_content: None,
-            preserve_whitespace: None,
+            element: ElementRule::default(),
         }
     }
 
@@ -98,11 +93,15 @@ impl TagRule {
         self
     }
 
+    /// `contentElement`, which a `getContent` overrides.
     pub fn content_element(
         mut self,
         content_element: impl Fn(&HtmlNode) -> Result<HtmlNode> + Send + Sync + 'static,
     ) -> Self {
-        self.content_element = Some(Arc::new(content_element));
+        if !matches!(self.element.content, Content::Get(_)) {
+            let hook = ContentElement::Hook(Arc::new(content_element));
+            self.element.content = Content::Element(hook);
+        }
         self
     }
 
@@ -111,12 +110,12 @@ impl TagRule {
         mut self,
         get_content: impl Fn(&HtmlNode, &Schema) -> Result<Fragment<'static>> + Send + Sync + 'static,
     ) -> Self {
-        self.get_content = Some(Arc::new(get_content));
+        self.element.content = Content::Get(Arc::new(get_content));
         self
     }
 
     pub fn preserve_whitespace(mut self, preserve_whitespace: PreserveWhitespace) -> Self {
-        self.preserve_whitespace = Some(preserve_whitespace);
+        self.element.preserve_whitespace = Some(preserve_whitespace);
         self
     }
 }
@@ -171,9 +170,7 @@ pub(crate) fn parse_rules(
                 consuming,
                 attrs,
                 get_attrs,
-                content_element,
-                get_content,
-                preserve_whitespace,
+                element,
             }) => {
                 let attributes = Arc::clone(attributes);
                 let injected = move |element: &HtmlNode| {
@@ -195,11 +192,6 @@ pub(crate) fn parse_rules(
                     }
                     Ok(GetAttrsResult::Attrs(result))
                 };
-                let content = match (get_content, content_element) {
-                    (Some(hook), _) => Content::Get(hook),
-                    (None, Some(hook)) => Content::Element(ContentElement::Hook(hook)),
-                    (None, None) => Content::Children,
-                };
                 ParseRule::Tag(Rule {
                     priority: Some(f64::from(priority)),
                     consuming,
@@ -207,11 +199,7 @@ pub(crate) fn parse_rules(
                         tag: tag.into(),
                         namespace: Namespace::Any,
                         get_attrs: Some(Arc::new(injected)),
-                        element: ElementRule {
-                            content,
-                            preserve_whitespace,
-                            ..ElementRule::default()
-                        },
+                        element,
                     })
                 })
             }
