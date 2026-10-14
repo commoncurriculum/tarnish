@@ -19,14 +19,13 @@ pub use row::{TableRowOptions, table_row};
 use tarnish_js::Error;
 use tarnish_js::json::{Map, json};
 use tarnish_js::value::{self, Nullish};
-use tarnish_markdown::marked::{Token, TokenData};
+use tarnish_markdown::marked::{Align, Token, TokenData};
 
 use crate::markdown::{ParseHelpers, Parsed};
 use crate::merge_attributes::merge_html_attributes;
 use crate::{AttrValue, DomSpec, NodeExtension, ParseHtml, merge_attributes};
 use col_group::create_col_group;
 use markdown::{render_table_to_markdown, tokenize, tokenizer_start};
-use utils::normalize_table_cell_align;
 
 /// The options that change what a table is or renders. `resizable`, `handleWidth`, `View`,
 /// `lastColumnResizable` and `allowTableNodeSelection` change only an editor's plugins and node
@@ -110,7 +109,7 @@ fn parse_markdown(token: &Token, helpers: &ParseHelpers) -> Result<Parsed, Error
     if let TokenData::Table(table) = &token.data {
         let cell = |kind: &str, index: usize, tokens: &[Token]| -> Result<_, Error> {
             let align = table.align.get(index).copied().flatten();
-            let align = normalize_table_cell_align(align.map(|align| align.as_str()));
+            let align = align.map(Align::as_str);
             let mut attrs = Map::new();
             if let Some(align) = align {
                 attrs.insert("align".into(), json!(align));
