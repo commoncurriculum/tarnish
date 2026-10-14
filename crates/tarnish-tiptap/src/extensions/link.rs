@@ -121,12 +121,10 @@ fn escape_for_regex(protocol: &str) -> String {
     escaped
 }
 
-/// The extension's options, as its parse rule and rendering read them.
+/// The extension's options, and the URIs its protocols allow, as its parse rule and rendering
+/// read them.
 struct Configured {
-    protocols: Vec<String>,
-    default_protocol: String,
-    html_attributes: Map,
-    is_allowed_uri: Option<IsAllowedUri>,
+    options: LinkOptions,
     allowed: AllowedUris,
 }
 
@@ -134,11 +132,11 @@ impl Configured {
     /// `this.options.isAllowedUri(uri, { defaultValidate, protocols, defaultProtocol })`.
     fn is_allowed_uri(&self, uri: Option<&Value>) -> Result<bool, Error> {
         let context = UriContext {
-            protocols: &self.protocols,
-            default_protocol: &self.default_protocol,
+            protocols: &self.options.protocols,
+            default_protocol: &self.options.default_protocol,
             allowed: &self.allowed,
         };
-        match &self.is_allowed_uri {
+        match &self.options.is_allowed_uri {
             Some(is_allowed_uri) => is_allowed_uri(uri, &context),
             None => context.default_validate(uri),
         }
@@ -155,17 +153,15 @@ pub fn link(options: LinkOptions) -> MarkExtension {
         ExtensionAttribute::new("class", default_of("class").unwrap_or(Value::Null)),
         ExtensionAttribute::new("title", Value::Null),
     ];
+    let autolink = options.autolink;
     let configured = Arc::new(Configured {
         allowed: AllowedUris::new(&options.protocols),
-        protocols: options.protocols,
-        default_protocol: options.default_protocol,
-        html_attributes: options.html_attributes,
-        is_allowed_uri: options.is_allowed_uri,
+        options,
     });
     let parsing = Arc::clone(&configured);
     MarkExtension::create("link")
         .priority(1000)
-        .inclusive(options.autolink)
+        .inclusive(autolink)
         .add_attributes(attributes)
         .parse_html([ParseHtml::tag("a[href]").get_attrs(move |element| {
             let href = element.attribute("href").filter(|href| !href.is_empty());
@@ -180,7 +176,7 @@ pub fn link(options: LinkOptions) -> MarkExtension {
             if !configured.is_allowed_uri(href.as_ref())? {
                 html.set("href", "");
             }
-            let html = merge_html_attributes(&configured.html_attributes, html)?;
+            let html = merge_html_attributes(&configured.options.html_attributes, html)?;
             Ok(DomSpec::wrapping("a", html))
         })
         .markdown_token_name("link")
