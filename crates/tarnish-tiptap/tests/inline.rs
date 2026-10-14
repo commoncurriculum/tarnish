@@ -9,14 +9,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use own::{Converter, input_of};
+use tarnish::js::stack::on_dirty_scheduler_stack;
 use tarnish::json::{Map, Value, json, object};
-use tarnish_fixtures::{outcome, read, records, same};
+use tarnish_fixtures::{expect, outcome, read, records, same};
 use tarnish_tiptap::extensions::link::{LinkOptions, link};
 use tarnish_tiptap::extensions::mention::{MentionHtml, MentionOptions, mention};
 use tarnish_tiptap::extensions::text_align::{TextAlignOptions, text_align};
 use tarnish_tiptap::extensions::text_style::{
     StyleOptions, TextStyleKitOptions, TextStyleOptions, background_color, color, font_family,
-    font_size, line_height, text_style_kit,
+    font_size, line_height, text_style, text_style_kit,
 };
 use tarnish_tiptap::extensions::unique_id::{
     UniqueIdOptions, UniqueIdTypes, generate_unique_ids, unique_id,
@@ -27,8 +28,8 @@ use tarnish_tiptap::extensions::{
 };
 use tarnish_tiptap::{
     DomSpec, Extension, ExtensionAttribute, GlobalAttributes, GlobalTypes, MarkExtension,
-    NodeExtension, PlainExtension, TextOptions, TextSerializer, TiptapSchema, generate_text,
-    get_schema, node_attr,
+    NodeExtension, ParseHtml, PlainExtension, TextOptions, TextSerializer, TiptapSchema,
+    generate_text, get_schema, node_attr,
 };
 
 /// Global attributes for each kind of `types`.
@@ -96,6 +97,15 @@ fn specs() -> Vec<Extension> {
     with([chip.into(), rule.into(), tag.into(), free.into()])
 }
 
+/// A block of blocks, which nests.
+fn boxes() -> NodeExtension {
+    NodeExtension::create("box")
+        .group("block")
+        .content("block+")
+        .parse_html([ParseHtml::tag("div")])
+        .render_html(|_, html| Ok(DomSpec::wrapping("div", html)))
+}
+
 /// Tiptap's own extensions, and `others`.
 fn own_with(others: impl IntoIterator<Item = Extension>) -> Vec<Extension> {
     own::extensions().into_iter().chain(others).collect()
@@ -127,6 +137,13 @@ fn ids(name: &str) -> UniqueIdOptions {
             attribute_name: "uid",
             types: UniqueIdTypes::Named(&["paragraph"]),
             generate_id: Arc::new(|_, _| Ok(json!(""))),
+        },
+        "deep" => UniqueIdOptions {
+            types: UniqueIdTypes::Named(&["box"]),
+            generate_id: Arc::new(|node, pos| {
+                Ok(json!(format!("{}-{pos}", node.node_type().name())))
+            }),
+            ..UniqueIdOptions::default()
         },
         other => panic!("no UniqueID in {other}"),
     }
@@ -253,6 +270,23 @@ fn configuration(name: &str) -> Vec<Extension> {
             extensions.push(unique_id(options).into());
             extensions
         }
+        "deep" => {
+            let others: [Extension; 8] = [
+                bold().into(),
+                boxes().into(),
+                text_style(TextStyleOptions::default()).into(),
+                font_size(StyleOptions::default()).into(),
+                link(LinkOptions::default()).into(),
+                mention(MentionOptions::default()).into(),
+                text_align(TextAlignOptions {
+                    types: &["box", "paragraph"],
+                    ..TextAlignOptions::default()
+                })
+                .into(),
+                unique_id(ids("deep")).into(),
+            ];
+            with(others)
+        }
         "kit" => kit(TextStyleKitOptions::default()),
         "kitOptions" => kit(TextStyleKitOptions {
             background_color: None,
@@ -313,9 +347,45 @@ fn configured(records: &[Value]) -> Vec<Configured> {
     configured
 }
 
-/// Holds each record of `section` to what `run` makes of its inputs, those of the fields `inputs`
-/// names that it has, with the extensions it names, as a record of the section holds it.
-fn check(section: &str, inputs: &[&str], run: impl Fn(&Configured, &Map) -> Value) {
+/// The fields of a record of `section` that are inputs.
+fn inputs(section: &str) -> &'static [&'static str] {
+    match section {
+        "generatesText" => &["doc", "blockSeparator", "serializers"],
+        "parsesMarkdown" => &["markdown"],
+        "parsesHTML" => &["html"],
+        _ => &["doc"],
+    }
+}
+
+/// What the conversion a `section` records makes of a record's inputs, those of its fields
+/// `inputs` names, with a configuration's extensions, as a record of it holds it.
+fn run(section: &str, configured: &Configured, given: &Map) -> Value {
+    match section {
+        "generatesText" => {
+            let mut options = TextOptions::default();
+            if let Some(separator) = given.get("blockSeparator") {
+                options.block_separator = separator.as_str().expect("a separator").to_owned();
+            }
+            if let Some(named) = given.get("serializers") {
+                options.text_serializers = serializers(named.as_str().expect("a name"));
+            }
+            let text = generate_text(&given["doc"], &configured.extensions, &options);
+            outcome(text.map(|text| json!({"text": text})))
+        }
+        "generatesUniqueIds" => {
+            let options = ids(&configured.name);
+            let doc = generate_unique_ids(&given["doc"], &configured.extensions, &options);
+            outcome(doc.map(|doc| json!({"ids": doc})))
+        }
+        _ => configured
+            .converter
+            .convert(section, &given[input_of(section)]),
+    }
+}
+
+/// Holds each record of `section` to what its conversion makes of its inputs with the extensions
+/// it names.
+fn check(section: &str) {
     let fixtures = read("tiptap-inline");
     let records = records(&fixtures, section);
     let configured = configured(records);
@@ -324,7 +394,7 @@ fn check(section: &str, inputs: &[&str], run: impl Fn(&Configured, &Map) -> Valu
         let mut expected = record.clone();
         let fields = expected.as_object_mut().expect("a record");
         let name = fields.shift_remove("extensions").expect("a configuration");
-        let given: Map = inputs
+        let given: Map = inputs(section)
             .iter()
             .filter_map(|input| Some(((*input).into(), fields.shift_remove(input)?)))
             .collect();
@@ -332,7 +402,7 @@ fn check(section: &str, inputs: &[&str], run: impl Fn(&Configured, &Map) -> Valu
             .iter()
             .find(|configured| configured.name == name)
             .expect("the configuration");
-        let actual = run(configuration, &given);
+        let actual = run(section, configuration, &given);
         if !same(&expected, &actual) {
             failures.push(format!(
                 "{name}: {}\n  Tiptap: {expected}\n  tarnish-tiptap: {actual}",
@@ -413,54 +483,276 @@ fn serializers(name: &str) -> HashMap<String, TextSerializer> {
 
 #[test]
 fn generates_text_as_tiptap_does() {
-    let inputs = ["doc", "blockSeparator", "serializers"];
-    check("generatesText", &inputs, |configured, given| {
-        let mut options = TextOptions::default();
-        if let Some(separator) = given.get("blockSeparator") {
-            options.block_separator = separator.as_str().expect("a separator").to_owned();
-        }
-        if let Some(named) = given.get("serializers") {
-            options.text_serializers = serializers(named.as_str().expect("a name"));
-        }
-        let text = generate_text(&given["doc"], &configured.extensions, &options);
-        outcome(text.map(|text| json!({"text": text})))
-    });
+    check("generatesText");
 }
 
 #[test]
 fn generates_unique_ids_as_tiptap_does() {
-    check("generatesUniqueIds", &["doc"], |configured, given| {
-        let options = ids(&configured.name);
-        let doc = generate_unique_ids(&given["doc"], &configured.extensions, &options);
-        outcome(doc.map(|doc| json!({"ids": doc})))
-    });
-}
-
-/// Holds each record of a section `own::Converter` converts.
-fn converts(section: &str) {
-    check(section, &[input_of(section)], |configured, given| {
-        configured
-            .converter
-            .convert(section, &given[input_of(section)])
-    });
+    check("generatesUniqueIds");
 }
 
 #[test]
 fn parses_markdown_as_tiptap_does() {
-    converts("parsesMarkdown");
+    check("parsesMarkdown");
 }
 
 #[test]
 fn serializes_markdown_as_tiptap_does() {
-    converts("serializesMarkdown");
+    check("serializesMarkdown");
 }
 
 #[test]
 fn parses_html_as_tiptap_does() {
-    converts("parsesHTML");
+    check("parsesHTML");
 }
 
 #[test]
 fn serializes_html_as_tiptap_does() {
-    converts("serializesHTML");
+    check("serializesHTML");
+}
+
+const DOCUMENTS: usize = 20_000;
+const PARSES: usize = 2_000;
+const INLINES: usize = 500;
+
+/// An input nested `depth` deep, and what the conversion a `section` records makes of it, which
+/// the test folds from the depths below and holds to Tiptap's at the depths
+/// `harness/record-tiptap-inline.mjs` records, with the `deep` extensions.
+struct Nested {
+    what: &'static str,
+    section: &'static str,
+    depth: usize,
+    input: fn(usize) -> Value,
+    output: fn(usize) -> Value,
+}
+
+/// The alignment of the box `level` deep, from 1.
+fn alignment(level: usize) -> &'static str {
+    ["left", "center", "right"][level % 3]
+}
+
+/// A paragraph of text and a mention inside boxes `depth` deep, with the attributes `attrs`
+/// gives each level from 1, around `paragraph`.
+fn boxed(depth: usize, attrs: impl Fn(usize) -> Option<Value>, paragraph: Value) -> Value {
+    let nested = (1..=depth).rev().fold(paragraph, |inner, level| {
+        let mut node = json!({"type": "box"});
+        if let Some(attrs) = attrs(level) {
+            node["attrs"] = attrs;
+        }
+        node["content"] = json!([inner]);
+        node
+    });
+    json!({"type": "doc", "content": [nested]})
+}
+
+fn mentioned(text: Value, mention: Value) -> Value {
+    json!({"type": "paragraph", "content": [text, mention]})
+}
+
+fn x() -> Value {
+    json!({"type": "text", "text": "x"})
+}
+
+/// Each box's id and alignment.
+fn identified(level: usize) -> Option<Value> {
+    Some(json!({"id": format!("b{level}"), "textAlign": alignment(level)}))
+}
+
+fn the_link() -> Value {
+    json!({"type": "link", "attrs": {
+        "href": "u", "target": "_blank", "rel": "noopener noreferrer nofollow",
+        "class": null, "title": null,
+    }})
+}
+
+/// The text inside bold delimiters `depth` deep inside a link: a bold mark for each pair of
+/// delimiters around each part of it, and the link's after them.
+fn bold_in_link(depth: usize) -> Vec<Value> {
+    let link = json!({"type": "link", "attrs": {"href": "u", "title": null}});
+    let marks = |count: usize| {
+        let mut marks = vec![json!({"type": "bold"}); count];
+        marks.push(link.clone());
+        marks
+    };
+    let text = |text: &str, count| json!({"type": "text", "text": text, "marks": marks(count)});
+    let opening = (1..depth).map(|count| text("a ", count));
+    let closing = (1..depth).rev().map(|count| text(" a", count));
+    let middle = text("a x a", depth);
+    opening.chain([middle]).chain(closing).collect()
+}
+
+const NESTED: [Nested; 8] = [
+    Nested {
+        what: "spans with a font size in a link",
+        section: "parsesHTML",
+        depth: PARSES,
+        input: |depth| {
+            let spans: String = (1..=depth)
+                .map(|level| format!("<span style=\"font-size: {level}px\">"))
+                .collect();
+            json!(format!("<p><a href=\"u\">{spans}x</a></p>"))
+        },
+        output: |depth| {
+            let style = json!({"type": "textStyle", "attrs": {"fontSize": format!("{depth}px")}});
+            let text = json!({"type": "text", "marks": [the_link(), style], "text": "x"});
+            let paragraph = json!({"type": "paragraph", "attrs": {"textAlign": null},
+                "content": [text]});
+            json!({"doc": {"type": "doc", "content": [paragraph]}})
+        },
+    },
+    Nested {
+        what: "divs with an id and an alignment",
+        section: "parsesHTML",
+        depth: PARSES,
+        input: |depth| {
+            let divs: String = (1..=depth)
+                .map(|level| {
+                    let align = alignment(level);
+                    format!("<div data-id=\"b{level}\" style=\"text-align: {align}\">")
+                })
+                .collect();
+            json!(divs + "<p>x</p>")
+        },
+        output: |depth| {
+            let paragraph = json!({"type": "paragraph", "attrs": {"textAlign": null},
+                "content": [x()]});
+            json!({"doc": boxed(depth, identified, paragraph)})
+        },
+    },
+    Nested {
+        what: "HTML of boxes with an id and an alignment",
+        section: "serializesHTML",
+        depth: DOCUMENTS,
+        input: |depth| {
+            let mention = json!({"type": "mention", "attrs": {"id": "m"}});
+            boxed(depth, identified, mentioned(x(), mention))
+        },
+        output: |depth| {
+            let divs: String = (1..=depth)
+                .map(|level| {
+                    let align = alignment(level);
+                    format!("<div data-id=\"b{level}\" style=\"text-align: {align};\">")
+                })
+                .collect();
+            let mention = r#"<span data-type="mention" data-id="m" data-mention-suggestion-char="@">@m</span>"#;
+            json!({"html": format!("{divs}<p>x{mention}</p>{}", "</div>".repeat(depth))})
+        },
+    },
+    Nested {
+        what: "text of boxes",
+        section: "generatesText",
+        depth: DOCUMENTS,
+        input: |depth| {
+            let mention = json!({"type": "mention", "attrs": {"id": "m"}});
+            boxed(depth, |_| None, mentioned(x(), mention))
+        },
+        output: |depth| json!({"text": "\n\n".repeat(depth) + "x@m"}),
+    },
+    Nested {
+        what: "ids of boxes",
+        section: "generatesUniqueIds",
+        depth: PARSES,
+        input: |depth| {
+            let mention = json!({"type": "mention", "attrs": {"id": "m"}});
+            boxed(depth, |_| None, mentioned(x(), mention))
+        },
+        output: |depth| {
+            let mention = json!({"type": "mention", "attrs": {
+                "id": "m", "label": null, "mentionSuggestionChar": "@",
+            }});
+            let paragraph = json!({"type": "paragraph", "attrs": {"textAlign": null},
+                "content": [x(), mention]});
+            let ids = |level: usize| {
+                Some(json!({"id": format!("box-{}", level - 1),
+                "textAlign": null}))
+            };
+            json!({"ids": boxed(depth, ids, paragraph)})
+        },
+    },
+    // The manager renders a node of any type it has a renderer for, a mark's among them.
+    Nested {
+        what: "Markdown of links",
+        section: "serializesMarkdown",
+        depth: DOCUMENTS,
+        input: |depth| {
+            let nested = (0..depth).fold(
+                x(),
+                |inner, _| json!({"type": "link", "attrs": {"href": "u"}, "content": [inner]}),
+            );
+            json!({"type": "doc", "content": [nested]})
+        },
+        output: |depth| json!({"markdown": "[".repeat(depth) + "x" + &"](u)".repeat(depth)}),
+    },
+    Nested {
+        what: "strong in a link",
+        section: "parsesMarkdown",
+        depth: INLINES,
+        input: |depth| {
+            let strong = "**a ".repeat(depth) + "x" + &" a**".repeat(depth);
+            json!(format!("[{strong}](u)"))
+        },
+        output: |depth| {
+            let paragraph = json!({"type": "paragraph", "content": bold_in_link(depth)});
+            json!({"doc": {"type": "doc", "content": [paragraph]}})
+        },
+    },
+    // Without an extension for blockquotes, the manager parses a blockquote's content.
+    Nested {
+        what: "a mention in blockquotes",
+        section: "parsesMarkdown",
+        depth: PARSES,
+        input: |depth| json!(">".repeat(depth) + " [@ id=\"x\"]"),
+        output: |_| {
+            let mention = json!({"type": "mention", "attrs": {"id": "x"}});
+            let paragraph = json!({"type": "paragraph", "content": [mention]});
+            json!({"doc": {"type": "doc", "content": [paragraph]}})
+        },
+    },
+];
+
+/// The input of a record that `nested` converts.
+fn given(section: &str, input: Value) -> Map {
+    let mut given = Map::new();
+    given.insert(inputs(section)[0].into(), input);
+    given
+}
+
+#[test]
+fn converts_what_nests_as_deeply_as_memory_allows() {
+    let fixtures = read("tiptap-inline");
+    for nested in &NESTED {
+        for depth in 1..=3 {
+            let given = given(nested.section, (nested.input)(depth));
+            let record = records(&fixtures, nested.section).iter().find(|record| {
+                let inputs = inputs(nested.section);
+                let input = |fields: &Map, input| fields.get(input).cloned();
+                let fields = record.as_object().expect("a record");
+                record["extensions"] == "deep"
+                    && inputs.iter().all(|name| {
+                        let (recorded, given) = (input(fields, name), input(&given, name));
+                        recorded.is_none() && given.is_none()
+                            || recorded.zip(given).is_some_and(|(a, b)| same(&a, &b))
+                    })
+            });
+            let record = record.unwrap_or_else(|| panic!("no record of {}", nested.what));
+            let mut skipped = inputs(nested.section).to_vec();
+            skipped.push("extensions");
+            expect(record, &skipped, (nested.output)(depth));
+        }
+    }
+    on_dirty_scheduler_stack(|| {
+        let extensions = configuration("deep");
+        let converter = Converter::of(&extensions);
+        let configured = Configured {
+            name: "deep".into(),
+            extensions,
+            converter,
+        };
+        for nested in &NESTED {
+            let given = given(nested.section, (nested.input)(nested.depth));
+            let converted = run(nested.section, &configured, &given);
+            let expected = (nested.output)(nested.depth);
+            assert!(same(&expected, &converted), "{}", nested.what);
+        }
+    });
 }

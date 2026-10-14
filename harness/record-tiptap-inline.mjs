@@ -87,6 +87,13 @@ const Chip = TiptapNode.create({
     `<${node.attrs.label} ${pos} ${parent.type.name} ${index} ${range.from}-${range.to}>`,
 })
 const Rule = TiptapNode.create({ name: "rule", group: "block", atom: true, selectable: true })
+const Box = TiptapNode.create({
+  name: "box",
+  group: "block",
+  content: "block+",
+  parseHTML: () => [{ tag: "div" }],
+  renderHTML: ({ HTMLAttributes }) => ["div", HTMLAttributes, 0],
+})
 const Tag = Mark.create({ name: "tag", inclusive: false })
 const Free = Mark.create({ name: "free", inclusive: true })
 
@@ -193,6 +200,20 @@ const configurations = {
     UniqueID.configure({ types: "all", generateID: ({ node, pos }) => (node.isInline ? pos : { at: pos }) }),
   ],
   uniqueIdName: [...own, UniqueID.configure({ types: ["paragraph"], attributeName: "uid", generateID: () => "" })],
+  // Blocks that nest, with an alignment and an id, and spans, links and mentions inside them.
+  deep: [
+    Document,
+    Paragraph,
+    Text,
+    Bold,
+    Box,
+    TextStyle,
+    FontSize,
+    Link,
+    Mention,
+    TextAlign.configure({ types: ["box", "paragraph"] }),
+    UniqueID.configure({ types: ["box"], generateID: ({ node, pos }) => `${node.type.name}-${pos}` }),
+  ],
 }
 
 const converters = Object.fromEntries(
@@ -477,7 +498,66 @@ const idDocs = [
       { type: "paragraph", attrs: { uid: "u" } },
     ],
   },
+  // Content that isn't valid, which an attribute step fails on in the node it sets or its parent.
+  {
+    type: "doc",
+    content: [
+      {
+        type: "heading",
+        attrs: { level: 1, id: "h", uid: "u" },
+        content: [{ type: "paragraph", attrs: { id: "p", uid: "u" } }],
+      },
+    ],
+  },
+  {
+    type: "doc",
+    content: [{ type: "heading", attrs: { level: 1 }, content: [{ type: "paragraph", attrs: { id: "p", uid: "u" } }] }],
+  },
+  { type: "doc", content: [{ type: "heading", attrs: { level: 1, id: "h" }, content: [{ type: "paragraph" }] }] },
+  { type: "doc", content: [{ type: "paragraph" }, { type: "text", text: "loose" }] },
+  { type: "doc", content: [{ type: "paragraph", attrs: { id: "p", uid: "u" } }, { type: "mention" }] },
 ]
+
+// Nesting one to three deep, which tests/inline.rs folds into the conversions of any depth.
+const depths = [1, 2, 3]
+const levels = depth => Array.from({ length: depth }, (_, index) => index + 1)
+const alignment = level => ["left", "center", "right"][level % 3]
+const deepHTML = depths.flatMap(depth => [
+  `<p><a href="u">${levels(depth)
+    .map(level => `<span style="font-size: ${level}px">`)
+    .join("")}x</a></p>`,
+  levels(depth)
+    .map(level => `<div data-id="b${level}" style="text-align: ${alignment(level)}">`)
+    .join("") + "<p>x</p>",
+])
+// A paragraph of text and a mention inside boxes `depth` deep, with the attributes `attrs` gives
+// each level.
+const boxed = (depth, attrs) => {
+  let node = {
+    type: "paragraph",
+    content: [
+      { type: "text", text: "x" },
+      { type: "mention", attrs: { id: "m" } },
+    ],
+  }
+  for (const level of levels(depth).reverse())
+    node = { type: "box", ...(attrs ? { attrs: attrs(level) } : {}), content: [node] }
+  return { type: "doc", content: [node] }
+}
+const linked = depth => {
+  let node = { type: "text", text: "x" }
+  for (let level = 0; level < depth; level++) node = { type: "link", attrs: { href: "u" }, content: [node] }
+  return { type: "doc", content: [node] }
+}
+const delimited = (open, close, depth) => open.repeat(depth) + "x" + close.repeat(depth)
+const deepMarkdown = depths.flatMap(depth => [
+  "[" + delimited("**a ", " a**", depth) + "](u)",
+  ">".repeat(depth) + ' [@ id="x"]',
+])
+const deepDocs = depths.flatMap(depth => [
+  boxed(depth, level => ({ id: `b${level}`, textAlign: alignment(level) })),
+  linked(depth),
+])
 
 const parsesMarkdown = each({
   globals: ["plain **bold**"],
@@ -486,6 +566,7 @@ const parsesMarkdown = each({
   linkOptions: linkMarkdown,
   mention: [...mentionMarkdown, ...markedMarkdown(/\[|@/)],
   mentionOptions: mentionMarkdown,
+  deep: deepMarkdown,
 }).map(([name, markdown]) => ({
   extensions: name,
   markdown,
@@ -518,6 +599,7 @@ const parsesHTML = each({
   uniqueId: idHTML,
   uniqueIdAll: [...idHTML, ...mentionHTML],
   uniqueIdName: idHTML,
+  deep: deepHTML,
 }).map(([name, html]) => ({
   extensions: name,
   html,
@@ -571,6 +653,7 @@ const docs = {
   uniqueId: idDocs,
   uniqueIdAll: [...idDocs, ...mentionDocs.slice(0, 2)],
   uniqueIdName: idDocs,
+  deep: deepDocs,
 }
 
 const serializesMarkdown = documents(docs).map(([name, doc]) => ({
@@ -605,6 +688,7 @@ const textDocs = {
   mentionRender: mentionTextDocs,
   mentionString: mentionTextDocs,
   mentionLabel: mentionTextDocs,
+  deep: depths.map(depth => boxed(depth)),
   own: [
     {
       type: "doc",
@@ -676,6 +760,7 @@ const idsDocs = [
 const generatesUniqueIds = [
   ...["uniqueIdNone", "uniqueId", "uniqueIdName"].flatMap(name => idsDocs.map(doc => [name, doc])),
   ...[...idsDocs, ...mentionDocs.slice(0, 2)].map(doc => ["uniqueIdAll", doc]),
+  ...depths.map(depth => ["deep", boxed(depth)]),
 ].map(([name, doc]) => ({
   extensions: name,
   doc,
