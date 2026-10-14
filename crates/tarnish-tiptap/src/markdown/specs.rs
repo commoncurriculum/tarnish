@@ -82,7 +82,7 @@ impl NodeExtension {
     pub fn atom_block_markdown_spec(
         self,
         node_name: &'static str,
-        allowed_attributes: &'static [&'static str],
+        allowed_attributes: &[&'static str],
     ) -> Self {
         let allowed_attributes: Vec<AllowedAttribute> =
             allowed_attributes.iter().copied().map(Into::into).collect();

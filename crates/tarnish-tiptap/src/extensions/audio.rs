@@ -1,12 +1,14 @@
 //! `@tiptap/extension-audio`: an audio element, whose source renders only when it's an http or
 //! https URL, a path, or with `allow_base64` a base64 `data:audio` URL.
 
+use std::iter;
 use std::sync::LazyLock;
 
 use crate::attributes::option_default;
 use crate::web_url::WebUrl;
 use crate::{
-    AttrValue, DomSpec, ExtensionAttribute, NodeExtension, ParseHtml, SpecAttrs, merge_attributes,
+    AttrValue, AttributeDefault, DomSpec, ExtensionAttribute, NodeExtension, ParseHtml, SpecAttrs,
+    merge_attributes,
 };
 use tarnish_js::json::{Map, Value, json};
 use tarnish_js::regexp::RegExp;
@@ -47,21 +49,31 @@ impl Default for AudioOptions {
     }
 }
 
-pub fn audio(options: AudioOptions) -> NodeExtension {
-    let attributes = vec![
-        ExtensionAttribute::new("src", Value::Null),
-        ExtensionAttribute::new("controls", json!(options.controls)),
-        ExtensionAttribute::new("autoplay", json!(options.autoplay)),
-        ExtensionAttribute::new("loop", json!(options.r#loop)),
-        ExtensionAttribute::new("muted", json!(options.muted)),
-        ExtensionAttribute::new("preload", options.preload.clone()),
-        ExtensionAttribute::new("controlslist", option_default(&options.controlslist)),
-        ExtensionAttribute::new("crossorigin", option_default(&options.crossorigin)),
-        ExtensionAttribute::new(
+/// The attributes but `src`, in their order, each with the option that is its default.
+fn option_attributes(options: &AudioOptions) -> [(&'static str, AttributeDefault); 8] {
+    [
+        ("controls", json!(options.controls).into()),
+        ("autoplay", json!(options.autoplay).into()),
+        ("loop", json!(options.r#loop).into()),
+        ("muted", json!(options.muted).into()),
+        ("preload", options.preload.clone().into()),
+        ("controlslist", option_default(&options.controlslist)),
+        ("crossorigin", option_default(&options.crossorigin)),
+        (
             "disableremoteplayback",
-            json!(options.disable_remote_playback),
+            json!(options.disable_remote_playback).into(),
         ),
-    ];
+    ]
+}
+
+pub fn audio(options: AudioOptions) -> NodeExtension {
+    let defaults = option_attributes(&options);
+    let names = defaults.iter().map(|(name, _)| *name);
+    let allowed_attributes: Vec<&str> = iter::once("src").chain(names).collect();
+    let attributes = defaults
+        .iter()
+        .map(|(name, default)| ExtensionAttribute::new(name, default.clone()));
+    let attributes = iter::once(ExtensionAttribute::new("src", Value::Null)).chain(attributes);
     let tag = match options.allow_base64 {
         true => "audio[src]",
         false => r#"audio[src]:not([src^="data:"])"#,
@@ -70,45 +82,26 @@ pub fn audio(options: AudioOptions) -> NodeExtension {
         .inline_or_block(options.inline)
         .atom()
         .draggable()
-        .add_attributes(attributes)
+        .add_attributes(attributes.collect())
         .parse_html([ParseHtml::tag(tag)])
         .render_html(move |_, mut html| {
             let src = html.get("src").map(AttrValue::to_value);
             let src = sanitize_audio_src(src.as_ref(), options.allow_base64)?;
             html.set("src", Value::from(src));
-            let defaults = [
-                ("controls", json!(options.controls)),
-                ("autoplay", json!(options.autoplay)),
-                ("loop", json!(options.r#loop)),
-                ("muted", json!(options.muted)),
-                ("preload", options.preload.clone()),
-                ("controlslist", options.controlslist.clone().into()),
-                ("crossorigin", options.crossorigin.clone().into()),
-                (
-                    "disableremoteplayback",
-                    json!(options.disable_remote_playback),
-                ),
-            ];
-            let defaults = defaults.map(|(name, value)| (name, value.into()));
+            let defaults = defaults.iter().map(|(name, default)| {
+                // An option that is `undefined` is left out with those that are `null`.
+                let value = match default {
+                    AttributeDefault::Value(value) => value.clone(),
+                    _ => Value::Null,
+                };
+                (*name, AttrValue::from(value))
+            });
             let merged = merge_attributes(SpecAttrs::from(&options.html_attributes), defaults)?;
             let mut merged = merge_attributes(merged, html)?;
             merged.retain(|_, value| !matches!(value.to_value(), Value::Null | Value::Bool(false)));
             Ok(DomSpec::element("audio", merged, Vec::new()))
         })
-        .atom_block_markdown_spec(
-            "audio",
-            &[
-                "src",
-                "controls",
-                "autoplay",
-                "loop",
-                "muted",
-                "preload",
-                "controlslist",
-                "crossorigin",
-                "disableremoteplayback",
-            ],
-        )
+        .atom_block_markdown_spec("audio", &allowed_attributes)
 }
 
 static AUDIO_DATA_URL: LazyLock<RegExp> =
