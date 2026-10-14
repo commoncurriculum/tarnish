@@ -252,17 +252,33 @@ const PLAIN: [bool; 256] = {
     plain
 };
 
-/// Whether the DOM would make an element or attribute of this name with the name as it is: a
-/// name of lower-case ASCII letters, digits and `-_.:`, an element's starting with a letter,
-/// which is valid and which nothing lower-cases. Other names go through the DOM, `nodeType`
-/// among them, which makes `renderSpec` take a spec's attributes for a DOM node.
+/// Whether the DOM would make an element of this name with the name as it is, or set an
+/// attribute of this name with the name in lower case, as `setAttribute` sets one on an HTML
+/// element: a name of ASCII letters, digits and `-_.:`, an element's lower-case and starting
+/// with a letter, which is valid. Other names go through the DOM.
 fn plain_name(name: &str, kind: NameKind) -> bool {
     let bytes = name.as_bytes();
-    let starts = match kind {
-        NameKind::Element => bytes.first().is_some_and(u8::is_ascii_lowercase),
-        NameKind::Attribute => !bytes.is_empty(),
-    };
-    starts && bytes.iter().all(|&byte| PLAIN[byte as usize])
+    match kind {
+        NameKind::Element => {
+            bytes.first().is_some_and(u8::is_ascii_lowercase)
+                && bytes.iter().all(|&byte| PLAIN[byte as usize])
+        }
+        NameKind::Attribute => {
+            !bytes.is_empty()
+                && bytes
+                    .iter()
+                    .all(|&byte| PLAIN[byte as usize] || byte.is_ascii_uppercase())
+        }
+    }
+}
+
+/// Whether another attribute the spec sets has the same name in lower case, whose value
+/// `setAttribute` of this one replaces where it is.
+fn lowers_to_another(attrs: &SpecAttrs, name: &str) -> bool {
+    name.bytes().any(|byte| byte.is_ascii_uppercase())
+        && attrs.iter().any(|(other, value)| {
+            other != name && !value.is_null() && other.eq_ignore_ascii_case(name)
+        })
 }
 
 /// Writes a spec as `renderSpec` would build it and `innerHTML` write it: up to where its
@@ -375,13 +391,18 @@ fn write_start(out: &mut String, tag: &str, attrs: &SpecAttrs) -> Result<(), Sto
         if value.is_null() {
             continue;
         }
-        if !plain_name(name, NameKind::Attribute) {
+        // `nodeType` makes `renderSpec` take the attributes for a DOM node.
+        if !plain_name(name, NameKind::Attribute)
+            || name == "nodeType"
+            || lowers_to_another(attrs, name)
+        {
             return Err(Stop::InDom);
         }
         out.push(' ');
-        out.push_str(name);
+        out.extend(name.chars().map(|unit| unit.to_ascii_lowercase()));
         out.push_str("=\"");
         let value = value.to_js_string()?;
+        // Only `style` itself sets `style.cssText`.
         match name {
             "style" => escape_attribute(out, &crate::style::css_text(&value)),
             _ => escape_attribute(out, &value),

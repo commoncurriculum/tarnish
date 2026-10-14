@@ -83,6 +83,26 @@ fn block_spec(variant: u64, value: ValueRef<'_>) -> Spec<'_> {
             [element("br", [text("x")]), element("span", [DomSpec::Hole])],
         ),
         18 => json!(["div", ["span", 0], ["em", "after"]]).into(),
+        19 => DomSpec::element(
+            "p",
+            attrs([("ccLanguage", value.into()), ("data-X", "x".into())]),
+            vec![DomSpec::Hole],
+        ),
+        20 => DomSpec::element(
+            "p",
+            attrs([("STYLE", "COLOR: Red ;".into()), ("Title", value.into())]),
+            vec![DomSpec::Hole],
+        ),
+        21 => DomSpec::element(
+            "p",
+            attrs([("title", value.into()), ("TITLE", "T".into())]),
+            vec![DomSpec::Hole],
+        ),
+        22 => DomSpec::element(
+            "p",
+            attrs([("nodeType", value.into())]),
+            vec![DomSpec::Hole],
+        ),
         _ => element("div", [DomSpec::Attr(value), DomSpec::Hole]),
     }
 }
@@ -239,12 +259,12 @@ impl Random {
     // bounded: past depth 2 a block holds no blocks
     fn block(&mut self, depth: u32) -> Value {
         match self.below(if depth > 2 { 2 } else { 3 }) {
-            0 => json!({"type": "para", "attrs": self.attrs(20), "content": self.inline()}),
+            0 => json!({"type": "para", "attrs": self.attrs(24), "content": self.inline()}),
             1 => json!({"type": "leaf", "attrs": self.attrs(6)}),
             _ => {
                 let content: Vec<Value> =
                     (0..=self.below(2)).map(|_| self.block(depth + 1)).collect();
-                json!({"type": "box", "attrs": self.attrs(20), "content": content})
+                json!({"type": "box", "attrs": self.attrs(24), "content": content})
             }
         }
     }

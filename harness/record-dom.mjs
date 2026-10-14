@@ -838,8 +838,12 @@ const blockSpec = (variant, value) =>
     ["div", ["template", ["b", 0]]],
     ["div", ["br", "x"], ["span", 0]],
     ["div", ["span", 0], ["em", "after"]],
+    ["p", { ccLanguage: value, "data-X": "x" }, 0],
+    ["p", { STYLE: "COLOR: Red ;", Title: value }, 0],
+    ["p", { title: value, TITLE: "T" }, 0],
+    ["p", { nodeType: value }, 0],
     ["div", {}, value, 0],
-  ][Math.min(variant, 19)]
+  ][Math.min(variant, 23)]
 const leafSpec = (variant, value) =>
   [value, ["img", { src: value }], ["hr", 0], ["span", {}, value], ["span", { class: "leaf" }, "text"], "leaf & text"][
     variant % 6
@@ -878,12 +882,12 @@ const inlineOf = () =>
 const blockOf = depth => {
   switch (below(depth > 2 ? 2 : 3)) {
     case 0:
-      return { type: "para", attrs: attrsOf(20), content: inlineOf() }
+      return { type: "para", attrs: attrsOf(24), content: inlineOf() }
     case 1:
       return { type: "leaf", attrs: attrsOf(6) }
     default: {
       const content = Array.from({ length: below(2) + 1 }, () => blockOf(depth + 1))
-      return { type: "box", attrs: attrsOf(20), content }
+      return { type: "box", attrs: attrsOf(24), content }
     }
   }
 }

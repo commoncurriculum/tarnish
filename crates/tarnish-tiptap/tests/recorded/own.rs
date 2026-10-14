@@ -147,20 +147,14 @@ impl Converter {
         }
     }
 
-    /// The document's HTML, as `html::serialize` writes it, which has to be without a DOM: only
-    /// YouTube's iframe, whose attributes have names the DOM lower-cases, goes through one.
+    /// The document's HTML, as `html::serialize` writes it, which has to be without a DOM.
     fn write_html(&self, doc: &Node<'static>) -> Result<String, Error> {
         let mut writer = HtmlWriter::new();
         self.schema
             .serializer
             .write_fragment(doc.content(), &mut writer)?;
-        let mut youtube = false;
-        doc.descendants(&mut |node, _, _, _| {
-            youtube |= node.node_type().name() == "youtube";
-            Ok(true)
-        })?;
         assert!(
-            youtube || !writer.rendered_in_dom(),
+            !writer.rendered_in_dom(),
             "{} went through the DOM",
             doc.to_json()
         );
