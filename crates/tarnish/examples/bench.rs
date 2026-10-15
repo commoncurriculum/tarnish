@@ -67,8 +67,10 @@ fn main() {
     time("bytes of the changed document", &mut || {
         drop(changed.to_bytes())
     });
+    let steps_text = steps.to_string();
     time("JSON text in, apply 10 steps, JSON text out", &mut || {
         let node = Node::from_json_text(&schema, &text).unwrap();
-        drop(api::apply_steps(&node, steps).unwrap().to_json_string())
+        let steps = json::from_str(&steps_text).unwrap();
+        drop(api::apply_steps(&node, &steps).unwrap().to_json_string())
     });
 }

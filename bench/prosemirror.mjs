@@ -9,10 +9,13 @@ import { Step, Transform } from "prosemirror-transform"
 
 const path = fileURLToPath(new URL("../target/bench/document.json", import.meta.url))
 const { doc, steps } = JSON.parse(readFileSync(path, "utf8"))
+// The document and steps as JSON text, as a server receives them.
+const docText = JSON.stringify(doc)
+const stepsText = JSON.stringify(steps)
 const node = Node.fromJSON(schema, doc)
-const step = (from) => {
+const step = (from, list = steps) => {
   const tr = new Transform(from)
-  for (const json of steps) tr.step(Step.fromJSON(schema, json))
+  for (const json of list) tr.step(Step.fromJSON(schema, json))
   return tr.doc
 }
 const changed = step(node)
@@ -32,8 +35,12 @@ const median = (name, run) => {
 }
 
 median("fromJSON", () => Node.fromJSON(schema, doc))
+median("JSON.parse, then fromJSON", () => Node.fromJSON(schema, JSON.parse(docText)))
 median("check", () => node.check())
 median("apply 10 steps", () => step(node))
 median("toJSON of the changed document", () => changed.toJSON())
 median("JSON.stringify of its toJSON", () => JSON.stringify(changed.toJSON()))
 median("fromJSON, apply 10 steps, toJSON", () => step(Node.fromJSON(schema, doc)).toJSON())
+median("JSON text in, apply 10 steps, JSON text out", () =>
+  JSON.stringify(step(Node.fromJSON(schema, JSON.parse(docText)), JSON.parse(stepsText)).toJSON()),
+)
