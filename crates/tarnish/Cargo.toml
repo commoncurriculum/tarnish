@@ -10,6 +10,7 @@ repository.workspace = true
 [dependencies]
 memchr = "2"
 rustc-hash = "2"
+serde = "1"
 # JSON text laid out as one flat tape, which a document is read from without a JSON value of
 # the whole of it.
 simd-json = { version = "0.17", default-features = false, features = ["runtime-detection", "swar-number-parsing"] }

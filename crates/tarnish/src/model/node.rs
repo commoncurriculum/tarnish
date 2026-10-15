@@ -713,7 +713,7 @@ impl<'a> Node<'a> {
             out.push('(');
         }
         match self.text() {
-            Some(text) => text.write_json(out),
+            Some(text) => out.push_str(&text.to_json_string()),
             None => out.push_str(self.node_type().name()),
         }
         if self.content.size() > 0 {

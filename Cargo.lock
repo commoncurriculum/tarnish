@@ -1886,6 +1886,7 @@ dependencies = [
  "memchr",
  "mimalloc",
  "rustc-hash",
+ "serde",
  "simd-json",
  "tarnish-fixtures",
  "tarnish-js",

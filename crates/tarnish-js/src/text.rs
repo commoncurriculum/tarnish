@@ -143,15 +143,16 @@ impl Text {
 
     /// `JSON.stringify(text)`.
     pub fn to_json_string(&self) -> String {
-        let mut out = String::new();
-        self.write_json(&mut out);
-        out
+        crate::json::to_string(self)
     }
+}
 
-    pub fn write_json(&self, out: &mut String) {
+/// The text as `JSON.stringify` writes it, a lone surrogate as its escape.
+impl serde::Serialize for Text {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match &self.0 {
-            Repr::Utf8 { text, .. } => crate::json::write_string(out, text),
-            Repr::Utf16(units) => crate::json::write_units(out, units),
+            Repr::Utf8 { text, .. } => serializer.serialize_str(text),
+            Repr::Utf16(units) => crate::json::Units(units).serialize(serializer),
         }
     }
 }

@@ -430,10 +430,17 @@ impl<'c> TextRef<'c> {
     }
 
     /// `JSON.stringify(text)`.
-    pub fn write_json(self, out: &mut String) {
-        match self {
-            TextRef::Utf8 { text, .. } => js::json::write_string(out, text),
-            TextRef::Units(_) => js::json::write_units(out, &self.units()),
+    pub fn to_json_string(self) -> String {
+        js::json::to_string(&self)
+    }
+}
+
+/// The text as `JSON.stringify` writes it, a lone surrogate as its escape.
+impl serde::Serialize for TextRef<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match *self {
+            TextRef::Utf8 { text, .. } => serializer.serialize_str(text),
+            TextRef::Units(_) => js::json::Units(&self.units()).serialize(serializer),
         }
     }
 }
@@ -456,8 +463,6 @@ impl std::fmt::Display for TextRef<'_> {
 
 impl std::fmt::Debug for TextRef<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let mut out = String::new();
-        self.write_json(&mut out);
-        f.write_str(&out)
+        f.write_str(&self.to_json_string())
     }
 }

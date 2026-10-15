@@ -19,8 +19,8 @@ pub use index::JsonIndex;
 pub use macros::{json, object};
 pub use map::{Map, array_index};
 pub use write::{
-    stringify, stringify_entries, stringify_pretty, write_number, write_object, write_string,
-    write_units, write_value,
+    JsFormatter, Units, stringify, stringify_entries, stringify_pretty, to_string,
+    to_string_with_capacity, write,
 };
 /// An object's key, kept in place up to 24 bytes, which every key the schemas name fits in.
 pub type Key = compact_str::CompactString;

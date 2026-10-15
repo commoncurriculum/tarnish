@@ -23,7 +23,7 @@ ryu-js = "1"
 serde = "1"
 str_indices = "0.4"
 # JSON.parse rounds every number correctly; serde_json does only with float_roundtrip.
-serde_json = { version = "1", features = ["float_roundtrip"] }
+serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }
 stacker = "0.1"
 
 [dev-dependencies]
