@@ -166,20 +166,27 @@ impl Serialize for Units<'_> {
         if let Ok(string) = String::from_utf16(self.0) {
             return serializer.serialize_str(&string);
         }
+        // serde_json escapes each run between lone surrogates as it escapes any string, and the
+        // runs and escapes are joined as text it writes as it is.
         let mut written = String::with_capacity(self.0.len() + 2);
+        let mut run = String::new();
+        let flush = |written: &mut String, run: &mut String| {
+            let escaped = serde_json::to_string(run.as_str()).map_err(S::Error::custom)?;
+            written.push_str(&escaped[1..escaped.len() - 1]);
+            run.clear();
+            Ok(())
+        };
         written.push('"');
         for decoded in char::decode_utf16(self.0.iter().copied()) {
-            let mut buffer = [0; 4];
             match decoded {
-                Ok(character) => {
-                    // serde_json escapes the character as it escapes it in any string.
-                    let escaped = serde_json::to_string(character.encode_utf8(&mut buffer))
-                        .map_err(S::Error::custom)?;
-                    written.push_str(&escaped[1..escaped.len() - 1]);
+                Ok(character) => run.push(character),
+                Err(lone) => {
+                    flush(&mut written, &mut run)?;
+                    written.push_str(&format!("\\u{:04x}", lone.unpaired_surrogate()));
                 }
-                Err(lone) => written.push_str(&format!("\\u{:04x}", lone.unpaired_surrogate())),
             }
         }
+        flush(&mut written, &mut run)?;
         written.push('"');
         RawValue::from_string(written)
             .map_err(S::Error::custom)?

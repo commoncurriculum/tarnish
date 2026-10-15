@@ -94,6 +94,33 @@ const FIELDS: [&str; 5] = ["type", "text", "content", "marks", "attrs"];
 /// at once when that is more than it may read, rather than when it has read that much.
 const FORESEEN_FROM: usize = 16;
 
+/// A list's weight foreseen from its first items: whether reading all of them would weigh more
+/// than the reading has left, which ends it at once rather than when it has read that much.
+struct Foresight {
+    /// The list's items.
+    count: usize,
+    /// What the reading had left before the list.
+    left: usize,
+    /// The items read so far.
+    read: usize,
+}
+
+impl Foresight {
+    /// Whether the list, about to have its next item read, would weigh too much.
+    fn heavy(&mut self, reading: &Reading) -> bool {
+        self.read += 1;
+        if self.read <= FORESEEN_FROM || self.read > self.count {
+            return false;
+        }
+        let weighed = self.left - reading.left.get();
+        let heavy = weighed.saturating_mul(self.count) / (self.read - 1) > self.left;
+        if heavy {
+            reading.heavy.set(true);
+        }
+        heavy
+    }
+}
+
 /// A map being read as a node or mark, until the reader says what it read.
 struct Open {
     /// [`Reading::irregular`] when the map was opened.
@@ -141,14 +168,14 @@ impl<'a> Reading<'a> {
         }
     }
 
-    /// Whether reading `count` items like the `read` of them, which weighed `weighed`, would
-    /// weigh more than `left`, which ends the reading.
-    fn foresee(&self, read: usize, count: usize, weighed: usize, left: usize) -> bool {
-        let heavy = weighed.saturating_mul(count) / read > left;
-        if heavy {
-            self.heavy.set(true);
-        }
-        heavy
+    /// How the reading foresees its weight from the list it is about to read: only a bounded
+    /// reading does, from the first list it reads, the document's content.
+    fn foresight(&self, list: Term<'a>) -> Option<Foresight> {
+        (self.bounded && !self.outer.replace(true)).then(|| Foresight {
+            count: list.list_length().unwrap_or(0),
+            left: self.left.get(),
+            read: 0,
+        })
     }
 
     fn outcome<T>(&self, read: T) -> Result<T, Unread> {
@@ -653,19 +680,11 @@ impl<'a> read::Json<'a> for Json<'a, '_> {
         // A light call that would read too much of the document goes dirty after a few of its
         // children, not after most of them.
         let reading = self.reading;
-        let outer = reading.bounded && !reading.outer.replace(true);
-        let count = match outer {
-            true => self.term.list_length().unwrap_or(0),
-            false => 0,
-        };
-        let left = reading.left.get();
-        let mut read = 0;
+        let mut foresight = reading.foresight(self.term);
         Some(self.list().take_while(move |_| {
-            read += 1;
-            !(outer
-                && read > FORESEEN_FROM
-                && read <= count
-                && reading.foresee(read - 1, count, left - reading.left.get(), left))
+            !foresight
+                .as_mut()
+                .is_some_and(|foresight| foresight.heavy(reading))
         }))
     }
 

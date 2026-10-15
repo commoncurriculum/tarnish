@@ -292,7 +292,7 @@ impl<'a, 'v> Writer<'a, 'v> {
     pub fn fields(&mut self, fields: impl Fields<'v>) -> Term<'a> {
         stack::grow(|| {
             let base = self.begin_map();
-            fields.fields(|field| {
+            for field in fields.fields() {
                 let term = match field {
                     Field::Type(name) => self.name(name),
                     Field::Attrs(attrs) => self.value_ref(attrs),
@@ -316,7 +316,7 @@ impl<'a, 'v> Writer<'a, 'v> {
                     Field::Text(text) => binary(self.env, &text.to_string_lossy()),
                 };
                 self.entry(field.key(), term);
-            });
+            }
             self.map(base)
         })
     }

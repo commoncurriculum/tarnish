@@ -36,29 +36,25 @@ impl Field<'_> {
 /// A node or mark, as the fields of its JSON.
 pub trait Fields<'c>: Copy {
     /// Each field `toJSON` writes, in its order.
-    fn fields(self, field: impl FnMut(Field<'c>));
+    fn fields(self) -> impl Iterator<Item = Field<'c>>;
 
     fn field_count(self) -> usize;
 }
 
 impl<'c> Fields<'c> for NodeRef<'c> {
     #[inline]
-    fn fields(self, mut field: impl FnMut(Field<'c>)) {
+    fn fields(self) -> impl Iterator<Item = Field<'c>> {
         let node_type = self.node_type();
-        field(Field::Type(node_type.name()));
-        if !node_type.data().attrs.is_empty() {
-            field(Field::Attrs(self.attrs()));
-        }
-        if self.content_size() > 0 {
-            field(Field::Content(self));
-        }
         let marks = self.marks();
-        if !marks.is_empty() {
-            field(Field::Marks(marks));
-        }
-        if let Some(text) = self.text() {
-            field(Field::Text(text));
-        }
+        [
+            Some(Field::Type(node_type.name())),
+            (!node_type.data().attrs.is_empty()).then(|| Field::Attrs(self.attrs())),
+            (self.content_size() > 0).then_some(Field::Content(self)),
+            (!marks.is_empty()).then_some(Field::Marks(marks)),
+            self.text().map(Field::Text),
+        ]
+        .into_iter()
+        .flatten()
     }
 
     fn field_count(self) -> usize {
@@ -73,12 +69,10 @@ impl<'c> Fields<'c> for NodeRef<'c> {
 
 impl<'c> Fields<'c> for MarkRef<'c> {
     #[inline]
-    fn fields(self, mut field: impl FnMut(Field<'c>)) {
+    fn fields(self) -> impl Iterator<Item = Field<'c>> {
         let mark_type = self.mark_type();
-        field(Field::Type(mark_type.name()));
-        if !mark_type.data().attrs.is_empty() {
-            field(Field::Attrs(self.attrs()));
-        }
+        let attrs = (!mark_type.data().attrs.is_empty()).then(|| Field::Attrs(self.attrs()));
+        std::iter::once(Field::Type(mark_type.name())).chain(attrs)
     }
 
     fn field_count(self) -> usize {
@@ -122,7 +116,9 @@ pub(crate) fn to_value<'c>(fields: impl Fields<'c>) -> Value {
     // The first push makes room for four entries, which is as many as a node of most schemas has,
     // without reading the fields twice to count them.
     let mut object = Map::new();
-    fields.fields(|field| object.push(Key::const_new(field.key()), field_value(field)));
+    for field in fields.fields() {
+        object.push(Key::const_new(field.key()), field_value(field));
+    }
     Value::Object(object)
 }
 
@@ -148,23 +144,17 @@ impl<'c, F: Fields<'c>> Serialize for Json<F> {
     // down; content grows the stack
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut map = serializer.serialize_map(Some(self.0.field_count()))?;
-        let mut written = Ok(());
-        self.0.fields(|field| {
-            if written.is_err() {
-                return;
-            }
-            written = match field {
-                Field::Type(name) => map.serialize_entry(field.key(), name),
-                Field::Attrs(attrs) => map.serialize_entry(field.key(), &attrs),
+        for field in self.0.fields() {
+            let key = field.key();
+            match field {
+                Field::Type(name) => map.serialize_entry(key, name),
+                Field::Attrs(attrs) => map.serialize_entry(key, &attrs),
                 // One check of the stack for the level, rather than one for each child.
-                Field::Content(node) => {
-                    stack::grow(|| map.serialize_entry(field.key(), &Children(node)))
-                }
-                Field::Marks(marks) => map.serialize_entry(field.key(), &Marks(marks)),
-                Field::Text(text) => map.serialize_entry(field.key(), &text),
-            };
-        });
-        written?;
+                Field::Content(node) => stack::grow(|| map.serialize_entry(key, &Children(node))),
+                Field::Marks(marks) => map.serialize_entry(key, &Marks(marks)),
+                Field::Text(text) => map.serialize_entry(key, &text),
+            }?;
+        }
         map.end()
     }
 }

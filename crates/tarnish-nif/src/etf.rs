@@ -437,7 +437,7 @@ pub fn write_fields<'c>(fields: impl Fields<'c>) -> Vec<u8> {
 fn write_node<'c>(out: &mut Vec<u8>, fields: impl Fields<'c>) {
     out.push(MAP);
     out.extend_from_slice(&(fields.field_count() as u32).to_be_bytes());
-    fields.fields(|field| {
+    for field in fields.fields() {
         binary(out, field.key());
         match field {
             Field::Type(name) => binary(out, name),
@@ -459,7 +459,7 @@ fn write_node<'c>(out: &mut Vec<u8>, fields: impl Fields<'c>) {
             // A binary holds UTF-8, which has no lone surrogate.
             Field::Text(text) => binary(out, &text.to_string_lossy()),
         }
-    });
+    }
 }
 
 /// [`write_value`] of a value a chunk holds.
