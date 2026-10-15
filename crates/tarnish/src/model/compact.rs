@@ -1,5 +1,6 @@
 //! Writing a node again into a chunk of its own: whole, or all but what some chunks hold.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
@@ -7,8 +8,9 @@ use rustc_hash::FxHashMap;
 use super::node::Node;
 use super::schema::Schema;
 use super::view::{NodeRef, SetRef};
-use crate::chunk::{Builder, Chunk, EMPTY_OBJECT, EMPTY_SET, Holder, Kid, Record, ValueRef};
+use crate::chunk::{Builder, Chunk, EMPTY_OBJECT, EMPTY_SET, Holder, Kid, NODES, Record, ValueRef};
 use crate::js::stack;
+use crate::{Error, Result};
 
 /// What a copy has written of what it copies: each value and set it copied, by where it was,
 /// so that what nodes share stays shared.
@@ -140,6 +142,39 @@ impl Node<'_> {
     /// nothing with others any more, and holds nothing it doesn't use.
     pub fn compact(&self) -> Node<'static> {
         write_again(self.view(), &[])
+    }
+
+    /// The node as bytes to keep, which [`Node::from_bytes`] reads back: one chunk that holds
+    /// the node, last, and imports nothing. A document read from JSON is such a chunk already,
+    /// and its bytes are copied; a changed one is written again first, with
+    /// [`compact`](Self::compact).
+    pub fn to_bytes(&self) -> Vec<u8> {
+        match self.own_bytes() {
+            Some(bytes) => bytes.to_vec(),
+            None => self.compact().chunk().bytes().to_vec(),
+        }
+    }
+
+    /// The bytes [`to_bytes`](Self::to_bytes) gives, when they're the node's chunk's own and
+    /// need no copy: when the chunk holds the node last and imports nothing.
+    pub fn own_bytes(&self) -> Option<&[u8]> {
+        let chunk = self.chunk();
+        let alone = chunk.imports().is_empty() && chunk.count(NODES) == self.index() + 1;
+        alone.then(|| chunk.bytes())
+    }
+}
+
+impl<'a> Node<'a> {
+    /// The node [`Node::to_bytes`] wrote, read in place. Loading checks the bytes' layout, that
+    /// they were written for this schema, and that their text is UTF-8, which takes a
+    /// microsecond or two for a document of a thousand nodes.
+    ///
+    /// It doesn't check every record. Each read checks what it reads against the chunk's
+    /// bounds, so bytes that pass these checks and weren't written by `to_bytes` may panic when
+    /// read, though they never loop.
+    pub fn from_bytes(schema: &Schema, bytes: impl Into<Cow<'a, [u8]>>) -> Result<Node<'a>> {
+        let chunk = Chunk::load(bytes.into(), schema, Vec::new())?;
+        Node::root(Arc::new(chunk)).ok_or_else(|| Error::Range("Invalid document chunk".into()))
     }
 }
 

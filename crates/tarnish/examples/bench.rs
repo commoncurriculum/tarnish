@@ -50,6 +50,10 @@ fn main() {
     time("JSON.parse, then fromJSON", &mut || {
         drop(Node::from_json(&schema, &json::from_str(&text).unwrap()).unwrap())
     });
+    let bytes = node.to_bytes();
+    time("from bytes", &mut || {
+        drop(Node::from_bytes(&schema, bytes.as_slice()).unwrap())
+    });
     time("check", &mut || node.check().unwrap());
     time("apply 10 steps", &mut || {
         drop(api::apply_steps(&node, steps).unwrap())
@@ -59,6 +63,9 @@ fn main() {
     });
     time("JSON text of the changed document", &mut || {
         drop(changed.to_json_string())
+    });
+    time("bytes of the changed document", &mut || {
+        drop(changed.to_bytes())
     });
     time("JSON text in, apply 10 steps, JSON text out", &mut || {
         let node = Node::from_json_text(&schema, &text).unwrap();

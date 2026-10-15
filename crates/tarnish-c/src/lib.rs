@@ -112,6 +112,35 @@ fn tarnish_node_to_json(node: &TarnishNode) -> char_p::Box {
     string(node.0.to_json_string())
 }
 
+/// The node as bytes to keep, which `tarnish_node_from_bytes` reads back. Free them with
+/// `tarnish_bytes_free`.
+#[ffi_export]
+fn tarnish_node_to_bytes(node: &TarnishNode) -> repr_c::Vec<u8> {
+    node.0.to_bytes().into()
+}
+
+/// A node read from the bytes `tarnish_node_to_bytes` wrote, for the same schema. Loading
+/// checks their layout, schema and text; bytes that pass and weren't written by
+/// `tarnish_node_to_bytes` may fail a later call with an error that tarnish panicked. Free the
+/// node with `tarnish_node_free`.
+#[ffi_export]
+fn tarnish_node_from_bytes(
+    schema: Option<&TarnishSchema>,
+    bytes: c_slice::Ref<'_, u8>,
+    error: ErrorOut<'_>,
+) -> Option<repr_c::Box<TarnishNode>> {
+    run(error, || {
+        let node = Node::from_bytes(&given(schema, "schema")?.0, bytes.as_slice().to_vec())?;
+        Ok(Box::new(TarnishNode(node)).into())
+    })
+}
+
+/// Frees bytes the library returned.
+#[ffi_export]
+fn tarnish_bytes_free(bytes: repr_c::Vec<u8>) {
+    drop(bytes);
+}
+
 /// Frees a node.
 #[ffi_export]
 fn tarnish_node_free(node: Option<repr_c::Box<TarnishNode>>) {

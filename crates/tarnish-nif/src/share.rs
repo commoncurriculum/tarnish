@@ -11,7 +11,7 @@ use crate::term::Writer;
 const BYTES_PER_ITEM: usize = 64;
 
 /// A node's JSON made anew costs about as much as this many bytes a position.
-const BYTES_PER_POSITION: usize = 4;
+pub const BYTES_PER_POSITION: usize = 4;
 
 /// Reading past this many children for one that was read finds it too rarely to pay.
 const LOOK_AHEAD: usize = 32;

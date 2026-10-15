@@ -56,6 +56,14 @@ defmodule Tarnish.NIF do
       @doc false
       def to_json_dirty(_doc, _json), do: :erlang.nif_error(:nif_not_loaded)
       @doc false
+      def node_to_binary(_doc), do: :erlang.nif_error(:nif_not_loaded)
+      @doc false
+      def node_to_binary_dirty(_doc), do: :erlang.nif_error(:nif_not_loaded)
+      @doc false
+      def node_from_binary(_schema, _bytes), do: :erlang.nif_error(:nif_not_loaded)
+      @doc false
+      def node_from_binary_dirty(_schema, _bytes), do: :erlang.nif_error(:nif_not_loaded)
+      @doc false
       def check(_doc), do: :erlang.nif_error(:nif_not_loaded)
       @doc false
       def check_dirty(_doc), do: :erlang.nif_error(:nif_not_loaded)

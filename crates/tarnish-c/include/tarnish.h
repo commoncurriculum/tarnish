@@ -37,6 +37,31 @@ tarnish_apply_steps (
     char * * error);
 
 
+#include <stddef.h>
+#include <stdint.h>
+
+/** \brief
+ *  Same as [`Vec<T>`][`rust::Vec`], but with guaranteed `#[repr(C)]` layout
+ */
+typedef struct Vec_uint8 {
+    /** <No documentation available> */
+    uint8_t * ptr;
+
+    /** <No documentation available> */
+    size_t len;
+
+    /** <No documentation available> */
+    size_t cap;
+} Vec_uint8_t;
+
+/** \brief
+ *  Frees bytes the library returned.
+ */
+void
+tarnish_bytes_free (
+    Vec_uint8_t bytes);
+
+
 #include <stdbool.h>
 
 /** \brief
@@ -68,10 +93,6 @@ tarnish_invert_steps (
  */
 typedef struct TarnishSchema TarnishSchema_t;
 
-
-#include <stddef.h>
-#include <stdint.h>
-
 /** \brief
  *  Maps a position through the changes the steps make, into `mapped`. With `assoc` below zero,
  *  a position where content is inserted stays before it; otherwise it moves after it.
@@ -93,6 +114,49 @@ tarnish_node_free (
     TarnishNode_t * node);
 
 /** \brief
+ *  `&'lt [T]` but with a guaranteed `#[repr(C)]` layout.
+ *
+ *  # C layout (for some given type T)
+ *
+ *  ```c
+ *  typedef struct {
+ *  // Cannot be NULL
+ *  T * ptr;
+ *  size_t len;
+ *  } slice_T;
+ *  ```
+ *
+ *  # Nullable pointer?
+ *
+ *  If you want to support the above typedef, but where the `ptr` field is
+ *  allowed to be `NULL` (with the contents of `len` then being undefined)
+ *  use the `Option< slice_ptr<_> >` type.
+ */
+typedef struct slice_ref_uint8 {
+    /** \brief
+     *  Pointer to the first element (if any).
+     */
+    uint8_t const * ptr;
+
+    /** \brief
+     *  Element count
+     */
+    size_t len;
+} slice_ref_uint8_t;
+
+/** \brief
+ *  A node read from the bytes `tarnish_node_to_bytes` wrote, for the same schema. Loading
+ *  checks their layout, schema and text; bytes that pass and weren't written by
+ *  `tarnish_node_to_bytes` may fail a later call with an error that tarnish panicked. Free the
+ *  node with `tarnish_node_free`.
+ */
+TarnishNode_t *
+tarnish_node_from_bytes (
+    TarnishSchema_t const * schema,
+    slice_ref_uint8_t bytes,
+    char * * error);
+
+/** \brief
  *  A node read from its JSON, as `Node.fromJSON` reads it. Free it with `tarnish_node_free`.
  */
 TarnishNode_t *
@@ -100,6 +164,14 @@ tarnish_node_from_json (
     TarnishSchema_t const * schema,
     char const * json,
     char * * error);
+
+/** \brief
+ *  The node as bytes to keep, which `tarnish_node_from_bytes` reads back. Free them with
+ *  `tarnish_bytes_free`.
+ */
+Vec_uint8_t
+tarnish_node_to_bytes (
+    TarnishNode_t const * node);
 
 /** \brief
  *  The node's JSON, which is what `JSON.stringify` writes for it, byte for byte.

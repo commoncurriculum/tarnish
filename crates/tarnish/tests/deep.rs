@@ -100,6 +100,9 @@ fn documents_nest_as_deeply_as_memory_allows() {
         let text = doc.to_json_string();
         let from_text = Node::from_json_text(&schema, &text).expect("the document from its text");
         assert!(from_text == doc);
+        let bytes = doc.to_bytes();
+        let from_bytes = Node::from_bytes(&schema, bytes.as_slice()).expect("it from its bytes");
+        assert!(from_bytes == doc);
         assert!(again.to_json() == written);
         let quotes = "blockquote(".repeat(DEPTH);
         let closes = ")".repeat(DEPTH);

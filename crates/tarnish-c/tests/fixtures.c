@@ -123,17 +123,6 @@ static void expect_outcome(const char *test, const char *what, bool ok, const ch
     tarnish_free(error);
 }
 
-/* A node read from its JSON, or NULL, having failed the test, when it can't be. */
-static TarnishNode_t *read_node(const char *test, const TarnishSchema_t *schema, const char *json) {
-    char *error = NULL;
-    TarnishNode_t *node = tarnish_node_from_json(schema, json, &error);
-    if (!node) {
-        fail(test, "the node", json, error);
-        tarnish_free(error);
-    }
-    return node;
-}
-
 /* Compares a node's JSON with the text expected. */
 static void expect_json(const char *test, const char *what, const char *expected, const TarnishNode_t *node) {
     char *json = tarnish_node_to_json(node);
@@ -141,6 +130,33 @@ static void expect_json(const char *test, const char *what, const char *expected
         fail(test, what, expected, json);
     tarnish_free(json);
 }
+
+/* A node read from its JSON, or NULL, having failed the test, when it can't be. The node is
+ * written as bytes and read back from them, and must give the same JSON. */
+static TarnishNode_t *read_node(const char *test, const TarnishSchema_t *schema, const char *json) {
+    char *error = NULL;
+    TarnishNode_t *node = tarnish_node_from_json(schema, json, &error);
+    if (!node) {
+        fail(test, "the node", json, error);
+        tarnish_free(error);
+        return NULL;
+    }
+    Vec_uint8_t bytes = tarnish_node_to_bytes(node);
+    slice_ref_uint8_t kept = {bytes.ptr, bytes.len};
+    TarnishNode_t *again = tarnish_node_from_bytes(schema, kept, &error);
+    if (!again) {
+        fail(test, "the node from its bytes", json, error);
+        tarnish_free(error);
+    } else {
+        char *written = tarnish_node_to_json(node);
+        expect_json(test, "the node from its bytes", written, again);
+        tarnish_free(written);
+        tarnish_node_free(again);
+    }
+    tarnish_bytes_free(bytes);
+    return node;
+}
+
 
 static TarnishSchema_t **read_schemas(const char *section, size_t *count) {
     *count = read_count(section);
