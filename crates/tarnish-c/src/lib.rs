@@ -26,12 +26,16 @@ pub struct TarnishNode(Node<'static>);
 /// Where a function that can fail puts its error, as `include/banner.h` describes.
 type ErrorOut<'a> = Option<Out<'a, Option<char_p::Box>>>;
 
+/// The JSON string's text.
+fn json_text(json: Option<char_p::Ref<'_>>) -> Result<&str> {
+    let json = json.ok_or_else(|| Error::Other("A JSON string was NULL".into()))?;
+    std::str::from_utf8(json.to_bytes())
+        .map_err(|_| Error::Other("A JSON string wasn't UTF-8".into()))
+}
+
 /// `JSON.parse` of the string.
 fn parse(json: Option<char_p::Ref<'_>>) -> Result<Value> {
-    let json = json.ok_or_else(|| Error::Other("A JSON string was NULL".into()))?;
-    let text = std::str::from_utf8(json.to_bytes())
-        .map_err(|_| Error::Other("A JSON string wasn't UTF-8".into()))?;
-    tarnish::json::from_str(text).map_err(|_| Error::Syntax("Invalid JSON".into()))
+    tarnish::json::from_str(json_text(json)?).map_err(|_| Error::Syntax("Invalid JSON".into()))
 }
 
 /// The text as a C string. JSON never holds a raw NUL, but an error's message or a document's
@@ -97,7 +101,7 @@ fn tarnish_node_from_json(
     error: ErrorOut<'_>,
 ) -> Option<repr_c::Box<TarnishNode>> {
     run(error, || {
-        let node = Node::from_json(&given(schema, "schema")?.0, &parse(json)?)?;
+        let node = Node::from_json_text(&given(schema, "schema")?.0, json_text(json)?)?;
         Ok(Box::new(TarnishNode(node)).into())
     })
 }

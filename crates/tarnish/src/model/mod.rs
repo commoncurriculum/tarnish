@@ -15,6 +15,7 @@ mod replace;
 mod resolved_pos;
 mod schema;
 mod schema_json;
+mod text;
 mod view;
 
 pub use attrs::{AttributeDefault, AttributeSpec, Attrs, Validate, ValidateHook};
