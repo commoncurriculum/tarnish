@@ -790,7 +790,7 @@ impl<'a> Step<'a> {
             false => Err(invalid()),
         };
         let attr = || match json.get("attr") {
-            Some(Value::String(attr)) => Ok(attr.clone()),
+            Some(Value::String(attr)) => Ok(attr.to_string()),
             _ => Err(invalid()),
         };
         let field = |key: &str| json.get(key).unwrap_or(&NULL);

@@ -15,12 +15,13 @@ mod replace;
 mod resolved_pos;
 mod schema;
 mod schema_json;
+mod text;
 mod view;
 
 pub use attrs::{AttributeDefault, AttributeSpec, Attrs, Validate, ValidateHook};
 pub use compare_deep::{compare_deep, objects_equal};
 pub use content::{ContentExpr, ContentMatch};
-pub use fields::{Field, Fields};
+pub use fields::{Field, Fields, Json};
 pub use fragment::{Fragment, LeafTextHook, NodeVisitor};
 pub use mark::{Mark, Marks};
 pub use node::{ChildAt, Node};

@@ -33,6 +33,21 @@ fn nodes_from_json_are_prosemirrors() {
     }
 }
 
+/// The same records read from their text, as `Node.fromJSON(schema, JSON.parse(text))`.
+#[test]
+fn nodes_from_json_text_are_prosemirrors() {
+    let (schemas, fixtures) = fixtures();
+    for case in records(&fixtures, "fromJSON") {
+        let text = match case.get("text") {
+            Some(text) => text.as_str().expect("JSON text").to_string(),
+            None => json::stringify(&case["json"]),
+        };
+        let node = Node::from_json_text(schema(&schemas, case), &text);
+        let node = node.map(|node| json!({ "result": node.to_json() }));
+        expect(case, &["schema", "json", "text"], outcome(node));
+    }
+}
+
 #[test]
 fn filled_nodes_are_prosemirrors() {
     let (schemas, fixtures) = fixtures();

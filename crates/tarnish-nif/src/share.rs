@@ -92,34 +92,28 @@ impl<'a, 'v> Sharer<'a, 'v> {
             .filter(|items| items.len() == count);
         self.spend(BYTES_PER_ITEM)?;
         let base = self.writer.begin_map();
-        let mut failed = Ok(());
-        node.fields(|field| {
-            if failed.is_err() {
-                return;
-            }
+        for field in node.fields() {
             let value = match field {
-                Field::Type(name) => Ok(self.writer.name(name)),
-                Field::Content(node) => self.children(node, read, read_items.as_deref()),
-                Field::Attrs(attrs) => self
-                    .spend(BYTES_PER_ITEM)
-                    .map(|()| self.writer.value_ref(attrs)),
-                Field::Marks(marks) => self.spend(BYTES_PER_ITEM).map(|()| {
+                Field::Type(name) => self.writer.name(name),
+                Field::Content(node) => self.children(node, read, read_items.as_deref())?,
+                Field::Attrs(attrs) => {
+                    self.spend(BYTES_PER_ITEM)?;
+                    self.writer.value_ref(attrs)
+                }
+                Field::Marks(marks) => {
+                    self.spend(BYTES_PER_ITEM)?;
                     let items = self.writer.begin_list();
                     for mark in marks.iter() {
                         let term = self.writer.fields(mark);
                         self.writer.item(term);
                     }
                     self.writer.list(items)
-                }),
-                Field::Text(text) => Ok(self.writer.text(&text.to_string_lossy())),
+                }
+                Field::Text(text) => self.writer.text(&text.to_string_lossy()),
             };
-            match value {
-                Ok(value) => self.writer.entry(field.key(), value),
-                Err(too_big) => failed = Err(too_big),
-            }
-        });
-        let map = self.writer.map(base);
-        failed.map(|()| map)
+            self.writer.entry(field.key(), value);
+        }
+        Ok(self.writer.map(base))
     }
 
     /// The list of the children's terms, each paired with the child of `read` it is, or the one

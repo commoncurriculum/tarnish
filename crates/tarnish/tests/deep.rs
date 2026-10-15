@@ -97,6 +97,9 @@ fn documents_nest_as_deeply_as_memory_allows() {
         let written = doc.to_json();
         let again = Node::from_json(&schema, &written).expect("the document again");
         assert!(doc == again);
+        let text = doc.to_json_string();
+        let from_text = Node::from_json_text(&schema, &text).expect("the document from its text");
+        assert!(from_text == doc);
         assert!(again.to_json() == written);
         let quotes = "blockquote(".repeat(DEPTH);
         let closes = ")".repeat(DEPTH);
@@ -244,7 +247,11 @@ fn attribute_values_nest_as_deeply_as_memory_allows() {
                 ("attrs", object(vec![("data", data)])),
                 ("content", Value::Array(vec![paragraph])),
             ]);
-            Node::from_json(&schema, &quote).expect("a quote")
+            let read = Node::from_json(&schema, &quote).expect("a quote");
+            let text = json::stringify(&quote);
+            let from_text = Node::from_json_text(&schema, &text).expect("a quote from its text");
+            assert_eq!(from_text.to_json_string(), read.to_json_string());
+            read
         };
         let arrays = quote(nested_array(DEPTH));
         let data = arrays.attrs_view().get("data").expect("its data");

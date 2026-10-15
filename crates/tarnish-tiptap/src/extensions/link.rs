@@ -146,8 +146,11 @@ impl Configured {
 pub fn link(options: LinkOptions) -> MarkExtension {
     let default_of = |name: &str| Value::from(options.html_attributes.get(name).cloned());
     let attributes = vec![
-        ExtensionAttribute::new("href", Value::Null)
-            .parse_html(|element| element.attribute("href").map(Value::String)),
+        ExtensionAttribute::new("href", Value::Null).parse_html(|element| {
+            element
+                .attribute("href")
+                .map(|href| Value::String(href.into()))
+        }),
         ExtensionAttribute::new("target", default_of("target")),
         ExtensionAttribute::new("rel", default_of("rel")),
         ExtensionAttribute::new("class", default_of("class")),
@@ -166,7 +169,7 @@ pub fn link(options: LinkOptions) -> MarkExtension {
         .parse_html([ParseHtml::tag("a[href]").get_attrs(move |element| {
             let href = element.attribute("href").filter(|href| !href.is_empty());
             let allowed = match href {
-                Some(href) => parsing.is_allowed_uri(Some(&Value::String(href)))?,
+                Some(href) => parsing.is_allowed_uri(Some(&Value::String(href.into())))?,
                 None => false,
             };
             Ok(allowed.then(Map::new))

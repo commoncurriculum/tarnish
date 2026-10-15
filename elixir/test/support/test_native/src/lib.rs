@@ -50,9 +50,7 @@ static HTML: LazyLock<Html> = LazyLock::new(|| {
     let paragraph: NodeToDom<HtmlNode> = Arc::new(|node| {
         let spec = match node.attrs().get("data") {
             Some(data) if !data.is_null() => {
-                let mut written = String::new();
-                data.write_json(&mut written);
-                json::json!(["p", {"data-json": written}, 0])
+                json::json!(["p", {"data-json": json::to_string(&data)}, 0])
             }
             _ => json::json!(["p", 0]),
         };

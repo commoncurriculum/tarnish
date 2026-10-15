@@ -5,11 +5,11 @@ use std::fmt;
 
 use super::{Chunk, Holder, corrupt};
 use crate::js::TypeOf;
-use crate::js::json::{write_number, write_string};
 use crate::js::stack;
 use crate::js::value::{Nullish, cannot_read};
 use crate::json::{EMPTY, Key, Map, Number, Value};
 use crate::model::compare_deep::entries_equal;
+use serde::{Serialize, Serializer};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Tag {
@@ -252,44 +252,30 @@ impl<'c> ValueRef<'c> {
     }
 
     pub fn to_value(self) -> Value {
-        JsonView::to_value(self).into_owned()
+        match self.kind() {
+            Kind::Null => Value::Null,
+            Kind::Bool(boolean) => Value::Bool(boolean),
+            Kind::Number(number) => Value::Number(number),
+            Kind::String(string) => Value::String(string.into()),
+            Kind::Array(_) => {
+                Value::Array(stack::grow(|| self.items().map(Self::to_value).collect()))
+            }
+            // A chunk's object holds each key once, as the value it was written from did.
+            Kind::Object(len) => {
+                let mut map = Map::with_capacity(len as usize);
+                stack::grow(|| {
+                    for (key, value) in self.entries() {
+                        map.push(Key::from(key), value.to_value());
+                    }
+                });
+                Value::Object(map)
+            }
+        }
     }
 
     /// An object's entries as a map; empty for anything else.
     pub fn to_map(self) -> Map {
         to_map(self)
-    }
-
-    /// `JSON.stringify(value)`.
-    pub fn write_json(self, out: &mut String) {
-        match self.kind() {
-            Kind::Null => out.push_str("null"),
-            Kind::Bool(boolean) => out.push_str(if boolean { "true" } else { "false" }),
-            Kind::Number(number) => write_number(out, number),
-            Kind::String(string) => write_string(out, string),
-            Kind::Array(..) => {
-                out.push('[');
-                for (index, item) in self.items().enumerate() {
-                    if index > 0 {
-                        out.push(',');
-                    }
-                    stack::grow(|| item.write_json(out));
-                }
-                out.push(']');
-            }
-            Kind::Object(..) => {
-                out.push('{');
-                for (index, (key, value)) in self.entries().enumerate() {
-                    if index > 0 {
-                        out.push(',');
-                    }
-                    write_string(out, key);
-                    out.push(':');
-                    stack::grow(|| value.write_json(out));
-                }
-                out.push('}');
-            }
-        }
     }
 
     /// `compareDeep` of an object with `map`.
@@ -470,11 +456,24 @@ impl<'v> JsonView<'v> for &'v Value {
     }
 }
 
+/// The value as `JSON.stringify` writes it.
+impl Serialize for ValueRef<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self.kind() {
+            Kind::Null => serializer.serialize_unit(),
+            Kind::Bool(boolean) => serializer.serialize_bool(boolean),
+            Kind::Number(number) => serializer.serialize_f64(number.as_f64()),
+            Kind::String(string) => serializer.serialize_str(string),
+            // One check of the stack for the level, rather than one for each item.
+            Kind::Array(..) => stack::grow(|| serializer.collect_seq(self.items())),
+            Kind::Object(..) => stack::grow(|| serializer.collect_map(self.entries())),
+        }
+    }
+}
+
 impl fmt::Debug for ValueRef<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let mut out = String::new();
-        self.write_json(&mut out);
-        f.write_str(&out)
+        f.write_str(&crate::js::json::to_string(self))
     }
 }
 

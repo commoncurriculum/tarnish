@@ -55,13 +55,13 @@ impl Reader {
     fn read_into(&mut self, term: Term, slot: &mut Value) -> Result<(), Unread> {
         self.weigh(1)?;
         *slot = match term.get_type() {
-            TermType::Binary => Value::String(text(self.bytes(term)?)?.to_owned()),
+            TermType::Binary => Value::String(text(self.bytes(term)?)?.into()),
             TermType::Atom if atom::nil() == term => return Ok(()),
             TermType::Atom if atom::true_() == term => Value::Bool(true),
             TermType::Atom if atom::false_() == term => Value::Bool(false),
             // The VM gives out an atom's name in Latin-1, which not every name fits.
             TermType::Atom => match term.atom_to_string() {
-                Ok(name) => Value::String(name),
+                Ok(name) => Value::String(name.into()),
                 Err(_) => return self.external(term, slot),
             },
             TermType::Integer => match term.decode::<i64>() {
@@ -292,7 +292,7 @@ impl<'a, 'v> Writer<'a, 'v> {
     pub fn fields(&mut self, fields: impl Fields<'v>) -> Term<'a> {
         stack::grow(|| {
             let base = self.begin_map();
-            fields.fields(|field| {
+            for field in fields.fields() {
                 let term = match field {
                     Field::Type(name) => self.name(name),
                     Field::Attrs(attrs) => self.value_ref(attrs),
@@ -316,7 +316,7 @@ impl<'a, 'v> Writer<'a, 'v> {
                     Field::Text(text) => binary(self.env, &text.to_string_lossy()),
                 };
                 self.entry(field.key(), term);
-            });
+            }
             self.map(base)
         })
     }

@@ -34,7 +34,7 @@ pub fn text_align(options: TextAlignOptions) -> PlainExtension {
         .parse_html(move |element| {
             let alignment = element.style_value("text-align");
             if alignments.contains(&alignment.as_str()) {
-                Some(Value::String(alignment))
+                Some(Value::String(alignment.into()))
             } else {
                 parsed_default.clone()
             }

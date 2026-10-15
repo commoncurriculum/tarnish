@@ -99,9 +99,9 @@ fn styled(
             let value = get_style_property(element, property)
                 .unwrap_or_else(|| element.style_value(property));
             Some(Value::String(if unquoted {
-                value.replace(['\'', '"'], "")
+                value.replace(['\'', '"'], "").into()
             } else {
-                value
+                value.into()
             }))
         })
         .render_html(move |attributes, rendered| match attributes.get(name) {

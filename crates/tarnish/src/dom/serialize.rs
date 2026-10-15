@@ -786,7 +786,7 @@ fn render<D: Dom>(
             ];
             for (name, node) in nodes {
                 let Some(node) = node else { continue };
-                let value = Value::String(dom.attribute_value(node)?);
+                let value = Value::String(dom.attribute_value(node)?.into());
                 dom.set_attribute(&element, None, name, &value)?;
             }
             2

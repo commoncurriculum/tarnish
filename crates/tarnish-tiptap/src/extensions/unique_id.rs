@@ -38,7 +38,7 @@ impl Default for UniqueIdOptions {
         UniqueIdOptions {
             attribute_name: "id",
             types: UniqueIdTypes::Named(&[]),
-            generate_id: Arc::new(|_, _| Ok(Value::String(uuid_v4()))),
+            generate_id: Arc::new(|_, _| Ok(Value::String(uuid_v4().into()))),
         }
     }
 }

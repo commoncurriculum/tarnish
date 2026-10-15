@@ -10,7 +10,7 @@ use super::{Align, Cell, Token, TokenData};
 impl Token {
     /// The token's fields, its children's among them, as `JSON.stringify` writes marked's.
     pub fn to_json(&self) -> Value {
-        let string = |units: &[u16]| Value::String(utf16::to_string(units));
+        let string = |units: &[u16]| Value::String(utf16::to_string(units).into());
         let optional = |units: &Option<Vec<u16>>| Value::from(units.as_deref().map(string));
         let tokens = |tokens: &[Token]| {
             Value::Array(

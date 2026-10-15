@@ -361,7 +361,7 @@ const NESTED: [Nested; 19] = [
         section: "parsesMarkdown",
         configuration: "lists",
         depth: PARSES,
-        input: |depth| Value::String(BULLETS.marker.repeat(depth) + "x"),
+        input: |depth| Value::String((BULLETS.marker.repeat(depth) + "x").into()),
         output: |depth| doc(BULLETS.first(depth, None)),
     },
     Nested {
@@ -369,7 +369,7 @@ const NESTED: [Nested; 19] = [
         section: "parsesMarkdown",
         configuration: "lists",
         depth: INDENTED,
-        input: |depth| Value::String(BULLETS.indented("  ", depth)),
+        input: |depth| Value::String(BULLETS.indented("  ", depth).into()),
         output: |depth| doc(BULLETS.after(depth, None)),
     },
     Nested {
@@ -377,7 +377,7 @@ const NESTED: [Nested; 19] = [
         section: "parsesMarkdown",
         configuration: "lists",
         depth: PARSES,
-        input: |depth| Value::String(NUMBERS.indented("   ", depth)),
+        input: |depth| Value::String(NUMBERS.indented("   ", depth).into()),
         output: |depth| doc(NUMBERS.after(depth, None)),
     },
     Nested {
@@ -385,7 +385,7 @@ const NESTED: [Nested; 19] = [
         section: "parsesMarkdown",
         configuration: "lists",
         depth: INDENTED,
-        input: |depth| Value::String(TASKS.indented("  ", depth)),
+        input: |depth| Value::String(TASKS.indented("  ", depth).into()),
         output: |depth| doc(TASKS.after(depth, None)),
     },
     Nested {
@@ -393,7 +393,7 @@ const NESTED: [Nested; 19] = [
         section: "parsesHTML",
         configuration: "lists",
         depth: PARSES,
-        input: |depth| Value::String("<ol><li>".repeat(depth) + "x"),
+        input: |depth| Value::String(("<ol><li>".repeat(depth) + "x").into()),
         output: |depth| doc(NUMBERS.closed(depth, numbered())),
     },
     Nested {
@@ -401,7 +401,7 @@ const NESTED: [Nested; 19] = [
         section: "parsesHTML",
         configuration: "lists",
         depth: PARSES,
-        input: |depth| Value::String("<ul><li>x".repeat(depth)),
+        input: |depth| Value::String("<ul><li>x".repeat(depth).into()),
         output: |depth| doc(BULLETS.after(depth, None)),
     },
     // A task item holds only paragraphs, so each task list in one closes it.
@@ -410,7 +410,7 @@ const NESTED: [Nested; 19] = [
         section: "parsesHTML",
         configuration: "lists",
         depth: PARSES,
-        input: |depth| Value::String((TASK_ITEM.to_owned() + "x").repeat(depth)),
+        input: |depth| Value::String((TASK_ITEM.to_owned() + "x").repeat(depth).into()),
         output: |depth| {
             let content = vec![TASKS.list(vec![x()], None); depth];
             doc(json!({"type": "doc", "content": content}))
@@ -421,7 +421,7 @@ const NESTED: [Nested; 19] = [
         section: "parsesHTML",
         configuration: "nested",
         depth: PARSES,
-        input: |depth| Value::String((TASK_ITEM.to_owned() + "x").repeat(depth)),
+        input: |depth| Value::String((TASK_ITEM.to_owned() + "x").repeat(depth).into()),
         output: |depth| doc(TASKS.after(depth, None)),
     },
 ];

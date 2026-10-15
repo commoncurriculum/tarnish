@@ -3,7 +3,7 @@
 use std::fmt::{self, Display};
 use std::mem::discriminant;
 
-use tarnish::js::json::{stringify, write_string};
+use tarnish::js::json::{stringify, to_string};
 use tarnish::js::stack;
 use tarnish::{Key, Map, Value};
 
@@ -99,7 +99,7 @@ impl Difference {
     pub(crate) fn group(&self, request: &Request) -> Group {
         Group {
             operation: match &request.operation {
-                Value::String(operation) => operation.clone(),
+                Value::String(operation) => operation.to_string(),
                 operation => stringify(operation),
             },
             pattern: self
@@ -164,9 +164,7 @@ fn write_key(f: &mut fmt::Formatter, key: &str) -> fmt::Result {
     if identifier {
         return write!(f, ".{key}");
     }
-    let mut quoted = String::new();
-    write_string(&mut quoted, key);
-    write!(f, "[{quoted}]")
+    write!(f, "[{}]", to_string(key))
 }
 
 /// Where the NIF's answer to `request` first differs from the worker's: the first difference in
@@ -398,9 +396,7 @@ fn around(text: &str, offset: usize) -> String {
 }
 
 fn quoted(text: &str) -> String {
-    let mut quoted = String::new();
-    write_string(&mut quoted, text);
-    quoted
+    to_string(text)
 }
 
 /// A value's JSON, cut short if it's long.

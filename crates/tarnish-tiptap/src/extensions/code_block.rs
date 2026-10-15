@@ -74,7 +74,7 @@ fn parse_language(element: &HtmlNode, prefix: Option<&str>) -> Option<Value> {
     let language = classes
         .split(['\t', '\n', '\u{C}', '\r', ' '])
         .find_map(|class| class.strip_prefix(prefix))?;
-    (!language.is_empty()).then(|| Value::String(language.to_string()))
+    (!language.is_empty()).then(|| Value::String(language.into()))
 }
 
 /// `node.attrs.language ? languageClassPrefix + node.attrs.language : null`.

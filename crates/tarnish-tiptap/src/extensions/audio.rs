@@ -118,7 +118,7 @@ fn sanitize_audio_src(url: Option<&Value>, allow_base64: bool) -> Result<Option<
     let Value::String(url) = url else {
         return Err(value::not_a_function("url.startsWith"));
     };
-    Ok(is_valid_audio_url(url, allow_base64).then(|| url.clone()))
+    Ok(is_valid_audio_url(url, allow_base64).then(|| url.to_string()))
 }
 
 /// `isValidAudioUrl(url, allowBase64)`.

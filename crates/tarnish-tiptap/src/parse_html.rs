@@ -238,6 +238,6 @@ fn from_string(value: Option<String>) -> Option<Value> {
         _ if numeric => js::number(js::string_to_number(&value)),
         "true" => Value::Bool(true),
         "false" => Value::Bool(false),
-        _ => Value::String(value),
+        _ => Value::String(value.into()),
     })
 }

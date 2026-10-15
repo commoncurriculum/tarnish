@@ -19,11 +19,14 @@ pub use index::JsonIndex;
 pub use macros::{json, object};
 pub use map::{Map, array_index};
 pub use write::{
-    stringify, stringify_entries, stringify_pretty, write_number, write_object, write_string,
-    write_units, write_value,
+    JsFormatter, Units, stringify, stringify_entries, stringify_pretty, to_string,
+    to_string_with_capacity, write,
 };
 /// An object's key, kept in place up to 24 bytes, which every key the schemas name fits in.
 pub type Key = compact_str::CompactString;
+/// A string value, kept in place up to 24 bytes, as type names, mark names and most short
+/// attributes are.
+pub type Str = compact_str::CompactString;
 pub use crate::number::Number;
 
 pub static NULL: Value = Value::Null;
@@ -38,7 +41,7 @@ pub enum Value {
     Null,
     Bool(bool),
     Number(Number),
-    String(String),
+    String(Str),
     Array(Vec<Value>),
     Object(Map),
 }
@@ -174,7 +177,7 @@ impl Value {
     #[inline]
     pub fn into_string(mut self) -> Option<String> {
         match &mut self {
-            Value::String(string) => Some(std::mem::take(string)),
+            Value::String(string) => Some(std::mem::take(string).into_string()),
             _ => None,
         }
     }

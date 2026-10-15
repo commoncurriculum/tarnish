@@ -496,7 +496,7 @@ fn in_paragraph(content: Value) -> Value {
 
 /// `>` four times as deep as `depth`, around Markdown nested `depth` deep.
 fn quoted(inside: String, depth: usize) -> Value {
-    Value::String(">".repeat(4 * depth) + " " + &inside)
+    Value::String((">".repeat(4 * depth) + " " + &inside).into())
 }
 
 /// The text inside a mark's delimiters `depth` deep, each part of it with a mark for each pair
@@ -585,7 +585,7 @@ const NESTED: [Nested; 20] = [
         configuration: "own",
         section: "parsesHTML",
         depth: PARSES,
-        input: |depth| Value::String("<div>".repeat(depth) + "x"),
+        input: |depth| Value::String(("<div>".repeat(depth) + "x").into()),
         output: |_| doc(vec![in_paragraph(json!({"type": "text", "text": "x"}))]),
     },
     // Each paragraph opened inside one closes it.
@@ -594,7 +594,7 @@ const NESTED: [Nested; 20] = [
         configuration: "own",
         section: "parsesHTML",
         depth: PARSES,
-        input: |depth| Value::String("<p>".repeat(depth) + "x"),
+        input: |depth| Value::String(("<p>".repeat(depth) + "x").into()),
         output: |depth| {
             let mut content = vec![json!({"type": "paragraph"}); depth - 1];
             content.push(in_paragraph(json!({"type": "text", "text": "x"})));
@@ -606,7 +606,7 @@ const NESTED: [Nested; 20] = [
         configuration: "own",
         section: "parsesHTML",
         depth: PARSES,
-        input: |depth| Value::String("<b>".repeat(depth) + "x"),
+        input: |depth| Value::String(("<b>".repeat(depth) + "x").into()),
         output: |_| {
             let text = json!({"type": "text", "marks": [{"type": "bold"}], "text": "x"});
             doc(vec![in_paragraph(text)])
@@ -617,7 +617,7 @@ const NESTED: [Nested; 20] = [
         configuration: "own",
         section: "parsesHTML",
         depth: PARSES,
-        input: |depth| Value::String("<span style=color:red>".repeat(depth) + "x"),
+        input: |depth| Value::String(("<span style=color:red>".repeat(depth) + "x").into()),
         output: |_| {
             let text = json!({"type": "text", "marks": [{"type": "textStyle"}], "text": "x"});
             doc(vec![in_paragraph(text)])
@@ -638,7 +638,7 @@ const NESTED: [Nested; 20] = [
         configuration: "own",
         section: "parsesMarkdown",
         depth: LAZY,
-        input: |depth| Value::String("> ".repeat(depth) + "x\ny"),
+        input: |depth| Value::String(("> ".repeat(depth) + "x\ny").into()),
         output: |_| doc(vec![in_paragraph(json!({"type": "text", "text": "x\ny"}))]),
     },
     Nested {
@@ -646,7 +646,7 @@ const NESTED: [Nested; 20] = [
         configuration: "own",
         section: "parsesMarkdown",
         depth: PARSES,
-        input: |depth| Value::String("1. ".repeat(depth) + "x"),
+        input: |depth| Value::String(("1. ".repeat(depth) + "x").into()),
         output: |_| doc(Vec::new()),
     },
     // Marks inside blockquotes run their recursion on top of the blockquotes'.
@@ -681,7 +681,9 @@ const NESTED: [Nested; 20] = [
         configuration: "own",
         section: "parsesMarkdown",
         depth: INLINES,
-        input: |depth| Value::String("# ".to_owned() + &around("*a ", " a*", depth) + "\n\ny"),
+        input: |depth| {
+            Value::String(("# ".to_owned() + &around("*a ", " a*", depth) + "\n\ny").into())
+        },
         output: |depth| {
             let heading = json!({"type": "heading", "attrs": {"level": 1},
                 "content": marked("italic", depth)});
@@ -697,7 +699,7 @@ const NESTED: [Nested; 20] = [
         section: "parsesMarkdown",
         depth: QUOTES,
         input: |depth| {
-            Value::String("> ".repeat(depth) + "| a |\n" + &"> ".repeat(depth) + "| - |")
+            Value::String(("> ".repeat(depth) + "| a |\n" + &"> ".repeat(depth) + "| - |").into())
         },
         output: |depth| quoted_doc(header_table(json!({"type": "text", "text": "a"})), depth),
     },
@@ -709,7 +711,7 @@ const NESTED: [Nested; 20] = [
         depth: QUOTES,
         input: |depth| {
             let quotes = "> ".repeat(depth);
-            Value::String(format!("{quotes}| `a|b` |\n{quotes}| - |"))
+            Value::String(format!("{quotes}| `a|b` |\n{quotes}| - |").into())
         },
         output: |depth| {
             let code = json!({"type": "text", "text": "a|b", "marks": [{"type": "code"}]});

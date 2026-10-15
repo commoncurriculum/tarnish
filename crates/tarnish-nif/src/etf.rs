@@ -106,7 +106,7 @@ impl<'a> Reader<'a> {
         *slot = match self.byte()? {
             BINARY => {
                 let length = self.u32()?;
-                Value::String(self.text(length)?.to_owned())
+                Value::String(self.text(length)?.into())
             }
             MAP => {
                 let arity = self.u32()?;
@@ -128,7 +128,7 @@ impl<'a> Reader<'a> {
                 "nil" => Value::Null,
                 "true" => Value::Bool(true),
                 "false" => Value::Bool(false),
-                name => Value::String(name.to_owned()),
+                name => Value::String(name.into()),
             },
             // A list of bytes.
             STRING => {
@@ -437,7 +437,7 @@ pub fn write_fields<'c>(fields: impl Fields<'c>) -> Vec<u8> {
 fn write_node<'c>(out: &mut Vec<u8>, fields: impl Fields<'c>) {
     out.push(MAP);
     out.extend_from_slice(&(fields.field_count() as u32).to_be_bytes());
-    fields.fields(|field| {
+    for field in fields.fields() {
         binary(out, field.key());
         match field {
             Field::Type(name) => binary(out, name),
@@ -459,7 +459,7 @@ fn write_node<'c>(out: &mut Vec<u8>, fields: impl Fields<'c>) {
             // A binary holds UTF-8, which has no lone surrogate.
             Field::Text(text) => binary(out, &text.to_string_lossy()),
         }
-    });
+    }
 }
 
 /// [`write_value`] of a value a chunk holds.
