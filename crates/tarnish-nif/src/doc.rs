@@ -29,7 +29,7 @@ pub struct Doc<'a> {
 }
 
 /// A chunk's bytes as a binary.
-pub fn binary<'a>(env: Env<'a>, bytes: &[u8]) -> Term<'a> {
+fn binary<'a>(env: Env<'a>, bytes: &[u8]) -> Term<'a> {
     let mut binary = NewBinary::new(env, bytes.len());
     binary.as_mut_slice().copy_from_slice(bytes);
     binary.into()
@@ -64,16 +64,6 @@ impl<'a> Doc<'a> {
             binaries,
             chunks,
         })
-    }
-
-    /// The document as the bytes [`Node::to_bytes`] gives, in a binary: the one it's held in
-    /// when that's the bytes already.
-    pub fn bytes(&self, env: Env<'a>) -> Term<'a> {
-        let root = self.root();
-        match (self.binaries.as_slice(), root.own_bytes()) {
-            ([held], Some(_)) => *held,
-            _ => binary(env, &root.to_bytes()),
-        }
     }
 
     pub fn root(&self) -> Node<'a> {

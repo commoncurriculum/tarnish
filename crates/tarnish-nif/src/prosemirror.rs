@@ -6,7 +6,7 @@
 //! answers `:dirty` when it has more work than that takes on, for `Tarnish` to make it again on a
 //! dirty scheduler, through the function of the same name ending in `_dirty`.
 
-use rustler::{Binary, Encoder, Env, NifResult, Resource, ResourceArc, Term};
+use rustler::{Encoder, Env, NifResult, Resource, ResourceArc, Term};
 use tarnish::js::stack;
 use tarnish::transform::TRANSFORM_ERROR;
 use tarnish::{Error, Node, REPLACE_ERROR, Schema, Text, Value, api};
@@ -169,38 +169,8 @@ fn read_node<'a>(env: Env<'a>, limits: &Limits, schema: Term<'a>, json: Term<'a>
 
 fn write_node<'a>(env: Env<'a>, limits: &Limits, doc: Term<'a>, json: Term<'a>) -> Answer<'a> {
     let doc = load(doc)?;
-    // A document loaded from its bytes has no JSON to share.
-    if json.is_atom() && json == rustler::types::atom::nil().to_term(env) {
-        within(
-            doc.root().node_size() * share::BYTES_PER_POSITION,
-            limits.write,
-        )?;
-        return Ok(Writer::new(env).fields(doc.view()));
-    }
     share::json(env, doc.view(), doc.read(), json, limits.write)
         .map_err(|share::TooBig| Unanswered::Dirty)
-}
-
-/// The document's bytes. Writing a changed one again into one chunk takes about as long as
-/// checking it.
-fn write_bytes<'a>(env: Env<'a>, limits: &Limits, doc: Term<'a>) -> Answer<'a> {
-    let doc = load(doc)?;
-    if doc.root().own_bytes().is_none() {
-        within(doc.root().node_size(), limits.check)?;
-    }
-    Ok(doc.bytes(env))
-}
-
-/// A document from its bytes, held in the very binary they're in. Loading checks each byte of
-/// its text is UTF-8, about as fast as copying them.
-fn read_bytes<'a>(env: Env<'a>, limits: &Limits, schema: Term<'a>, bytes: Term<'a>) -> Answer<'a> {
-    let resource: ResourceArc<SchemaResource> = schema.decode().map_err(|_| Unanswered::BadArg)?;
-    let binary = Binary::from_term(bytes).map_err(|_| Unanswered::BadArg)?;
-    within(binary.len(), limits.write)?;
-    let doc = Node::from_bytes(&resource.0, binary.as_slice());
-    Ok(respond(env, doc, |_| {
-        (schema, [bytes].as_slice()).encode(env)
-    }))
 }
 
 fn check_node<'a>(env: Env<'a>, limits: &Limits, doc: Term<'a>) -> Answer<'a> {
@@ -338,30 +308,6 @@ fn to_json<'a>(env: Env<'a>, doc: Term<'a>, json: Term<'a>) -> NifResult<Term<'a
 #[rustler::nif(schedule = "DirtyCpu")]
 fn to_json_dirty<'a>(env: Env<'a>, doc: Term<'a>, json: Term<'a>) -> NifResult<Term<'a>> {
     dirty(|limits| write_node(env, limits, doc, json))
-}
-
-#[rustler::nif]
-fn node_to_binary<'a>(env: Env<'a>, doc: Term<'a>) -> NifResult<Term<'a>> {
-    normal(env, |limits| write_bytes(env, limits, doc))
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn node_to_binary_dirty<'a>(env: Env<'a>, doc: Term<'a>) -> NifResult<Term<'a>> {
-    dirty(|limits| write_bytes(env, limits, doc))
-}
-
-#[rustler::nif]
-fn node_from_binary<'a>(env: Env<'a>, schema: Term<'a>, bytes: Term<'a>) -> NifResult<Term<'a>> {
-    normal(env, |limits| read_bytes(env, limits, schema, bytes))
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn node_from_binary_dirty<'a>(
-    env: Env<'a>,
-    schema: Term<'a>,
-    bytes: Term<'a>,
-) -> NifResult<Term<'a>> {
-    dirty(|limits| read_bytes(env, limits, schema, bytes))
 }
 
 #[rustler::nif]

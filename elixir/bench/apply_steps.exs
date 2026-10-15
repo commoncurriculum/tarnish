@@ -55,9 +55,6 @@ sustained.("Node.from_json", fn -> Tarnish.Node.from_json(schema, json) end)
 sustained.("Node.to_json, unchanged", fn -> Tarnish.Node.to_json(doc) end)
 sustained.("Node.to_json after the steps", fn -> Tarnish.Node.to_json(changed) end)
 sustained.("JSON text after the steps", fn -> Jason.encode!(Tarnish.Node.to_json(changed)) end)
-binary = Tarnish.Node.to_binary(doc)
-sustained.("Node.from_binary", fn -> Tarnish.Node.from_binary(schema, binary) end)
-sustained.("Node.to_binary, changed", fn -> Tarnish.Node.to_binary(changed) end)
 sustained.("Node.check", fn -> Tarnish.Node.check(doc) end)
 sustained.("Step.apply, 10 steps", fn -> Tarnish.Step.apply(doc, steps) end)
 
@@ -65,10 +62,4 @@ sustained.("from JSON, apply, to JSON", fn ->
   {:ok, doc} = Tarnish.Node.from_json(schema, json)
   {:ok, doc} = Tarnish.Step.apply(doc, steps)
   Tarnish.Node.to_json(doc)
-end)
-
-sustained.("from binary, apply, to binary", fn ->
-  {:ok, doc} = Tarnish.Node.from_binary(schema, binary)
-  {:ok, doc} = Tarnish.Step.apply(doc, steps)
-  Tarnish.Node.to_binary(doc)
 end)

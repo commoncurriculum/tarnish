@@ -80,14 +80,6 @@ defmodule TarnishTest do
       {:ok, changed} = Tarnish.Step.apply(doc, steps)
       assert Tarnish.Node.to_json(changed) === result
 
-      # Kept as binaries and loaded back, before and after the change.
-      {:ok, loaded} = Tarnish.Node.from_binary(schema, Tarnish.Node.to_binary(doc))
-      assert Tarnish.Node.to_json(loaded) === start
-      {:ok, changed_loaded} = Tarnish.Step.apply(loaded, steps)
-      assert Tarnish.Node.to_json(changed_loaded) === result
-      {:ok, reloaded} = Tarnish.Node.from_binary(schema, Tarnish.Node.to_binary(changed))
-      assert Tarnish.Node.to_json(reloaded) === result
-
       assert Tarnish.Step.invert(doc, steps) === {:ok, inverted}
       {:ok, undone} = Tarnish.Step.apply(changed, inverted)
       assert Tarnish.Node.to_json(undone) === start
@@ -215,17 +207,6 @@ defmodule TarnishTest do
     end
   end
 
-  test "a binary not written for the schema is refused", %{schemas: [schema, other | _]} do
-    doc = doc(schema, paragraphs(2, "few"))
-    bytes = Tarnish.Node.to_binary(doc)
-    assert {:ok, _} = Tarnish.Node.from_binary(schema, bytes)
-    assert {:error, {:range_error, _}} = Tarnish.Node.from_binary(other, bytes)
-    assert {:error, {:range_error, _}} = Tarnish.Node.from_binary(schema, "not a document")
-
-    assert {:error, {:range_error, _}} =
-             Tarnish.Node.from_binary(schema, binary_part(bytes, 0, 20))
-  end
-
   test "a term that isn't JSON is refused", %{schemas: [schema | _]} do
     assert_raise ArgumentError, fn -> Tarnish.Node.from_json(schema, {:not, :json}) end
     text = %{"type" => "text", "text" => {:not, :json}}
@@ -297,11 +278,6 @@ defmodule TarnishTest do
            paragraphs(1, long), paragraphs(2, "few"), &Tarnish.Node.to_json(doc(schema, &1)),
            paragraphs(1, long)},
           {"to_json", &@native.to_json(&1.ref, &1.json), split, small, &Tarnish.Node.to_json/1,
-           paragraphs(10_000, "many")},
-          {"node_from_binary", &@native.node_from_binary(schema, &1),
-           Tarnish.Node.to_binary(doc(schema, paragraphs(10_000, "many"))),
-           Tarnish.Node.to_binary(small),
-           &Tarnish.Node.to_json(elem(Tarnish.Node.from_binary(schema, &1), 1)),
            paragraphs(10_000, "many")},
           {"check", &@native.check(&1.ref), loose, small, &Tarnish.Node.check/1,
            {:error,

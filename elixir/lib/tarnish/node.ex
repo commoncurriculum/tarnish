@@ -12,7 +12,7 @@ defmodule Tarnish.Node do
 
   # The binaries of the chunks that hold the node, newest first, which Rust reads in place, as
   # `{schema, chunks}`. And the JSON it was read from, whose parts its own JSON shares where
-  # they're what ProseMirror writes, or `nil` for a node loaded from its binary.
+  # they're what ProseMirror writes.
   @derive {Inspect, only: []}
   @enforce_keys [:ref, :json]
   defstruct [:ref, :json]
@@ -27,30 +27,6 @@ defmodule Tarnish.Node do
            do: @native.node_from_json_dirty(schema, json)
 
     with {:ok, ref} <- read, do: {:ok, %__MODULE__{ref: ref, json: json}}
-  end
-
-  @doc """
-  The node as a binary to keep, in a database or a cache, which `from_binary/2` loads back far
-  faster than `from_json/2` reads its JSON. The binary is only for the schema the node is of, and
-  for this version of tarnish.
-  """
-  @spec to_binary(t()) :: binary()
-  def to_binary(%__MODULE__{ref: ref}) do
-    with :dirty <- @native.node_to_binary(ref), do: @native.node_to_binary_dirty(ref)
-  end
-
-  @doc """
-  Loads a node from the binary `to_binary/1` gave, which it reads in place. Loading checks that
-  the binary was written for this schema and holds a node; it doesn't check every byte, so it
-  should only be given binaries `to_binary/1` wrote.
-  """
-  @spec from_binary(Tarnish.Schema.t(), binary()) :: {:ok, t()} | Tarnish.error()
-  def from_binary(schema, binary) when is_binary(binary) do
-    read =
-      with :dirty <- @native.node_from_binary(schema, binary),
-           do: @native.node_from_binary_dirty(schema, binary)
-
-    with {:ok, ref} <- read, do: {:ok, %__MODULE__{ref: ref, json: nil}}
   end
 
   @doc "The node's JSON, as `node.toJSON()` gives it."
