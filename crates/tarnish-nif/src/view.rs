@@ -79,7 +79,14 @@ pub struct Reading {
     /// A count of the parts read so far that aren't as `toJSON` writes them. A map is as it
     /// writes it only when the count didn't grow while the map was read.
     irregular: Cell<usize>,
+    /// Whether a list of a node's children has been read yet: the first is the document's
+    /// content, which tells how much the rest will weigh.
+    outer: Cell<bool>,
 }
+
+/// A bounded reading foresees its weight from this many of the document's children, and ends
+/// at once when that is more than it may read, rather than when it has read that much.
+const FORESEEN_FROM: usize = 16;
 
 /// A map being read as a node or mark, until the reader says what it read.
 struct Open {
@@ -115,7 +122,18 @@ impl Reading {
             left: Cell::new(weight),
             open: RefCell::new(Vec::new()),
             irregular: Cell::new(0),
+            outer: Cell::new(false),
         }
+    }
+
+    /// Whether reading `count` items like the `read` of them, which weighed `weighed`, would
+    /// weigh more than `left`, which ends the reading.
+    fn foresee(&self, read: usize, count: usize, weighed: usize, left: usize) -> bool {
+        let heavy = weighed.saturating_mul(count) / read > left;
+        if heavy {
+            self.heavy.set(true);
+        }
+        heavy
     }
 
     fn outcome<T>(&self, read: T) -> Result<T, Unread> {
@@ -592,7 +610,26 @@ impl<'a> read::Json<'a> for Json<'a, '_> {
     }
 
     fn items(self) -> Option<impl Iterator<Item = Self>> {
-        (self.term.is_list() && self.reading.weigh(1)).then(|| self.list())
+        if !(self.term.is_list() && self.reading.weigh(1)) {
+            return None;
+        }
+        // A light call that would read too much of the document goes dirty after a few of its
+        // children, not after most of them.
+        let reading = self.reading;
+        let outer = reading.bounded && !reading.outer.replace(true);
+        let count = match outer {
+            true => self.term.list_length().unwrap_or(0),
+            false => 0,
+        };
+        let left = reading.left.get();
+        let mut read = 0;
+        Some(self.list().take_while(move |_| {
+            read += 1;
+            !(outer
+                && read > FORESEEN_FROM
+                && read <= count
+                && reading.foresee(read - 1, count, left - reading.left.get(), left))
+        }))
     }
 
     fn attrs(self, names: &[Key]) -> Given<'a> {
