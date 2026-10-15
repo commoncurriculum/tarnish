@@ -9,7 +9,7 @@ use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 
 use rustler::types::atom;
-use rustler::{BigInt, Binary, Term, TermType};
+use rustler::{BigInt, Binary, Encoder, Term, TermType};
 use tarnish::js::stack;
 use tarnish::js::{self, WrittenNumber};
 use tarnish::json::{self, Key, Map, Number, Value};
@@ -30,7 +30,7 @@ pub fn read<'a, T>(
     weight: usize,
     read: impl FnOnce(Json<'a, '_>) -> T,
 ) -> Result<T, Unread> {
-    let reading = Reading::new(weight);
+    let reading = Reading::new(term, weight);
     let read = read(Json {
         term,
         reading: &reading,
@@ -46,7 +46,7 @@ pub fn read_whole<'a, T, E>(
     weight: usize,
     read: impl FnOnce(Json<'a, '_>) -> Result<T, E>,
 ) -> Result<Result<T, E>, Unread> {
-    let reading = Reading::new(weight);
+    let reading = Reading::new(term, weight);
     let json = Json {
         term,
         reading: &reading,
@@ -64,10 +64,10 @@ pub fn read_whole<'a, T, E>(
 #[derive(Clone, Copy)]
 pub struct Json<'a, 'r> {
     term: Term<'a>,
-    reading: &'r Reading,
+    reading: &'r Reading<'a>,
 }
 
-pub struct Reading {
+pub struct Reading<'a> {
     refused: Cell<bool>,
     heavy: Cell<bool>,
     /// Whether the weight it may read is bounded, as a light call's is.
@@ -82,7 +82,13 @@ pub struct Reading {
     /// Whether a list of a node's children has been read yet: the first is the document's
     /// content, which tells how much the rest will weigh.
     outer: Cell<bool>,
+    /// The binaries of the fields' names, made once for the reading: `type`, `text`,
+    /// `content`, `marks` and `attrs`.
+    names: [Term<'a>; 5],
 }
+
+/// The fields of a node's or mark's JSON.
+const FIELDS: [&str; 5] = ["type", "text", "content", "marks", "attrs"];
 
 /// A bounded reading foresees its weight from this many of the document's children, and ends
 /// at once when that is more than it may read, rather than when it has read that much.
@@ -113,8 +119,8 @@ struct GivenAttrs {
     others: bool,
 }
 
-impl Reading {
-    fn new(weight: usize) -> Reading {
+impl<'a> Reading<'a> {
+    fn new(term: Term<'a>, weight: usize) -> Reading<'a> {
         Reading {
             refused: Cell::new(false),
             heavy: Cell::new(false),
@@ -123,6 +129,15 @@ impl Reading {
             open: RefCell::new(Vec::new()),
             irregular: Cell::new(0),
             outer: Cell::new(false),
+            names: FIELDS.map(|name| name.encode(term.get_env())),
+        }
+    }
+
+    /// The binary of a field's name.
+    fn name(&self, name: &str) -> Term<'a> {
+        match FIELDS.iter().position(|field| *field == name) {
+            Some(index) => self.names[index],
+            None => name.encode(self.names[0].get_env()),
         }
     }
 
@@ -341,6 +356,28 @@ impl<'a, 'r> Json<'a, 'r> {
         };
         if !self.reading.weigh(1 + size) {
             return (fields, None);
+        }
+        // A node's or mark's map as `toJSON` writes it has string keys, all among these, which
+        // are looked up until as many are found as the map has. Any other key, an atom among
+        // them, is found by reading the entries.
+        if size <= N {
+            let left = self.reading.left.get();
+            let mut found = 0;
+            for (field, key) in fields.iter_mut().zip(keys) {
+                if found == size {
+                    break;
+                }
+                if let Ok(value) = self.term.map_get(self.reading.name(key)) {
+                    self.reading.weigh(1 + key.len());
+                    *field = Some(self.at(value));
+                    found += 1;
+                }
+            }
+            if found == size {
+                return (fields, Some(size));
+            }
+            fields = [None; N];
+            self.reading.left.set(left);
         }
         let mut found = 0;
         // Of keys that write the same, the last written is the one that counts.
