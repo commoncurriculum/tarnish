@@ -35,12 +35,7 @@ fn main() {
     let node = Node::from_json(&schema, doc).unwrap();
     let changed = api::apply_steps(&node, steps).unwrap();
     let time = |name: &str, run: &mut dyn FnMut()| println!("{name:36} {:.0} µs", median(run));
-    let mut kept = Vec::new();
-    time("fromJSON, kept", &mut || {
-        kept.push(Node::from_json(&schema, doc).unwrap())
-    });
-    drop(kept);
-    time("fromJSON, dropped", &mut || {
+    time("fromJSON", &mut || {
         drop(Node::from_json(&schema, doc).unwrap())
     });
     let text = json::stringify(doc);
@@ -59,6 +54,10 @@ fn main() {
     });
     time("JSON text of the changed document", &mut || {
         drop(changed.to_json_string())
+    });
+    time("fromJSON, apply 10 steps, toJSON", &mut || {
+        let node = Node::from_json(&schema, doc).unwrap();
+        drop(api::apply_steps(&node, steps).unwrap().to_json())
     });
     let steps_text = steps.to_string();
     time("JSON text in, apply 10 steps, JSON text out", &mut || {
