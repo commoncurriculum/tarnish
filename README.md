@@ -452,7 +452,7 @@ Names are Rust's: `nodeSize` is `node_size`, `Transform.addMark` is `Transform::
 | --- | --- |
 | `Schema`, `NodeType`, `MarkType`, `NodeSpec`, `MarkSpec`, `AttributeSpec` | `Schema`, `NodeType`, `MarkType`, `SchemaSpec`, `NodeSpec`, `MarkSpec`, `AttributeSpec`; `SchemaSpec::from_json` reads a spec from JSON |
 | `Node`, `Fragment`, `Mark`, `Slice`, `ResolvedPos`, `NodeRange`, `ContentMatch` | The same names, in `tarnish` |
-| `Node.fromJSON`, `node.toJSON()` | `Node::from_json`, `Node::to_json`, `Node::to_json_string` |
+| `Node.fromJSON`, `node.toJSON()` | `Node::from_json`, `Node::to_json`; `Node::from_json_text` and `Node::to_json_string` for JSON text |
 | `node.textBetween`, `node.textContent` | `Node::text_between`, `Node::text_content`; `api::text_between`, `api::text_content` for the bindings |
 | `Transform` and every operation on it | `transform::Transform`; `api::transform` applies ops, from JSON, for the bindings |
 | `ReplaceStep`, `ReplaceAroundStep`, `AddMarkStep`, `RemoveMarkStep`, `AddNodeMarkStep`, `RemoveNodeMarkStep`, `AttrStep`, `DocAttrStep` | `transform::Step`, one variant each |
@@ -532,30 +532,32 @@ The bench document has 200 paragraphs with bold text and links: 1,201 nodes, 78 
 `npm run bench` writes it, together with ten steps that each type one character, and times
 ProseMirror on it. The table shows µs per call on one 4-core VM: ProseMirror in Node 22 after its
 JIT warms up and tarnish from Rust, each the median of a run's calls, and tarnish from Elixir, the
-mean of two seconds of calls. Each range spans two runs of each, taken in turn.
+mean of two seconds of calls. Each range spans the runs of each, taken in turn: two of Node and
+Rust, four of Elixir.
 
 | | ProseMirror (Node) | tarnish (Rust) | tarnish (Elixir) |
 | --- | --- | --- | --- |
-| Read a document from a JSON value (Elixir: a map) | 280–292 | 84–104 | 396–414 |
-| Read it from JSON text | 776–848 | 205–229 | — |
-| Check it | 203–227 | 23–24 | 28–29 |
-| Apply 10 steps | 17–19 | 12 | 28 |
-| Write the changed document as a JSON value (Elixir: a map) | 69–72 | 171–185 | 8–9 |
-| Write it as JSON text | 315–330 | 110–111 | — |
-| Read a value, apply 10 steps, write a value | 387–427 | — | 440–496 |
-| Read JSON text, apply 10 steps, write JSON text | 1,207–1,255 | 363–366 | — |
+| Read a document from a JSON value (Elixir: a map) | 288–289 | 80–81 | 418–490 |
+| Read it from JSON text | 778–798 | 202–209 | 1,342–1,396 with Jason |
+| Check it | 198–206 | 23–25 | 25–31 |
+| Apply 10 steps | 17–18 | 12 | 26–30 |
+| Write the changed document as a JSON value (Elixir: a map) | 71–73 | 194–196 | 8–10 |
+| Write it as JSON text | 326–328 | 107–108 | 1,332–1,517 with Jason |
+| Read a value, apply 10 steps, write a value | 403–419 | 306–311 | 442–492 |
+| Read JSON text, apply 10 steps, write JSON text | 1,202–1,224 | 335–350 | 2,969–3,339 with Jason |
 
 - **JSON text.** ProseMirror's reads are `JSON.parse` then `fromJSON`, and its writes
   `JSON.stringify(doc.toJSON())`. Rust reads text through simd-json's tape straight into the
   document, with no JSON value of the whole of it, and writes it with serde_json, ryu-js writing
-  numbers as JavaScript does. Elixir works with maps and has no text path of its own: Jason takes
-  about 1.1 ms to decode the bench document and 1.4 ms to encode it.
+  numbers as JavaScript does. Elixir works with maps and has no text path of its own, so its text
+  rows are Jason's `decode!` and `encode!` around the map calls, nearly all of it Jason's time.
 - **Rust's JSON value.** `to_json` gives a `Value` the caller owns, so every object, array and
   string longer than 24 bytes is an allocation, which the call frees again. Shorter strings, such
   as type names and most attribute values, are held in place. ProseMirror's `toJSON` shares the
   node's own `attrs` object and strings, and V8 frees what it made later, outside the call. To
   send or store a document, write its JSON text.
-- **Elixir reading.** Reading a map is level with ProseMirror's `fromJSON`, and not faster,
+- **Elixir reading.** Reading a map takes about one and a half times as long as ProseMirror's
+  `fromJSON`, and a read, the steps and a write together 10–20% longer than ProseMirror's,
   because of what it takes to get the map out of the VM. Code that forbids `unsafe` reads a term
   only through the NIF API, a call for each of the bench document's 9,205 terms, and a walk that
   only looks at them takes about 215 µs. Having the VM write the term out with `term_to_binary`
@@ -582,7 +584,8 @@ The contract is ProseMirror's public API. Behind it, tarnish takes whatever shap
   - The sections hold nodes (24 bytes), each node's list of children (12 bytes), mark sets,
     marks, attribute values and text.
   - A chunk refers into the chunks it imports by slot, never by address, so its bytes are the
-    whole of it. Elixir keeps a document as binaries and reads them in place.
+    whole of it. A `%Tarnish.Node{}` holds its chunks in memory as binaries, which Rust
+    reads in place.
   - A step writes the nodes it makes into a new chunk that imports the old one. A chunk that
     nothing else holds is patched in place.
   - Every read is checked, so a bad chunk panics instead of misreading.
@@ -595,7 +598,8 @@ The contract is ProseMirror's public API. Behind it, tarnish takes whatever shap
 They are fast parsers, but for other languages, and nothing tarnish does is parsing one of those.
 tarnish reads two things:
 
-- JSON, with serde_json (and json-event-parser for what serde_json refuses);
+- JSON, with simd-json for a document's text, serde_json for the rest, and json-event-parser in
+  `tarnish-js` for what serde_json refuses, such as lone surrogates;
 - ProseMirror's content expressions, such as `paragraph+ (heading | list)*`, a grammar only
   ProseMirror has.
 
@@ -669,7 +673,7 @@ npm run test:rust    # ProseMirror's suites against tarnish
 npm run test:c       # the C library against the fixtures
 (cd elixir && mix deps.get && mix test)
 cargo test
-cargo fmt --all --check && cargo clippy --all-targets -- -D warnings
+cargo fmt --all --check && cargo clippy --all-targets --all-features -- -D warnings
 ```
 
 Building `tarnish-css` needs Python 3, which stylo's build script runs. Writing it into the

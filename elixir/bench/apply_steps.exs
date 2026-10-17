@@ -52,6 +52,15 @@ sustained = fn name, call ->
 end
 
 sustained.("Node.from_json", fn -> Tarnish.Node.from_json(schema, json) end)
+# Tarnish has no JSON text path in Elixir, so these rows time Jason around it, as a caller
+# holding text would.
+text = Jason.encode!(json)
+steps_text = Jason.encode!(steps)
+
+sustained.("Jason, then Node.from_json", fn ->
+  Tarnish.Node.from_json(schema, Jason.decode!(text))
+end)
+
 sustained.("Node.to_json, unchanged", fn -> Tarnish.Node.to_json(doc) end)
 sustained.("Node.to_json after the steps", fn -> Tarnish.Node.to_json(changed) end)
 sustained.("JSON text after the steps", fn -> Jason.encode!(Tarnish.Node.to_json(changed)) end)
@@ -62,4 +71,10 @@ sustained.("from JSON, apply, to JSON", fn ->
   {:ok, doc} = Tarnish.Node.from_json(schema, json)
   {:ok, doc} = Tarnish.Step.apply(doc, steps)
   Tarnish.Node.to_json(doc)
+end)
+
+sustained.("JSON text in and out, Jason", fn ->
+  {:ok, doc} = Tarnish.Node.from_json(schema, Jason.decode!(text))
+  {:ok, doc} = Tarnish.Step.apply(doc, Jason.decode!(steps_text))
+  Jason.encode!(Tarnish.Node.to_json(doc))
 end)
