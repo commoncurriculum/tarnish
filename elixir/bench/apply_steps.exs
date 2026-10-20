@@ -20,6 +20,11 @@
 # turn, applied alone to the node the steps before it made, which shows what a call costs before
 # any step's work.
 #
+# Those rows apply every message to the node as read. A socket's node is what its earlier
+# messages made of it, while what Node.to_json shares is the map it read, so the "typed" rows
+# keep a node that 100 messages each typed "x" into, in one place or in a place of its own, or
+# that 10 did in 10 places, and time one message more, typing in the first place.
+#
 #     MIX_ENV=test mix run bench/apply_steps.exs
 
 rounds = String.to_integer(System.get_env("TARNISH_BENCH_ROUNDS", "7"))
@@ -160,6 +165,50 @@ cases =
       end)
       |> cycle.()
 
+    # A message that types "x" at a position, and the positions where one applies, in order:
+    # those between 0 and the document's size, the last position an empty replace applies at.
+    typing = fn at ->
+      [
+        %{
+          "stepType" => "replace",
+          "from" => at,
+          "to" => at,
+          "slice" => %{"content" => [%{"type" => "text", "text" => "x"}]}
+        }
+      ]
+    end
+
+    applies = &match?({:ok, _}, Tarnish.Step.apply(doc, &1))
+    empty = &[%{"stepType" => "replace", "from" => &1, "to" => &1}]
+    size = Enum.find(Stream.iterate(1, &(&1 * 2)), &(not applies.(empty.(&1))))
+    size = Enum.find((size - 1)..div(size, 2)//-1, &applies.(empty.(&1)))
+    places = Enum.filter(0..size, &applies.(typing.(&1)))
+
+    # The kept node after `count` messages, each typing "x" in the first place or, spread evenly,
+    # in a place of its own, the last first so that each place is where it was read.
+    typed = fn count, spread ->
+      at = fn index ->
+        if spread, do: Enum.at(places, div(index * length(places), count)), else: hd(places)
+      end
+
+      Enum.reduce((count - 1)..0//-1, doc, fn index, before ->
+        {:ok, after_typing} = Tarnish.Step.apply(before, typing.(at.(index)))
+        after_typing
+      end)
+    end
+
+    message_after = fn kept ->
+      fn ->
+        {:ok, changed} = Tarnish.Step.apply(kept, typing.(hd(places)))
+        Tarnish.Node.to_json(changed)
+      end
+    end
+
+    in_one_place = typed.(100, false)
+    in_10_places = typed.(10, true)
+    in_100_places = typed.(100, true)
+    {:ok, typed_once_more} = Tarnish.Step.apply(in_100_places, typing.(hd(places)))
+
     [
       {"Node.from_json", fn -> Tarnish.Node.from_json(schema, json) end},
       {"Jason, then Node.from_json",
@@ -202,7 +251,12 @@ cases =
        fn ->
          {before, step} = one_step.()
          Tarnish.Step.apply(before, step)
-       end}
+       end},
+      {"kept node, typed in 1 place 100 times: a message", message_after.(in_one_place)},
+      {"kept node, typed in 10 places: a message", message_after.(in_10_places)},
+      {"kept node, typed in 100 places: a message", message_after.(in_100_places)},
+      {"kept node, typed in 100 places: its Node.to_json",
+       fn -> Tarnish.Node.to_json(typed_once_more) end}
     ]
     |> Enum.map(fn {row, call} -> {name, row, call} end)
   end)
@@ -244,7 +298,7 @@ cases
 
     IO.puts(
       "  " <>
-        String.pad_trailing(row, 44) <>
+        String.pad_trailing(row, 52) <>
         String.pad_leading(format.(median.(means)), 7) <>
         "   " <>
         String.pad_trailing("#{format.(Enum.min(means))}..#{format.(Enum.max(means))}", 14) <>

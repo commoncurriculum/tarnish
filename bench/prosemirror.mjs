@@ -15,7 +15,9 @@
 // The "kept node" rows are a socket process's message, as elixir/bench/apply_steps.exs times it:
 // the node read earlier, kept between messages, takes one change's steps and is written back. Each
 // call takes the next change in turn; the row for one step takes each step in turn, applied alone
-// to the document the steps before it in its change made.
+// to the document the steps before it in its change made. The "typed" rows keep the document that
+// 100 messages each typed "x" into, in one place or in a place of its own, or that 10 did in 10
+// places, and time one message more, typing in the first place.
 import { existsSync, readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { Node, Schema } from "prosemirror-model"
@@ -112,6 +114,26 @@ for (const { name, schema, doc, changes } of documents) {
     let at = 0
     return () => items[at++ % items.length]
   }
+  // A message that types "x" at a position, and the positions where one applies, in order.
+  const typing = (at) => [{ stepType: "replace", from: at, to: at, slice: { content: [{ type: "text", text: "x" }] } }]
+  const places = []
+  for (let at = 0; at <= node.content.size; at++) {
+    if (!Step.fromJSON(schema, typing(at)[0]).apply(node).failed) places.push(at)
+  }
+  // The kept node after `count` messages, each typing "x" in the first place or, spread evenly,
+  // in a place of its own, the last first so that each place is where it was read.
+  const typed = (count, spread) => {
+    let kept = node
+    for (let index = count - 1; index >= 0; index--) {
+      kept = step(kept, typing(spread ? places[Math.floor((index * places.length) / count)] : places[0]))
+    }
+    return kept
+  }
+  const messageAfter = (kept) => () => step(kept, typing(places[0])).toJSON()
+  const inOnePlace = typed(100, false)
+  const in10Places = typed(10, true)
+  const in100Places = typed(100, true)
+  const typedOnceMore = step(in100Places, typing(places[0]))
   const message = cycle(messages)
   const oneStep = cycle(steps)
   const add = (row, run) => cases.push({ document: name, row, run, times: [] })
@@ -137,6 +159,10 @@ for (const { name, schema, doc, changes } of documents) {
     const { before, steps } = oneStep()
     return step(before, steps)
   })
+  add("kept node, typed in 1 place 100 times: a message", messageAfter(inOnePlace))
+  add("kept node, typed in 10 places: a message", messageAfter(in10Places))
+  add("kept node, typed in 100 places: a message", messageAfter(in100Places))
+  add("kept node, typed in 100 places: its toJSON", () => typedOnceMore.toJSON())
 }
 
 for (const { run } of cases) for (let call = 0; call < 2000; call++) kept = run()
