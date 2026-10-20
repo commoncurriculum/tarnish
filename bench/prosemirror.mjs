@@ -11,6 +11,11 @@
 // turn, so that the machine's drift lands on all of them alike. A round times a case's calls for
 // TARNISH_BENCH_MS milliseconds (150 unless given) and takes their median; a row gives the median
 // of its rounds and the range they span.
+//
+// The "kept node" rows are a socket process's message, as elixir/bench/apply_steps.exs times it:
+// the node read earlier, kept between messages, takes one change's steps and is written back. Each
+// call takes the next change in turn; the row for one step takes each step in turn, applied alone
+// to the document the steps before it in its change made.
 import { existsSync, readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { Node, Schema } from "prosemirror-model"
@@ -92,6 +97,23 @@ for (const { name, schema, doc, changes } of documents) {
   const changed = applyAll(node)
   const count = changes.reduce((sum, steps) => sum + steps.length, 0)
   const applied = changes.length === 1 ? `apply ${count} steps` : `apply ${changes.length} changes (${count} steps)`
+  // Each change with what its steps make of the kept node, and each step with the document the
+  // steps before it in its change made.
+  const messages = changes.map((steps) => ({ steps, changed: step(node, steps) }))
+  const steps = changes.flatMap((list) => {
+    let before = node
+    return list.map((json) => {
+      const one = { before, steps: [json] }
+      before = step(before, [json])
+      return one
+    })
+  })
+  const cycle = (items) => {
+    let at = 0
+    return () => items[at++ % items.length]
+  }
+  const message = cycle(messages)
+  const oneStep = cycle(steps)
   const add = (row, run) => cases.push({ document: name, row, run, times: [] })
   add("fromJSON", () => Node.fromJSON(schema, doc))
   add("JSON.parse, then fromJSON", () => Node.fromJSON(schema, JSON.parse(docText)))
@@ -108,6 +130,13 @@ for (const { name, schema, doc, changes } of documents) {
       ).toJSON(),
     ),
   )
+  add("kept node: one message", () => step(node, message().steps).toJSON())
+  add("kept node: its apply", () => step(node, message().steps))
+  add("kept node: its toJSON", () => message().changed.toJSON())
+  add("kept node: apply, one step", () => {
+    const { before, steps } = oneStep()
+    return step(before, steps)
+  })
 }
 
 for (const { run } of cases) for (let call = 0; call < 2000; call++) kept = run()

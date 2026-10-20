@@ -14,6 +14,12 @@
 # A row gives the median of its rounds' means and the range they span, and the median of its
 # minor page faults per call. RSS is where the process ends up.
 #
+# The "kept node" rows are a socket process's message: the %Tarnish.Node{} it read earlier, kept
+# between messages, takes one change's steps and is written back. Each call takes the next change
+# in turn, so a row's mean is one message's; the Step.apply row for one step takes each step in
+# turn, applied alone to the node the steps before it made, which shows what a call costs before
+# any step's work.
+#
 #     MIX_ENV=test mix run bench/apply_steps.exs
 
 rounds = String.to_integer(System.get_env("TARNISH_BENCH_ROUNDS", "7"))
@@ -89,6 +95,17 @@ stat = fn ->
   {String.to_integer(Enum.at(fields, 9)), String.to_integer(Enum.at(fields, 23)) * 4096}
 end
 
+# A call that returns the next of `items` each time, round and round.
+cycle = fn items ->
+  items = List.to_tuple(items)
+  counter = :counters.new(1, [])
+
+  fn ->
+    :counters.add(counter, 1, 1)
+    elem(items, rem(:counters.get(counter, 1), tuple_size(items)))
+  end
+end
+
 run_for = fn call, milliseconds ->
   deadline = System.monotonic_time(:millisecond) + milliseconds
 
@@ -123,6 +140,26 @@ cases =
     text = Jason.encode!(json)
     changes_text = Enum.map(changes, &Jason.encode!/1)
 
+    # Each change with what its steps make of the kept node, and each step with the node the
+    # steps before it in its change made.
+    message =
+      Enum.map(changes, fn steps ->
+        {:ok, changed} = Tarnish.Step.apply(doc, steps)
+        {steps, changed}
+      end)
+      |> cycle.()
+
+    one_step =
+      Enum.flat_map(changes, fn steps ->
+        steps
+        |> Enum.map_reduce(doc, fn step, before ->
+          {:ok, after_step} = Tarnish.Step.apply(before, [step])
+          {{before, [step]}, after_step}
+        end)
+        |> elem(0)
+      end)
+      |> cycle.()
+
     [
       {"Node.from_json", fn -> Tarnish.Node.from_json(schema, json) end},
       {"Jason, then Node.from_json",
@@ -144,6 +181,27 @@ cases =
          Jason.encode!(
            Tarnish.Node.to_json(apply_all.(doc, Enum.map(changes_text, &Jason.decode!/1)))
          )
+       end},
+      {"kept node: one message",
+       fn ->
+         {steps, _} = message.()
+         {:ok, changed} = Tarnish.Step.apply(doc, steps)
+         Tarnish.Node.to_json(changed)
+       end},
+      {"kept node: its Step.apply",
+       fn ->
+         {steps, _} = message.()
+         Tarnish.Step.apply(doc, steps)
+       end},
+      {"kept node: its Node.to_json",
+       fn ->
+         {_, changed} = message.()
+         Tarnish.Node.to_json(changed)
+       end},
+      {"kept node: Step.apply, one step",
+       fn ->
+         {before, step} = one_step.()
+         Tarnish.Step.apply(before, step)
        end}
     ]
     |> Enum.map(fn {row, call} -> {name, row, call} end)
