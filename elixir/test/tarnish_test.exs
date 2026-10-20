@@ -351,5 +351,102 @@ defmodule TarnishTest do
         refute :erts_debug.same(changed_two, second)
       end
     end
+
+    defp item(content), do: %{"type" => "list_item", "content" => content}
+    defp list(items), do: %{"type" => "bullet_list", "content" => items}
+
+    defp insert(at, text),
+      do: %{
+        "stepType" => "replace",
+        "from" => at,
+        "to" => at,
+        "slice" => %{"content" => [text(text)]}
+      }
+
+    test "shares the map of every node steps leave, at every depth", %{schema: schema} do
+      item = &item([paragraph([text(&1)])])
+      [b1, b2, b3] = for name <- ~w(b1 b2 b3), do: item.(name)
+      inner = list([b1, b2, b3])
+      a2_text = paragraph([text("a2")])
+      [a1, a3] = for name <- ~w(a1 a3), do: item.(name)
+      a2 = item([a2_text, inner])
+      [c1, c2, c3] = for name <- ~w(c1 c2 c3), do: item.(name)
+      last = paragraph([text("end")])
+      json = %{"type" => "doc", "content" => [list([a1, a2, a3]), list([c1, c2, c3]), last]}
+      doc = doc(schema, json)
+
+      # "!" after "c2", then after "b2": two lists side by side change, one of them two levels
+      # down.
+      {:ok, changed} = Tarnish.Step.apply(doc, [insert(51, "!"), insert(23, "!")])
+
+      %{"content" => [%{"content" => [one, two, three]}, %{"content" => [four, five, six]}, end_]} =
+        written = Tarnish.Node.to_json(changed)
+
+      assert written ===
+               %{
+                 "type" => "doc",
+                 "content" => [
+                   list([a1, item([a2_text, list([b1, item.("b2!"), b3])]), a3]),
+                   list([c1, item.("c2!"), c3]),
+                   last
+                 ]
+               }
+
+      %{"content" => [two_text, %{"content" => [seven, _, eight]}]} = two
+
+      for {written, read} <- [
+            {end_, last},
+            {one, a1},
+            {three, a3},
+            {four, c1},
+            {six, c3},
+            {two_text, a2_text},
+            {seven, b1},
+            {eight, b3}
+          ] do
+        assert :erts_debug.same(written, read)
+      end
+
+      refute :erts_debug.same(five, c2)
+
+      # Splitting the item after "a2" leaves its list in the second half.
+      split = %{
+        "stepType" => "replace",
+        "from" => 11,
+        "to" => 11,
+        "slice" => %{
+          "content" => [item([paragraph([])]), item([paragraph([])])],
+          "openStart" => 2,
+          "openEnd" => 2
+        },
+        "structure" => true
+      }
+
+      {:ok, changed} = Tarnish.Step.apply(doc, [split])
+
+      %{
+        "content" => [%{"content" => [one, _, %{"content" => [_, two_inner]}, three]}, four, end_]
+      } =
+        written = Tarnish.Node.to_json(changed)
+
+      assert written ===
+               put_in(
+                 json,
+                 ["content", Access.at(0)],
+                 list([a1, item([a2_text]), item([%{"type" => "paragraph"}, inner]), a3])
+               )
+
+      %{"content" => [_, c_list, _]} = json
+
+      for {written, read} <- [
+            {one, a1},
+            {three, a3},
+            {two_inner, inner},
+            {four, c_list},
+            {end_, last}
+          ] do
+        assert :erts_debug.same(written, read)
+      end
+    end
   end
 end

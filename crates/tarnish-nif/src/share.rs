@@ -128,9 +128,13 @@ impl<'a, 'v> Sharer<'a, 'v> {
             Some(_) => read.child_ids().collect(),
             None => Vec::new(),
         };
+        let children: Vec<NodeId> = node.child_ids().collect();
         let base = self.writer.begin_list();
         let mut next = 0;
-        for child in node.child_ids() {
+        // The child read that the last child made anew took the place of, which those made anew
+        // right after it, such as the halves of a split, may hold children of too.
+        let mut replaced = None;
+        for (at, &child) in children.iter().enumerate() {
             self.spend(BYTES_PER_ITEM)?;
             // Most children are the very child read in the same place.
             if let (Some(read), Some(items)) = (read_children.get(next), read_items)
@@ -139,6 +143,7 @@ impl<'a, 'v> Sharer<'a, 'v> {
             {
                 self.writer.item(items[next]);
                 next += 1;
+                replaced = None;
                 continue;
             }
             let found = read_children[next..]
@@ -149,9 +154,25 @@ impl<'a, 'v> Sharer<'a, 'v> {
             let index = match found {
                 Some(index) => {
                     next = index + 1;
+                    replaced = None;
                     Some(index)
                 }
-                None => (next < read_children.len()).then_some(next),
+                // A child made anew takes the place of the next child read, unless that one is
+                // still to come. Pairing the children after it with that one again would pair
+                // each with a child it isn't, and write the whole of each anew.
+                None => {
+                    let to_come = |read: &NodeId| {
+                        children[at + 1..]
+                            .iter()
+                            .take(LOOK_AHEAD)
+                            .any(|child| child.same(*read))
+                    };
+                    if read_children.get(next).is_some_and(|read| !to_come(read)) {
+                        replaced = Some(next);
+                        next += 1;
+                    }
+                    replaced
+                }
             };
             let pair = index
                 .zip(read_items)
