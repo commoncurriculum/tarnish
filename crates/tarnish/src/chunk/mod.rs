@@ -278,22 +278,40 @@ pub struct Chunk<'a> {
     /// Where each section starts in `bytes`.
     starts: [u32; SECTIONS],
     counts: [u32; SECTIONS],
-    /// The strings and text sections, checked as UTF-8 once so that a read only slices them.
-    strings: Box<str>,
-    text: Box<str>,
+    /// The strings and text sections, checked as UTF-8 once so that a read only slices them:
+    /// borrowed from the bytes when they are, so that loading a chunk copies none of its text.
+    strings: Cow<'a, str>,
+    text: Cow<'a, str>,
 }
 
-/// A section of UTF-8, or `None` when it isn't.
-fn utf8_section(
-    bytes: &[u8],
+/// A section of UTF-8, or `None` when it isn't. simdutf8 checks a section of a large document
+/// several times as fast as `str::from_utf8` does, which loading a chunk spent most of its time
+/// in.
+fn utf8_section<'b>(
+    bytes: &'b [u8],
     (starts, counts): (&[u32; SECTIONS], &[u32; SECTIONS]),
     section: usize,
-) -> Option<Box<str>> {
+) -> Option<&'b str> {
     let start = starts[section] as usize;
     let end = start + counts[section] as usize * WIDTHS[section];
-    std::str::from_utf8(bytes.get(start..end)?)
-        .ok()
-        .map(Box::from)
+    simdutf8::basic::from_utf8(bytes.get(start..end)?).ok()
+}
+
+/// The strings and text sections of a chunk's bytes, borrowed when the bytes are.
+fn utf8_sections<'a>(
+    bytes: &Cow<'a, [u8]>,
+    sections: (&[u32; SECTIONS], &[u32; SECTIONS]),
+) -> Option<(Cow<'a, str>, Cow<'a, str>)> {
+    Some(match bytes {
+        Cow::Borrowed(bytes) => (
+            Cow::Borrowed(utf8_section(bytes, sections, STRINGS)?),
+            Cow::Borrowed(utf8_section(bytes, sections, TEXT)?),
+        ),
+        Cow::Owned(bytes) => (
+            Cow::Owned(utf8_section(bytes, sections, STRINGS)?.to_owned()),
+            Cow::Owned(utf8_section(bytes, sections, TEXT)?.to_owned()),
+        ),
+    })
 }
 
 /// `len` bytes of a section of UTF-8 from `start`.
@@ -390,11 +408,7 @@ impl<'a> Chunk<'a> {
         {
             return Err(invalid());
         }
-        let sections = (&starts, &counts);
-        let (Some(strings), Some(text)) = (
-            utf8_section(&bytes, sections, STRINGS),
-            utf8_section(&bytes, sections, TEXT),
-        ) else {
+        let Some((strings, text)) = utf8_sections(&bytes, (&starts, &counts)) else {
             return Err(invalid());
         };
         Ok(Chunk {
@@ -417,12 +431,12 @@ impl<'a> Chunk<'a> {
         starts: [u32; SECTIONS],
         counts: [u32; SECTIONS],
     ) -> Chunk<'a> {
-        let sections = (&starts, &counts);
-        let utf8 = |section| utf8_section(&bytes, sections, section).unwrap_or_else(|| corrupt());
-        let (strings, text) = (utf8(STRINGS), utf8(TEXT));
+        let bytes = Cow::Owned(bytes);
+        let (strings, text) =
+            utf8_sections(&bytes, (&starts, &counts)).unwrap_or_else(|| corrupt());
         Chunk {
             id: double_word(&bytes, 16),
-            bytes: Cow::Owned(bytes),
+            bytes,
             schema,
             imports,
             starts,

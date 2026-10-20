@@ -14,6 +14,8 @@ serde = "1"
 # JSON text laid out as one flat tape, which a document is read from without a JSON value of
 # the whole of it.
 simd-json = { version = "0.17", default-features = false, features = ["runtime-detection", "swar-number-parsing"] }
+# UTF-8 checked as a chunk loads, as simd-json checks it.
+simdutf8 = "0.1"
 tarnish-js = { path = "../tarnish-js", version = "0.1.0" }
 
 [dev-dependencies]

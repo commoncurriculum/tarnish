@@ -1888,6 +1888,7 @@ dependencies = [
  "rustc-hash",
  "serde",
  "simd-json",
+ "simdutf8",
  "tarnish-fixtures",
  "tarnish-js",
 ]
