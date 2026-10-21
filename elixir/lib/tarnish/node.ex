@@ -52,9 +52,11 @@ defmodule Tarnish.Node do
 
   A process that keeps a node between changes, as a socket's does between messages, writes it
   with this and keeps the node it returns. `Tarnish.Step.apply/2` and `Tarnish.Transform.new/2`
-  carry that JSON to the nodes they make of it, whose JSON then shares every part written here
-  that the changes left as it was, rather than only the parts of the JSON the node was read from.
-  What either gives is the same, term for term.
+  carry that JSON to the nodes they make of it, whose JSON then shares the parts written here for
+  the nodes still held where this write found them, rather than only the parts of the JSON the
+  node was read from. A change that takes in the chunk holding a node writes that node again,
+  equal but a new term, so a document whose every change rewrites its top-level list, such as a
+  flat one, gains little. What either gives is the same, term for term.
 
   The node returned is the same document, and holds this JSON besides the one it was read from,
   so it is no longer `==` to the node given, and sending it to another process copies both.

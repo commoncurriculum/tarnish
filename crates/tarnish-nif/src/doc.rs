@@ -74,11 +74,25 @@ impl<'a> Doc<'a> {
     /// The document a ref names that `doc` may have been changed from, which a JSON was written
     /// for. `None` for a term that isn't a ref, or one in another schema or not read where `doc`
     /// was, which shares no node with `doc`: every document changed from another keeps its oldest
-    /// chunk.
+    /// chunk. `None` too when `doc` holds none of its newer chunks, having taken them all in, and
+    /// its reading flagged no node: it then shares with `doc` only nodes read, whose maps the map
+    /// read holds, and that map is shared without loading this one.
     pub fn load_beside(term: Term<'a>, doc: &Doc<'a>) -> Option<Doc<'a>> {
         let (schema, binaries): (Term<'a>, Vec<Term<'a>>) = term.decode().ok()?;
-        let oldest = Binary::from_term(*binaries.last()?).ok()?.as_slice();
+        let (oldest, newer) = binaries.split_last()?;
+        let oldest = Binary::from_term(*oldest).ok()?.as_slice();
         if schema != doc.schema || !std::ptr::eq(oldest, doc.chunks[0].bytes()) {
+            return None;
+        }
+        let held = |binary: &Term<'a>| {
+            Binary::from_term(*binary).is_ok_and(|binary| {
+                let bytes = binary.as_slice();
+                doc.chunks[1..]
+                    .iter()
+                    .any(|chunk| std::ptr::eq(bytes, chunk.bytes()))
+            })
+        };
+        if !newer.iter().any(held) && !doc.chunks[0].any_flagged() {
             return None;
         }
         Doc::load(term)

@@ -32,7 +32,7 @@ pub enum Base {
 
 /// The JSON of `doc`, `read` being the document read from the map `json`, or that it was written
 /// for, doing no more than `limit` bytes' worth of work. A node of `read` is its map again,
-/// unless its reading flagged it.
+/// unless, for `Base::Read`, its reading flagged it.
 pub fn json<'a, 'v>(
     env: Env<'a>,
     doc: NodeRef<'v>,

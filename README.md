@@ -278,8 +278,10 @@ text = Tarnish.Node.text_content(doc)
   map that is still what ProseMirror writes. After steps or ops, only the nodes they changed are
   new maps. A process that keeps a node between changes, as a socket does between messages, can
   write it with `Tarnish.Node.to_json_kept/1`, which gives `{json, node}`: the node it gives keeps
-  that JSON, so the next changes' JSON shares every part of it they left as it was, not only the
-  map read. In text, a lone surrogate, where a position splits a pair, is U+FFFD.
+  that JSON, so the next changes' JSON shares the parts written for the nodes still held where
+  that write found them, not only the map read. A change that takes in the chunk holding a node
+  writes that node again, equal but a new term, so a document whose every change rewrites its
+  top-level list, such as a flat one, gains little. In text, a lone surrogate, where a position splits a pair, is U+FFFD.
 - **Conversions.** `Tarnish.Bridge` converts between a document's JSON and Markdown or HTML
   with your application's own conversions: `parse_markdown`, `serialize_markdown`, `parse_html`,
   `serialize_html`, and `each` for a batch. Each gives `{:ok, value}` or `{:error, message}`.

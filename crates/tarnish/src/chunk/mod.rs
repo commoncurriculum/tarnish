@@ -508,6 +508,12 @@ impl<'a> Chunk<'a> {
         u16::from_le_bytes([self.bytes[at + 2], self.bytes[at + 3]])
     }
 
+    /// Whether a binding's reading flagged any node this chunk holds, as
+    /// [`NodeRef::flagged`](crate::model::NodeRef::flagged) reads one.
+    pub fn any_flagged(&self) -> bool {
+        (0..self.count(NODES)).any(|id| self.flags(id) & BINDING != 0)
+    }
+
     #[inline]
     fn kid(&self, index: u32) -> Kid {
         let at = self.at(KIDS, index);
@@ -784,26 +790,6 @@ impl<'a> Chunk<'a> {
         self.write_words(24 + IMPORTS * 4, &[slot + 1]);
         self.imports.push(chunk.clone());
         Some(slot)
-    }
-
-    /// The chunks this one imports, and theirs, each once, this one's last.
-    pub fn closure(this: &Arc<Chunk<'a>>) -> Vec<Arc<Chunk<'a>>> {
-        let mut found: Vec<Arc<Chunk<'a>>> = Vec::new();
-        let mut stack = vec![(this.clone(), false)];
-        while let Some((chunk, expanded)) = stack.pop() {
-            if found.iter().any(|seen| Arc::ptr_eq(seen, &chunk)) {
-                continue;
-            }
-            if expanded {
-                found.push(chunk);
-                continue;
-            }
-            stack.push((chunk.clone(), true));
-            for import in chunk.imports.iter().rev() {
-                stack.push((import.clone(), false));
-            }
-        }
-        found
     }
 }
 

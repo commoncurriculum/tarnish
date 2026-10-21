@@ -169,6 +169,23 @@ defmodule Tarnish.KeptTest do
       refute :erts_debug.same(three_again, three)
     end
 
+    # What the docs of Node.to_json_kept say: on a flat document every change rewrites the
+    # top-level list, whose chunk then takes in the one before, and the nodes changed in it are
+    # written again.
+    test "writes again a node changed in a chunk the next change takes in", %{schema: schema} do
+      for count <- [3, 200] do
+        content = for at <- 1..count, do: paragraph([text("p#{at}")])
+        node = doc(schema, %{"type" => "doc", "content" => content})
+        {:ok, first} = Tarnish.Step.apply(node, [insert(1, "a")])
+        {%{"content" => [typed | _]}, first} = kept(first)
+        {:ok, second} = Tarnish.Step.apply(first, [insert(6, "b")])
+        {%{"content" => [typed_again, other | _]}, _} = kept(second)
+        assert typed_again === typed
+        refute :erts_debug.same(typed_again, typed)
+        assert other === paragraph([text("bp2")])
+      end
+    end
+
     # A node whose reading flagged it is written anew, its map not being what toJSON writes for
     # it; what was written for it then is what toJSON writes.
     test "shares the term written anew for a node whose reading flagged it", %{schema: schema} do

@@ -309,8 +309,13 @@ fn a_chunk_read_from_json_changes_in_place_only_when_nothing_else_holds_it() {
     // The typed paragraph refers to the text it kept, so its chunk imports the read one.
     let changed = held.into_replaced(2, 2, &insert).expect("a replace");
     assert_same(&typed, &changed.to_json());
-    let read = tarnish::chunk::Chunk::closure(changed.chunk());
-    assert!(read.iter().any(|chunk| chunk.bytes() == bytes.as_slice()));
+    let mut imported = vec![changed.chunk().clone()];
+    let mut found = false;
+    while let Some(chunk) = imported.pop() {
+        found |= chunk.bytes() == bytes.as_slice();
+        imported.extend(chunk.imports().iter().cloned());
+    }
+    assert!(found, "the read chunk among the imports");
     // A paragraph's content replaced whole by the slice's shares nothing with the read chunk,
     // which nothing else holds, so its list changes in place.
     let doc = Node::from_json(schema, &start).expect("a document");
