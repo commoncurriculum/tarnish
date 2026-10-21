@@ -66,6 +66,19 @@ impl<'a> Doc<'a> {
         })
     }
 
+    /// The document a ref names that `doc` may have been changed from, which a JSON was written
+    /// for. `None` for a term that isn't a ref, or one in another schema or not read where `doc`
+    /// was, which shares no node with `doc`: every document changed from another keeps its oldest
+    /// chunk.
+    pub fn load_beside(term: Term<'a>, doc: &Doc<'a>) -> Option<Doc<'a>> {
+        let (schema, binaries): (Term<'a>, Vec<Term<'a>>) = term.decode().ok()?;
+        let oldest = Binary::from_term(*binaries.last()?).ok()?.as_slice();
+        if schema != doc.schema || !std::ptr::eq(oldest, doc.chunks[0].bytes()) {
+            return None;
+        }
+        Doc::load(term)
+    }
+
     pub fn root(&self) -> Node<'a> {
         let newest = self.chunks.last().expect("a chunk");
         Node::root(newest.clone()).expect("a node")

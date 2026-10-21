@@ -1,5 +1,6 @@
-//! A document's JSON as a term that shares the parts of the map it was read from: a node that is
-//! the very node read from a map, which holds what `toJSON` writes for it, is that map again.
+//! A document's JSON as a term that shares the parts of a map it was read from, or written for: a
+//! node that is the very node read from a map, which holds what `toJSON` writes for it, or the
+//! very node a map was written for, is that map again.
 
 use rustler::{Env, Term};
 use tarnish::js::stack;
@@ -19,18 +20,31 @@ const LOOK_AHEAD: usize = 32;
 /// Past the work a limit allows.
 pub struct TooBig;
 
-/// The JSON of `doc`, `read` being the document read from the map `json`, doing no more than
-/// `limit` bytes' worth of work. A node read is its map again unless its reading flagged it.
+/// What the map a document's JSON shares is to the document `read` paired with it.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Base {
+    /// The map `read` was read from, whose parts are what `toJSON` writes for the nodes read from
+    /// them, unless their reading flagged them.
+    Read,
+    /// The map written for `read`, whose every part is what `toJSON` writes for its node.
+    Written,
+}
+
+/// The JSON of `doc`, `read` being the document read from the map `json`, or that it was written
+/// for, doing no more than `limit` bytes' worth of work. A node of `read` is its map again,
+/// unless its reading flagged it.
 pub fn json<'a, 'v>(
     env: Env<'a>,
     doc: NodeRef<'v>,
     read: NodeRef<'v>,
     json: Term<'a>,
+    base: Base,
     limit: usize,
 ) -> Result<Term<'a>, TooBig> {
     let mut sharer = Sharer {
         writer: Writer::new(env),
         left: limit,
+        flags: base == Base::Read,
     };
     sharer.node(doc.id(), Some((read.id(), json)))
 }
@@ -39,6 +53,9 @@ struct Sharer<'a, 'v> {
     writer: Writer<'a, 'v>,
     /// The work left, in bytes.
     left: usize,
+    /// Whether a node read that its reading flagged is written anew, its map not being what
+    /// `toJSON` writes for it.
+    flags: bool,
 }
 
 impl<'a, 'v> Sharer<'a, 'v> {
@@ -56,7 +73,7 @@ impl<'a, 'v> Sharer<'a, 'v> {
     ) -> Result<Term<'a>, TooBig> {
         if let Some((read, map)) = read
             && read.same(node)
-            && !read.flagged()
+            && !(self.flags && read.flagged())
         {
             return Ok(map);
         }
@@ -139,7 +156,7 @@ impl<'a, 'v> Sharer<'a, 'v> {
             // Most children are the very child read in the same place.
             if let (Some(read), Some(items)) = (read_children.get(next), read_items)
                 && read.same(child)
-                && !read.flagged()
+                && !(self.flags && read.flagged())
             {
                 self.writer.item(items[next]);
                 next += 1;

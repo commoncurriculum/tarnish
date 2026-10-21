@@ -54,6 +54,18 @@ defmodule Tarnish.DeepTest do
     assert Tarnish.Node.to_json(changed) === %{"type" => "doc", "content" => [quotes(paragraph)]}
   end
 
+  test "a kept document changed deep down shares the JSON written before, down to the change",
+       %{schema: schema} do
+    doc = doc(schema, %{"type" => "doc", "content" => [quotes(@paragraph)]})
+    text = %{"type" => "text", "text" => "x"}
+    {:ok, changed} = Tarnish.Step.apply(doc, [replace(@depth + 1, @depth + 1, [text])])
+    {_, changed} = Tarnish.Node.to_json_kept(changed)
+    {:ok, again} = Tarnish.Step.apply(changed, [replace(@depth + 1, @depth + 1, [text])])
+    {json, _} = Tarnish.Node.to_json_kept(again)
+    paragraph = %{"type" => "paragraph", "content" => [%{text | "text" => "xx"}]}
+    assert json === %{"type" => "doc", "content" => [quotes(paragraph)]}
+  end
+
   test "a document holds attributes that nest deep, read, checked and written whole", %{
     schema: schema
   } do

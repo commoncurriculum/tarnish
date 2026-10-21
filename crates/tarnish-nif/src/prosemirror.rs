@@ -12,7 +12,7 @@ use tarnish::transform::TRANSFORM_ERROR;
 use tarnish::{Error, Node, REPLACE_ERROR, Schema, Text, Value, api};
 
 use crate::doc::Doc;
-use crate::share;
+use crate::share::{self, Base};
 use crate::term::{Reader, Unread, Writer};
 use crate::view;
 
@@ -169,8 +169,37 @@ fn read_node<'a>(env: Env<'a>, limits: &Limits, schema: Term<'a>, json: Term<'a>
 
 fn write_node<'a>(env: Env<'a>, limits: &Limits, doc: Term<'a>, json: Term<'a>) -> Answer<'a> {
     let doc = load(doc)?;
-    share::json(env, doc.view(), doc.read(), json, limits.write)
+    share::json(env, doc.view(), doc.read(), json, Base::Read, limits.write)
         .map_err(|share::TooBig| Unanswered::Dirty)
+}
+
+/// The document's JSON, sharing the map written for a document it may have been changed from,
+/// `base` being `{ref, map}`, or the map it was read from, `json`, when `base` names a document
+/// that shares none of its nodes, or isn't one.
+fn write_node_from<'a>(
+    env: Env<'a>,
+    limits: &Limits,
+    doc: Term<'a>,
+    json: Term<'a>,
+    base: Term<'a>,
+) -> Answer<'a> {
+    let doc = load(doc)?;
+    let written = base
+        .decode::<(Term<'a>, Term<'a>)>()
+        .ok()
+        .and_then(|(base, map)| Some((Doc::load_beside(base, &doc)?, map)));
+    match &written {
+        Some((base, map)) => share::json(
+            env,
+            doc.view(),
+            base.view(),
+            *map,
+            Base::Written,
+            limits.write,
+        ),
+        None => share::json(env, doc.view(), doc.read(), json, Base::Read, limits.write),
+    }
+    .map_err(|share::TooBig| Unanswered::Dirty)
 }
 
 fn check_node<'a>(env: Env<'a>, limits: &Limits, doc: Term<'a>) -> Answer<'a> {
@@ -308,6 +337,26 @@ fn to_json<'a>(env: Env<'a>, doc: Term<'a>, json: Term<'a>) -> NifResult<Term<'a
 #[rustler::nif(schedule = "DirtyCpu")]
 fn to_json_dirty<'a>(env: Env<'a>, doc: Term<'a>, json: Term<'a>) -> NifResult<Term<'a>> {
     dirty(|limits| write_node(env, limits, doc, json))
+}
+
+#[rustler::nif]
+fn to_json_from<'a>(
+    env: Env<'a>,
+    doc: Term<'a>,
+    json: Term<'a>,
+    base: Term<'a>,
+) -> NifResult<Term<'a>> {
+    normal(env, |limits| write_node_from(env, limits, doc, json, base))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn to_json_from_dirty<'a>(
+    env: Env<'a>,
+    doc: Term<'a>,
+    json: Term<'a>,
+    base: Term<'a>,
+) -> NifResult<Term<'a>> {
+    dirty(|limits| write_node_from(env, limits, doc, json, base))
 }
 
 #[rustler::nif]

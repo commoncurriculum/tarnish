@@ -12,10 +12,12 @@ defmodule Tarnish.Node do
 
   # The binaries of the chunks that hold the node, newest first, which Rust reads in place, as
   # `{schema, chunks}`. And the JSON it was read from, whose parts its own JSON shares where
-  # they're what ProseMirror writes.
+  # they're what ProseMirror writes. And `base`, nil or `{ref, json}`, the JSON `to_json_kept/1`
+  # last wrote, for the ref it wrote it for, whose parts its own JSON shares where its nodes are
+  # that ref's.
   @derive {Inspect, only: []}
   @enforce_keys [:ref, :json]
-  defstruct [:ref, :json]
+  defstruct [:ref, :json, base: nil]
 
   @type t :: %__MODULE__{}
 
@@ -31,8 +33,36 @@ defmodule Tarnish.Node do
 
   @doc "The node's JSON, as `node.toJSON()` gives it."
   @spec to_json(t()) :: Tarnish.json()
-  def to_json(%__MODULE__{ref: ref, json: json}) do
-    with :dirty <- @native.to_json(ref, json), do: @native.to_json_dirty(ref, json)
+  def to_json(%__MODULE__{ref: ref, json: json} = node) do
+    case Map.get(node, :base) do
+      nil ->
+        with :dirty <- @native.to_json(ref, json), do: @native.to_json_dirty(ref, json)
+
+      {^ref, written} ->
+        written
+
+      base ->
+        with :dirty <- @native.to_json_from(ref, json, base),
+             do: @native.to_json_from_dirty(ref, json, base)
+    end
+  end
+
+  @doc """
+  The node's JSON, as `to_json/1` gives it, and the node, which keeps that JSON as its base.
+
+  A process that keeps a node between changes, as a socket's does between messages, writes it
+  with this and keeps the node it returns. `Tarnish.Step.apply/2` and `Tarnish.Transform.new/2`
+  carry that JSON to the nodes they make of it, whose JSON then shares every part written here
+  that the changes left as it was, rather than only the parts of the JSON the node was read from.
+  What either gives is the same, term for term.
+
+  The node returned is the same document, and holds this JSON besides the one it was read from,
+  so it is no longer `==` to the node given, and sending it to another process copies both.
+  """
+  @spec to_json_kept(t()) :: {Tarnish.json(), t()}
+  def to_json_kept(%__MODULE__{ref: ref} = node) do
+    json = to_json(node)
+    {json, Map.put(node, :base, {ref, json})}
   end
 
   @doc "Checks that the node conforms to its schema, as `node.check()` does."

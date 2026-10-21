@@ -276,7 +276,10 @@ text = Tarnish.Node.text_content(doc)
   encode, such as a tuple, raises `ArgumentError`.
 - **Output.** A document keeps the map it was read from, and `to_json` shares every part of that
   map that is still what ProseMirror writes. After steps or ops, only the nodes they changed are
-  new maps. In text, a lone surrogate, where a position splits a pair, is U+FFFD.
+  new maps. A process that keeps a node between changes, as a socket does between messages, can
+  write it with `Tarnish.Node.to_json_kept/1`, which gives `{json, node}`: the node it gives keeps
+  that JSON, so the next changes' JSON shares every part of it they left as it was, not only the
+  map read. In text, a lone surrogate, where a position splits a pair, is U+FFFD.
 - **Conversions.** `Tarnish.Bridge` converts between a document's JSON and Markdown or HTML
   with your application's own conversions: `parse_markdown`, `serialize_markdown`, `parse_html`,
   `serialize_html`, and `each` for a batch. Each gives `{:ok, value}` or `{:error, message}`.
