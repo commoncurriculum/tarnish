@@ -9,7 +9,7 @@
 use rustler::{Encoder, Env, NifResult, Resource, ResourceArc, Term};
 use tarnish::js::stack;
 use tarnish::transform::TRANSFORM_ERROR;
-use tarnish::{Error, Node, REPLACE_ERROR, Schema, Text, Value, api};
+use tarnish::{Error, Node, NodeRef, REPLACE_ERROR, Schema, Text, Value, api};
 
 use crate::doc::Doc;
 use crate::share::{self, Base};
@@ -139,13 +139,9 @@ fn read(limits: &Limits, json: Term) -> Result<Value, Unanswered> {
     Ok(Reader::new(limits.read).read(json)?)
 }
 
-/// The steps, when there are few enough for the limits to apply to `doc`.
-fn steps(limits: &Limits, doc: &Node, steps: Term) -> Result<Value, Unanswered> {
-    Ok(weighed_steps(limits, doc, steps)?.0)
-}
-
-/// [`steps`], and the work of the apply limit applying them takes.
-fn weighed_steps(limits: &Limits, doc: &Node, steps: Term) -> Result<(Value, usize), Unanswered> {
+/// The steps, when there are few enough for the limits to apply to `doc`, and the work of the
+/// apply limit applying them takes.
+fn steps(limits: &Limits, doc: &Node, steps: Term) -> Result<(Value, usize), Unanswered> {
     let steps = read(limits, steps)?;
     let count = steps.as_array().map_or(0, Vec::len);
     let work = count * (doc.child_count() + 1);
@@ -180,9 +176,7 @@ fn read_node<'a>(env: Env<'a>, limits: &Limits, schema: Term<'a>, json: Term<'a>
     Ok(respond(env, doc, |doc| crate::doc::read(env, schema, &doc)))
 }
 
-/// The document's JSON, sharing the map it was read from, `json`, or with a `base`, `{ref,
-/// map}`, the map written for a document it may have been changed from, unless `base` names a
-/// document that shares none of its nodes, or isn't one.
+/// The document's JSON, as [`write_sharing`] writes it.
 fn write_node<'a>(
     env: Env<'a>,
     limits: &Limits,
@@ -191,15 +185,43 @@ fn write_node<'a>(
     base: Option<Term<'a>>,
 ) -> Answer<'a> {
     let doc = load(doc)?;
-    let beside = base
-        .and_then(|base| base.decode::<(Term<'a>, Term<'a>)>().ok())
-        .and_then(|(base, map)| Some((Doc::load_beside(base, &doc)?, map)));
-    let (read, map, base) = match &beside {
-        Some((written, map)) => (written.view(), *map, Base::Written),
-        None => (doc.read(), json, Base::Read),
+    write_sharing(env, doc.view(), &doc, json, base, limits.write)
+}
+
+/// What a write of a node shares: the map `doc` was read from, the map written for `doc`
+/// itself, or the map written for a document `doc` may have been changed from, with that
+/// document.
+enum Shared<'a> {
+    Read,
+    This(Term<'a>),
+    Beside(Doc<'a>, Term<'a>),
+}
+
+/// The JSON of `node`, which is `doc` or a document made from it, sharing the map `doc` was
+/// read from, `json`, or with a `base`, `{ref, map}`, the map written for `doc` or for a
+/// document `doc` may have been changed from, unless `base` names a document that shares none
+/// of its nodes, or isn't one.
+fn write_sharing<'a>(
+    env: Env<'a>,
+    node: NodeRef<'_>,
+    doc: &Doc<'a>,
+    json: Term<'a>,
+    base: Option<Term<'a>>,
+    limit: usize,
+) -> Answer<'a> {
+    // The base is most often the map written for `doc` itself, which is loaded already.
+    let shared = match base.and_then(|base| base.decode::<(Term<'a>, Term<'a>)>().ok()) {
+        Some((written, map)) if doc.is_ref(written) => Shared::This(map),
+        Some((written, map)) => Doc::load_beside(written, doc)
+            .map_or(Shared::Read, |written| Shared::Beside(written, map)),
+        None => Shared::Read,
     };
-    share::json(env, doc.view(), read, map, base, limits.write)
-        .map_err(|share::TooBig| Unanswered::Dirty)
+    let (read, map, kind) = match &shared {
+        Shared::Read => (doc.read(), json, Base::Read),
+        Shared::This(map) => (doc.view(), *map, Base::Written),
+        Shared::Beside(written, map) => (written.view(), *map, Base::Written),
+    };
+    share::json(env, node, read, map, kind, limit).map_err(|share::TooBig| Unanswered::Dirty)
 }
 
 fn check_node<'a>(env: Env<'a>, limits: &Limits, doc: Term<'a>) -> Answer<'a> {
@@ -214,7 +236,7 @@ fn check_node<'a>(env: Env<'a>, limits: &Limits, doc: Term<'a>) -> Answer<'a> {
 fn apply<'a>(env: Env<'a>, limits: &Limits, doc: Term<'a>, json: Term<'a>) -> Answer<'a> {
     let doc = load(doc)?;
     let root = doc.root();
-    let applied = api::apply_steps(&root, &steps(limits, &root, json)?);
+    let applied = api::apply_steps(&root, &steps(limits, &root, json)?.0);
     Ok(respond(env, applied, |node| doc.changed(env, &node)))
 }
 
@@ -235,26 +257,13 @@ fn apply_written<'a>(
 ) -> Answer<'a> {
     let loaded = load(doc)?;
     let root = loaded.root();
-    let (steps, applying) = weighed_steps(limits, &root, steps)?;
+    let (steps, applying) = self::steps(limits, &root, steps)?;
     let applied = match api::apply_steps(&root, &steps) {
         Ok(node) => node,
         Err(failed) => return Ok(failure(env, failed)),
     };
-    // The base is most often the map written for this very document, which is loaded already.
-    let base = base.decode::<(Term<'a>, Term<'a>)>().ok();
-    let this = base.is_some_and(|(written, _)| loaded.is_ref(written));
-    let beside = match base {
-        Some((written, _)) if !this => Doc::load_beside(written, &loaded),
-        _ => None,
-    };
-    let (read, map, kind) = match (base, &beside) {
-        (Some((_, map)), _) if this => (loaded.view(), map, Base::Written),
-        (Some((_, map)), Some(written)) => (written.view(), map, Base::Written),
-        _ => (loaded.read(), json, Base::Read),
-    };
     let limit = write_left(limits, applying);
-    let written = share::json(env, applied.view(), read, map, kind, limit)
-        .map_err(|share::TooBig| Unanswered::Dirty)?;
+    let written = write_sharing(env, applied.view(), &loaded, json, Some(base), limit)?;
     Ok((ok(), (loaded.changed(env, &applied), written)).encode(env))
 }
 
@@ -290,7 +299,7 @@ fn within_size(value: &Value, left: &mut usize) -> Result<(), Unanswered> {
 
 fn invert<'a>(env: Env<'a>, limits: &Limits, doc: Term<'a>, json: Term<'a>) -> Answer<'a> {
     let doc = load(doc)?.root();
-    match api::invert_steps(&doc, &steps(limits, &doc, json)?) {
+    match api::invert_steps(&doc, &steps(limits, &doc, json)?.0) {
         Ok(steps) => Ok((ok(), write_steps(env, limits, &steps)?).encode(env)),
         Err(failed) => Ok(failure(env, failed)),
     }
