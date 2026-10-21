@@ -141,10 +141,23 @@ fn read(limits: &Limits, json: Term) -> Result<Value, Unanswered> {
 
 /// The steps, when there are few enough for the limits to apply to `doc`.
 fn steps(limits: &Limits, doc: &Node, steps: Term) -> Result<Value, Unanswered> {
+    Ok(weighed_steps(limits, doc, steps)?.0)
+}
+
+/// [`steps`], and the work of the apply limit applying them takes.
+fn weighed_steps(limits: &Limits, doc: &Node, steps: Term) -> Result<(Value, usize), Unanswered> {
     let steps = read(limits, steps)?;
     let count = steps.as_array().map_or(0, Vec::len);
-    within(count * (doc.child_count() + 1), limits.apply)?;
-    Ok(steps)
+    let work = count * (doc.child_count() + 1);
+    within(work, limits.apply)?;
+    Ok((steps, work))
+}
+
+/// The write limit's share that `applied` of the apply limit leaves, so that a call that applies
+/// steps and writes the JSON takes on no more than one that does either.
+fn write_left(limits: &Limits, applied: usize) -> usize {
+    let left = limits.apply.saturating_sub(applied) as u128;
+    (limits.write as u128 * left / limits.apply as u128) as usize
 }
 
 /// The ops, when the positions they span are few enough for the limits to apply to `doc`: an
@@ -203,6 +216,46 @@ fn apply<'a>(env: Env<'a>, limits: &Limits, doc: Term<'a>, json: Term<'a>) -> An
     let root = doc.root();
     let applied = api::apply_steps(&root, &steps(limits, &root, json)?);
     Ok(respond(env, applied, |node| doc.changed(env, &node)))
+}
+
+/// The steps applied, as [`apply`] applies them, and the JSON of the document they make, as
+/// [`write_node`] writes it with `base`, in one: `{:ok, {ref, json}}`, or the failure.
+///
+/// The JSON is written from the document the steps make before its chunks are flattened into
+/// one, whose nodes the steps left are still the nodes of the document they were applied to. So
+/// when `base` is `{doc, map}`, the map written for this very document, those nodes are that
+/// map's again, and only the nodes the steps changed are written.
+fn apply_written<'a>(
+    env: Env<'a>,
+    limits: &Limits,
+    doc: Term<'a>,
+    steps: Term<'a>,
+    json: Term<'a>,
+    base: Term<'a>,
+) -> Answer<'a> {
+    let loaded = load(doc)?;
+    let root = loaded.root();
+    let (steps, applying) = weighed_steps(limits, &root, steps)?;
+    let applied = match api::apply_steps(&root, &steps) {
+        Ok(node) => node,
+        Err(failed) => return Ok(failure(env, failed)),
+    };
+    // The base is most often the map written for this very document, which is loaded already.
+    let base = base.decode::<(Term<'a>, Term<'a>)>().ok();
+    let this = base.is_some_and(|(written, _)| loaded.is_ref(written));
+    let beside = match base {
+        Some((written, _)) if !this => Doc::load_beside(written, &loaded),
+        _ => None,
+    };
+    let (read, map, kind) = match (base, &beside) {
+        (Some((_, map)), _) if this => (loaded.view(), map, Base::Written),
+        (Some((_, map)), Some(written)) => (written.view(), map, Base::Written),
+        _ => (loaded.read(), json, Base::Read),
+    };
+    let limit = write_left(limits, applying);
+    let written = share::json(env, applied.view(), read, map, kind, limit)
+        .map_err(|share::TooBig| Unanswered::Dirty)?;
+    Ok((ok(), (loaded.changed(env, &applied), written)).encode(env))
 }
 
 /// Steps' term, when they're small enough for the limits: a step undoing a deletion holds the
@@ -364,6 +417,30 @@ fn apply_steps<'a>(env: Env<'a>, doc: Term<'a>, steps: Term<'a>) -> NifResult<Te
 #[rustler::nif(schedule = "DirtyCpu")]
 fn apply_steps_dirty<'a>(env: Env<'a>, doc: Term<'a>, steps: Term<'a>) -> NifResult<Term<'a>> {
     dirty(|limits| apply(env, limits, doc, steps))
+}
+
+#[rustler::nif]
+fn apply_write<'a>(
+    env: Env<'a>,
+    doc: Term<'a>,
+    steps: Term<'a>,
+    json: Term<'a>,
+    base: Term<'a>,
+) -> NifResult<Term<'a>> {
+    normal(env, |limits| {
+        apply_written(env, limits, doc, steps, json, base)
+    })
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn apply_write_dirty<'a>(
+    env: Env<'a>,
+    doc: Term<'a>,
+    steps: Term<'a>,
+    json: Term<'a>,
+    base: Term<'a>,
+) -> NifResult<Term<'a>> {
+    dirty(|limits| apply_written(env, limits, doc, steps, json, base))
 }
 
 #[rustler::nif]

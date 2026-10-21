@@ -280,7 +280,9 @@ text = Tarnish.Node.text_content(doc)
 - **Kept nodes.** A process that keeps a node between changes, as a socket does between
   messages, can write it with `Tarnish.Node.to_json_kept/1`, which gives `{json, node}`; the next
   changes' JSON then shares what that write wrote for the nodes still in place. Its docs say
-  which documents gain little.
+  which documents gain little. `Tarnish.Step.apply_kept/2` applies a message's steps and makes
+  that write in one call, `{:ok, json, node}`, which shares the nodes still in place on those
+  documents too.
 - **Conversions.** `Tarnish.Bridge` converts between a document's JSON and Markdown or HTML
   with your application's own conversions: `parse_markdown`, `serialize_markdown`, `parse_html`,
   `serialize_html`, and `each` for a batch. Each gives `{:ok, value}` or `{:error, message}`.

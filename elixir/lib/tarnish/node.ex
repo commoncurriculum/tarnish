@@ -56,7 +56,9 @@ defmodule Tarnish.Node do
   the nodes still held where this write found them, rather than only the parts of the JSON the
   node was read from. A change that takes in the chunk holding a node writes that node again,
   equal but a new term, so a document whose every change rewrites its top-level list, such as a
-  flat one, gains little. What either gives is the same, term for term.
+  flat one, gains little; `Tarnish.Step.apply_kept/2`, which applies a message's steps and
+  writes the document they make in one call, shares those nodes too. What either gives is the
+  same, term for term.
 
   The node returned is the same document, and holds this JSON besides the one it was read from,
   so it is no longer `==` to the node given, and sending it to another process copies both. It

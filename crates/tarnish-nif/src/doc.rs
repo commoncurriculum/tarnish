@@ -116,6 +116,23 @@ impl<'a> Doc<'a> {
         Doc::load_with(term, &doc.chunks)
     }
 
+    /// Whether `term` is this document's ref: the same schema, and the very binaries this
+    /// document was loaded from, by address, in the same order. A ref sent to another process
+    /// keeps the addresses of binaries bigger than 64 bytes, which it shares, and copies only the
+    /// smaller ones, which then aren't this document's, though they hold the same bytes.
+    pub fn is_ref(&self, term: Term<'a>) -> bool {
+        let Ok((schema, binaries)) = term.decode::<(Term<'a>, Vec<Term<'a>>)>() else {
+            return false;
+        };
+        let bytes = |binary: &Term<'a>| Binary::from_term(*binary).map(|binary| binary.as_slice());
+        schema == self.schema
+            && binaries.len() == self.binaries.len()
+            && binaries
+                .iter()
+                .zip(&self.binaries)
+                .all(|(a, b)| matches!((bytes(a), bytes(b)), (Ok(a), Ok(b)) if std::ptr::eq(a, b)))
+    }
+
     pub fn root(&self) -> Node<'a> {
         let newest = self.chunks.last().expect("a chunk");
         Node::root(newest.clone()).expect("a node")

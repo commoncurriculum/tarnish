@@ -68,6 +68,10 @@ defmodule Tarnish.NIF do
       @doc false
       def apply_steps_dirty(_doc, _steps), do: :erlang.nif_error(:nif_not_loaded)
       @doc false
+      def apply_write(_doc, _steps, _json, _base), do: :erlang.nif_error(:nif_not_loaded)
+      @doc false
+      def apply_write_dirty(_doc, _steps, _json, _base), do: :erlang.nif_error(:nif_not_loaded)
+      @doc false
       def invert_steps(_doc, _steps), do: :erlang.nif_error(:nif_not_loaded)
       @doc false
       def invert_steps_dirty(_doc, _steps), do: :erlang.nif_error(:nif_not_loaded)

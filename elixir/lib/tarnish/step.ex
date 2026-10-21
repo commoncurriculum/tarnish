@@ -16,6 +16,33 @@ defmodule Tarnish.Step do
   end
 
   @doc """
+  Applies the steps, as `apply/2` does, and writes the document they make, as
+  `Tarnish.Node.to_json_kept/1` does, in one call: `{:ok, json, node}`, the node keeping that
+  JSON as its base, or the error `apply/2` gives.
+
+  A socket's process, which keeps a node between messages, applies each message with this. The
+  JSON shares what the node's base holds for every node the steps left, even where the document
+  they make takes those nodes in a chunk of its own, which `to_json_kept/1` writes again. What it
+  gives is what `apply/2` and then `to_json_kept/1` give, term for term.
+  """
+  @spec apply_kept(Tarnish.Node.t(), [Tarnish.json()]) ::
+          {:ok, Tarnish.json(), Tarnish.Node.t()} | Tarnish.error()
+  def apply_kept(%Tarnish.Node{ref: ref, json: json} = doc, steps) do
+    case {steps, Map.get(doc, :base)} do
+      {[], {^ref, written}} ->
+        {:ok, written, doc}
+
+      {steps, base} ->
+        applied =
+          with :dirty <- @native.apply_write(ref, steps, json, base),
+               do: @native.apply_write_dirty(ref, steps, json, base)
+
+        with {:ok, {ref, written}} <- applied,
+             do: {:ok, written, Map.put(%{doc | ref: ref}, :base, {ref, written})}
+    end
+  end
+
+  @doc """
   The steps that undo `steps`, applied to `doc`, last first, as `step.invert(doc)` gives each.
   """
   @spec invert(Tarnish.Node.t(), [Tarnish.json()]) :: {:ok, [Tarnish.json()]} | Tarnish.error()

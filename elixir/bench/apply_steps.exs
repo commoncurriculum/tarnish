@@ -25,7 +25,8 @@
 # places spread evenly, in turn, into the node the message before it made, and is written back with
 # Node.to_json_kept, whose node the next message takes, so that what each shares is the map the
 # message before it wrote; each call takes the next message. Their messages are the scenarios
-# bench/document.mjs writes.
+# bench/document.mjs writes. The Step.apply_kept rows take the same messages, applied and written
+# in one call, as a socket's process makes them.
 #
 #     MIX_ENV=test mix run bench/apply_steps.exs
 
@@ -221,6 +222,13 @@ cases =
       end
     end
 
+    chained_kept = fn chain ->
+      fn ->
+        {before, steps, _} = chain.()
+        Tarnish.Step.apply_kept(before, steps)
+      end
+    end
+
     [
       {"Node.from_json", fn -> Tarnish.Node.from_json(schema, json) end},
       {"Jason, then Node.from_json",
@@ -271,6 +279,8 @@ cases =
        fn -> Tarnish.Node.to_json(typed_once_more) end},
       {"kept node, chained in 10 places: a message", chained_message.(chained_in_10)},
       {"kept node, chained in 100 places: a message", chained_message.(chained_in_100)},
+      {"kept node, chained in 10 places: Step.apply_kept", chained_kept.(chained_in_10)},
+      {"kept node, chained in 100 places: Step.apply_kept", chained_kept.(chained_in_100)},
       {"kept node, chained in 100 places: its to_json_kept",
        fn ->
          {_, _, changed} = chained_in_100_written.()
