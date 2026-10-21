@@ -45,14 +45,42 @@ pub fn read<'a>(env: Env<'a>, schema: Term<'a>, doc: &Node) -> Term<'a> {
     (schema, [binary(env, doc.chunk().bytes())].as_slice()).encode(env)
 }
 
+/// Whether a document whose newer chunks are `newer`, and whose oldest is `doc`'s, shares with
+/// `doc` only nodes read, whose maps the map read holds: when `doc` holds none of its newer
+/// chunks, having taken them all in, and its reading flagged no node.
+fn read_map_suffices<'a>(newer: &[Term<'a>], doc: &Doc<'a>) -> bool {
+    let held = |binary: &Term<'a>| {
+        Binary::from_term(*binary).is_ok_and(|binary| {
+            let bytes = binary.as_slice();
+            doc.chunks[1..]
+                .iter()
+                .any(|chunk| std::ptr::eq(bytes, chunk.bytes()))
+        })
+    };
+    !newer.iter().any(held) && !doc.chunks[0].any_flagged()
+}
+
 impl<'a> Doc<'a> {
     /// The document a ref names; `None` for a term that isn't one.
     pub fn load(term: Term<'a>) -> Option<Doc<'a>> {
+        Doc::load_with(term, &[])
+    }
+
+    /// [`load`](Self::load), taking the chunks of `reuse` for the binaries they were loaded
+    /// from rather than loading them again.
+    fn load_with(term: Term<'a>, reuse: &[Arc<Chunk<'a>>]) -> Option<Doc<'a>> {
         let (schema, binaries): (Term<'a>, Vec<Term<'a>>) = term.decode().ok()?;
         let resource: ResourceArc<SchemaResource> = schema.decode().ok()?;
         let mut chunks: Vec<Arc<Chunk<'a>>> = Vec::with_capacity(binaries.len());
         for binary in binaries.iter().rev() {
             let bytes = Binary::from_term(*binary).ok()?.as_slice();
+            if let Some(held) = reuse
+                .iter()
+                .find(|chunk| std::ptr::eq(chunk.bytes(), bytes))
+            {
+                chunks.push(held.clone());
+                continue;
+            }
             let imports = Header::read(bytes)
                 .ok()?
                 .imports
@@ -72,30 +100,20 @@ impl<'a> Doc<'a> {
     }
 
     /// The document a ref names that `doc` may have been changed from, which a JSON was written
-    /// for. `None` for a term that isn't a ref, or one in another schema or not read where `doc`
-    /// was, which shares no node with `doc`: every document changed from another keeps its oldest
-    /// chunk. `None` too when `doc` holds none of its newer chunks, having taken them all in, and
-    /// its reading flagged no node: it then shares with `doc` only nodes read, whose maps the map
-    /// read holds, and that map is shared without loading this one.
+    /// for: `None` for a term that isn't a ref, or one in another schema or whose oldest chunk
+    /// isn't `doc`'s, which shares no node with `doc`. `None` too when the map read shares the
+    /// same nodes, as [`read_map_suffices`] tells.
     pub fn load_beside(term: Term<'a>, doc: &Doc<'a>) -> Option<Doc<'a>> {
         let (schema, binaries): (Term<'a>, Vec<Term<'a>>) = term.decode().ok()?;
         let (oldest, newer) = binaries.split_last()?;
         let oldest = Binary::from_term(*oldest).ok()?.as_slice();
-        if schema != doc.schema || !std::ptr::eq(oldest, doc.chunks[0].bytes()) {
+        if schema != doc.schema
+            || !std::ptr::eq(oldest, doc.chunks[0].bytes())
+            || read_map_suffices(newer, doc)
+        {
             return None;
         }
-        let held = |binary: &Term<'a>| {
-            Binary::from_term(*binary).is_ok_and(|binary| {
-                let bytes = binary.as_slice();
-                doc.chunks[1..]
-                    .iter()
-                    .any(|chunk| std::ptr::eq(bytes, chunk.bytes()))
-            })
-        };
-        if !newer.iter().any(held) && !doc.chunks[0].any_flagged() {
-            return None;
-        }
-        Doc::load(term)
+        Doc::load_with(term, &doc.chunks)
     }
 
     pub fn root(&self) -> Node<'a> {

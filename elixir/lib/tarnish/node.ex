@@ -59,7 +59,9 @@ defmodule Tarnish.Node do
   flat one, gains little. What either gives is the same, term for term.
 
   The node returned is the same document, and holds this JSON besides the one it was read from,
-  so it is no longer `==` to the node given, and sending it to another process copies both.
+  so it is no longer `==` to the node given, and sending it to another process copies both. It
+  also holds the chunks of the document this JSON was written for, until it is written again
+  with this.
   """
   @spec to_json_kept(t()) :: {Tarnish.json(), t()}
   def to_json_kept(%__MODULE__{ref: ref} = node) do

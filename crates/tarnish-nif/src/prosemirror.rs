@@ -167,39 +167,26 @@ fn read_node<'a>(env: Env<'a>, limits: &Limits, schema: Term<'a>, json: Term<'a>
     Ok(respond(env, doc, |doc| crate::doc::read(env, schema, &doc)))
 }
 
-fn write_node<'a>(env: Env<'a>, limits: &Limits, doc: Term<'a>, json: Term<'a>) -> Answer<'a> {
-    let doc = load(doc)?;
-    share::json(env, doc.view(), doc.read(), json, Base::Read, limits.write)
-        .map_err(|share::TooBig| Unanswered::Dirty)
-}
-
-/// The document's JSON, sharing the map written for a document it may have been changed from,
-/// `base` being `{ref, map}`, or the map it was read from, `json`, when `base` names a document
-/// that shares none of its nodes, or isn't one.
-fn write_node_from<'a>(
+/// The document's JSON, sharing the map it was read from, `json`, or with a `base`, `{ref,
+/// map}`, the map written for a document it may have been changed from, unless `base` names a
+/// document that shares none of its nodes, or isn't one.
+fn write_node<'a>(
     env: Env<'a>,
     limits: &Limits,
     doc: Term<'a>,
     json: Term<'a>,
-    base: Term<'a>,
+    base: Option<Term<'a>>,
 ) -> Answer<'a> {
     let doc = load(doc)?;
-    let written = base
-        .decode::<(Term<'a>, Term<'a>)>()
-        .ok()
+    let beside = base
+        .and_then(|base| base.decode::<(Term<'a>, Term<'a>)>().ok())
         .and_then(|(base, map)| Some((Doc::load_beside(base, &doc)?, map)));
-    match &written {
-        Some((base, map)) => share::json(
-            env,
-            doc.view(),
-            base.view(),
-            *map,
-            Base::Written,
-            limits.write,
-        ),
-        None => share::json(env, doc.view(), doc.read(), json, Base::Read, limits.write),
-    }
-    .map_err(|share::TooBig| Unanswered::Dirty)
+    let (read, map, base) = match &beside {
+        Some((written, map)) => (written.view(), *map, Base::Written),
+        None => (doc.read(), json, Base::Read),
+    };
+    share::json(env, doc.view(), read, map, base, limits.write)
+        .map_err(|share::TooBig| Unanswered::Dirty)
 }
 
 fn check_node<'a>(env: Env<'a>, limits: &Limits, doc: Term<'a>) -> Answer<'a> {
@@ -331,12 +318,12 @@ fn node_from_json_dirty<'a>(env: Env<'a>, schema: Term<'a>, json: Term<'a>) -> N
 
 #[rustler::nif]
 fn to_json<'a>(env: Env<'a>, doc: Term<'a>, json: Term<'a>) -> NifResult<Term<'a>> {
-    normal(env, |limits| write_node(env, limits, doc, json))
+    normal(env, |limits| write_node(env, limits, doc, json, None))
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
 fn to_json_dirty<'a>(env: Env<'a>, doc: Term<'a>, json: Term<'a>) -> NifResult<Term<'a>> {
-    dirty(|limits| write_node(env, limits, doc, json))
+    dirty(|limits| write_node(env, limits, doc, json, None))
 }
 
 #[rustler::nif]
@@ -346,7 +333,7 @@ fn to_json_from<'a>(
     json: Term<'a>,
     base: Term<'a>,
 ) -> NifResult<Term<'a>> {
-    normal(env, |limits| write_node_from(env, limits, doc, json, base))
+    normal(env, |limits| write_node(env, limits, doc, json, Some(base)))
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
@@ -356,7 +343,7 @@ fn to_json_from_dirty<'a>(
     json: Term<'a>,
     base: Term<'a>,
 ) -> NifResult<Term<'a>> {
-    dirty(|limits| write_node_from(env, limits, doc, json, base))
+    dirty(|limits| write_node(env, limits, doc, json, Some(base)))
 }
 
 #[rustler::nif]

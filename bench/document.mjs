@@ -2,20 +2,74 @@
 // paragraph with bold text and a link, and ten steps that each type one character near the
 // middle, as an editor sends them.
 //
-// Then writes two more, each `{schema, doc, steps}` with the schema's spec as JSON, as
-// `new Schema(spec)` and `Tarnish.Schema.new` read it:
+// Then writes two more, each with the schema's spec as JSON, as `new Schema(spec)` and
+// `Tarnish.Schema.new` read it:
 // - target/bench/nested.json: most of the content in one long bullet list and one table, in
 //   prosemirror-schema-basic with prosemirror-schema-list and prosemirror-tables' nodes;
 // - target/bench/cards.json: a card stack, 50 cards that carry ids, comment ids and link
 //   metadata, in a schema of the same node types as a card stack's.
 // Their steps are what ProseMirror's Transform makes for an editor's edits near the middle.
-import { mkdirSync, writeFileSync } from "node:fs"
+//
+// TARNISH_BENCH_DOC may name a card stack's fixture, `{doc, changes: [{steps}]}`, with each
+// change's steps applying to `doc`; its schema's spec is the fixture's `schema`, or the JSON file
+// TARNISH_BENCH_SCHEMA names. Its changes are replayed, and it is written as
+// target/bench/given.json, which target/ keeps out of the repo.
+//
+// Each file is `{schema?, doc, changes: [{steps}], scenarios}`, document.json's without a schema,
+// since each bench reads it in a basic schema of its own. Each change applies to `doc`. The
+// scenarios are the messages the benches' "typed" and "chained" rows apply, each a list of steps,
+// in the order they're applied:
+// - typed_once_100: 100 messages typing "x" in the first place one applies;
+// - typed_10, typed_100: 10 or 100 messages typing "x", spread evenly, the last place first so
+//   that each place is where it was read;
+// - chained_10, chained_100: the 100 messages after typed_100, each typing in the next of 10 or
+//   100 places spread evenly, where that place is by then.
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { Node, Schema } from "prosemirror-model"
 import { schema as basic } from "prosemirror-schema-basic"
 import { addListNodes } from "prosemirror-schema-list"
 import { tableNodes } from "prosemirror-tables"
-import { Transform } from "prosemirror-transform"
+import { Step, Transform } from "prosemirror-transform"
+import { fromData, specOf } from "./schema.mjs"
+
+// The scenarios' messages on `doc`, a node of `schema`.
+const scenarios = (schema, node) => {
+  // A message that types "x" at a position, and the positions where one applies, in order.
+  const typing = (at) => [{ stepType: "replace", from: at, to: at, slice: { content: [{ type: "text", text: "x" }] } }]
+  const places = []
+  for (let at = 0; at <= node.content.size; at++) {
+    if (!Step.fromJSON(schema, typing(at)[0]).apply(node).failed) places.push(at)
+  }
+  // `count` messages, each typing "x" in the first place or, spread evenly, in a place of its own,
+  // the last first.
+  const typed = (count, spread) => {
+    const messages = []
+    for (let index = count - 1; index >= 0; index--) {
+      messages.push(typing(spread ? places[Math.floor((index * places.length) / count)] : places[0]))
+    }
+    return messages
+  }
+  // The 100 messages after typed(100, true), each typing in the next of `count` places spread
+  // evenly, where that place is by then.
+  const chained = (count) => {
+    const typedAt = Array.from({ length: 100 }, (_, index) => places[Math.floor((index * places.length) / 100)])
+    const chain = []
+    for (let index = 0; index < 100; index++) {
+      const place = places[Math.floor((Math.floor((index * count) / 100) * places.length) / count)]
+      chain.push(typing(place + typedAt.filter((at) => at < place).length))
+      typedAt.push(place)
+    }
+    return chain
+  }
+  return {
+    typed_once_100: typed(100, false),
+    typed_10: typed(10, true),
+    typed_100: typed(100, true),
+    chained_10: chained(10),
+    chained_100: chained(100),
+  }
+}
 
 const paragraph = (index) => ({
   type: "paragraph",
@@ -40,14 +94,11 @@ const steps = Array.from({ length: 10 }, (_, index) => ({
 }))
 const out = fileURLToPath(new URL("../target/bench/", import.meta.url))
 mkdirSync(out, { recursive: true })
-writeFileSync(`${out}document.json`, JSON.stringify({ doc, steps }))
-
-// A schema's spec as JSON, which drops its functions: toDOM, getAttrs and the like.
-const specOf = (schema) => ({
-  topNode: schema.topNodeType.name,
-  nodes: schema.spec.nodes.toObject(),
-  marks: schema.spec.marks.toObject(),
-})
+const scenariosOf = (schema, json) => scenarios(schema, Node.fromJSON(schema, json))
+writeFileSync(
+  `${out}document.json`,
+  JSON.stringify({ doc, changes: [{ steps }], scenarios: scenariosOf(basic, doc) }),
+)
 // Where the text of the `index`th node of `type` starts, in document order.
 const textStart = (doc, type, index) => {
   let seen = 0
@@ -67,11 +118,12 @@ const write = (name, schema, json, edit) => {
   edit(tr)
   const steps = tr.steps.map((step) => step.toJSON())
   const spec = specOf(schema)
-  const again = new Schema(JSON.parse(JSON.stringify(spec)))
+  const again = fromData(JSON.parse(JSON.stringify(spec)))
   const replayed = new Transform(Node.fromJSON(again, json))
   for (const step of tr.steps) replayed.step(step.constructor.fromJSON(again, step.toJSON()))
   if (!replayed.doc.eq(Node.fromJSON(again, tr.doc.toJSON()))) throw new Error(`${name}: steps don't replay`)
-  writeFileSync(`${out}${name}.json`, JSON.stringify({ schema: spec, doc: json, steps }))
+  const file = { schema: spec, doc: json, changes: [{ steps }], scenarios: scenariosOf(again, json) }
+  writeFileSync(`${out}${name}.json`, JSON.stringify(file))
 }
 
 // Nested: a heading, a 120-item bullet list whose every fifth item holds a list of two, and a
@@ -250,3 +302,20 @@ write("cards", cardsSchema, cards, (tr) => {
   tr.setNodeAttribute(cardAt + 1, "color", "blue")
   tr.setNodeAttribute(cardAt, "isPublic", true)
 })
+
+// The card stack TARNISH_BENCH_DOC names, whose changes must each apply to its document.
+if (process.env.TARNISH_BENCH_DOC) {
+  const path = process.env.TARNISH_BENCH_DOC
+  const file = JSON.parse(readFileSync(path, "utf8"))
+  const given = process.env.TARNISH_BENCH_SCHEMA
+  const spec = file.schema ?? (given && existsSync(given) ? JSON.parse(readFileSync(given, "utf8")) : undefined)
+  if (!spec) throw new Error(`${path} holds no schema, and TARNISH_BENCH_SCHEMA names no spec`)
+  const schema = fromData(spec)
+  const node = Node.fromJSON(schema, file.doc)
+  for (const { steps } of file.changes) {
+    const tr = new Transform(node)
+    for (const json of steps) tr.step(Step.fromJSON(schema, json))
+  }
+  const written = { schema: spec, doc: file.doc, changes: file.changes, scenarios: scenarios(schema, node) }
+  writeFileSync(`${out}given.json`, JSON.stringify(written))
+}

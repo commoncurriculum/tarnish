@@ -1,5 +1,6 @@
 defmodule Tarnish.DeepTest do
   use ExUnit.Case, async: true
+  import Tarnish.TestDocs
 
   # Far deeper than a dirty scheduler's stack, or a thread of the NIF's batch pool, could recurse
   # through. Each deep part starts near the top of what holds it, where an unguarded level would
@@ -31,15 +32,6 @@ defmodule Tarnish.DeepTest do
     Enum.reduce(1..@depth, nil, fn level, inner ->
       if rem(level, 2) == 0, do: %{"a" => inner}, else: [inner]
     end)
-  end
-
-  defp doc(schema, json) do
-    {:ok, doc} = Tarnish.Node.from_json(schema, json)
-    doc
-  end
-
-  defp replace(from, to, content) do
-    %{"stepType" => "replace", "from" => from, "to" => to, "slice" => %{"content" => content}}
   end
 
   test "a document changed deep down has its JSON made anew down to the change", %{

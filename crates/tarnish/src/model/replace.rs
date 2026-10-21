@@ -1,6 +1,6 @@
 //! Slices, and replacing a range of a document with one.
 
-use super::fragment::Fragment;
+use super::fragment::{Content, Fragment};
 use super::node::Node;
 use super::resolved_pos::ResolvedPos;
 use super::schema::Schema;
@@ -68,13 +68,15 @@ impl<'a> Slice<'a> {
             self.open_start + 1,
             self.open_end + 1,
             None,
-        )?;
+        )?
+        .map(Content::into_fragment);
         Ok(content.map(|content| Slice::new(content, self.open_start, self.open_end)))
     }
 
     /// The slice without its content from `from` to `to`, which must be flat.
     pub fn remove_between(&self, from: usize, to: usize) -> Result<Slice<'a>> {
-        let content = remove_range(&self.content, from + self.open_start, to + self.open_start)?;
+        let content = remove_range(&self.content, from + self.open_start, to + self.open_start)?
+            .into_fragment();
         Ok(Slice::new(content, self.open_start, self.open_end))
     }
 
@@ -165,7 +167,7 @@ fn open_depth<'a>(
     depth
 }
 
-fn remove_range<'a>(content: &Fragment<'a>, from: usize, to: usize) -> Result<Fragment<'a>> {
+fn remove_range<'a>(content: &Fragment<'a>, from: usize, to: usize) -> Result<Content<'a>> {
     let (index, offset) = content.find_index(from)?;
     let child = content.maybe_child(index);
     let (index_to, offset_to) = content.find_index(to)?;
@@ -173,14 +175,14 @@ fn remove_range<'a>(content: &Fragment<'a>, from: usize, to: usize) -> Result<Fr
         if offset_to != to && !content.child(index_to)?.is_text() {
             return Err(Error::Range("Removing non-flat range".into()));
         }
-        return Ok(content.replace_range(from, to, &Fragment::empty()));
+        return Ok(content.replace_range_content(from, to, &Fragment::empty()));
     }
     if index != index_to {
         return Err(Error::Range("Removing non-flat range".into()));
     }
     let child = child.expect("a child around the position");
     let inner = stack::grow(|| remove_range(child.content(), from - offset - 1, to - offset - 1))?;
-    Ok(content.replace_child(index, child.copy(inner)))
+    Ok(content.replace_child_content(index, inner.copy_into(&child)))
 }
 
 fn insert_into<'a>(
@@ -190,7 +192,7 @@ fn insert_into<'a>(
     open_start: usize,
     open_end: usize,
     parent: Option<&Node<'a>>,
-) -> Result<Option<Fragment<'a>>> {
+) -> Result<Option<Content<'a>>> {
     let (index, offset) = content.find_index(dist)?;
     let child = content.maybe_child(index);
     if offset == dist || child.as_ref().is_some_and(Node::is_text) {
@@ -201,7 +203,7 @@ fn insert_into<'a>(
         {
             return Ok(None);
         }
-        return Ok(Some(content.replace_range(dist, dist, insert)));
+        return Ok(Some(content.replace_range_content(dist, dist, insert)));
     }
     let child = child.expect("a child around the position");
     let inner = stack::grow(|| {
@@ -222,7 +224,7 @@ fn insert_into<'a>(
             Some(&child),
         )
     })?;
-    Ok(inner.map(|inner| content.replace_child(index, child.copy(inner))))
+    Ok(inner.map(|inner| content.replace_child_content(index, inner.copy_into(&child))))
 }
 
 /// What replacing a range makes of the top node.
@@ -267,7 +269,10 @@ fn replace_outer<'a>(
     let node = from.node(depth);
     if index == to.index(depth) && depth < from.depth() - slice.open_start {
         let inner = stack::grow(|| replace_outer(from, to, slice, depth + 1))?;
-        Ok(node.content().copy_replaced_child(node, index, inner))
+        Ok(node
+            .content()
+            .replace_child_content(index, inner)
+            .copy_into(node))
     } else if slice.content.size() == 0 {
         close(node, replace_two_way(from, to, depth)?)
     } else if slice.open_start == 0
@@ -276,12 +281,10 @@ fn replace_outer<'a>(
         && to.depth() == depth
     {
         let parent = from.parent();
-        let replaced = parent.content().copy_replaced(
-            parent,
-            from.parent_offset(),
-            to.parent_offset(),
-            &slice.content,
-        );
+        let replaced = parent
+            .content()
+            .replace_range_content(from.parent_offset(), to.parent_offset(), &slice.content)
+            .copy_into(parent);
         check_content(parent, replaced.content())?;
         Ok(replaced)
     } else {
@@ -348,7 +351,7 @@ fn add_range<'a>(
 /// The node with these children, which [`Fragment::from_array`] joins, when they're valid
 /// content for it.
 fn close<'a>(node: &Node<'a>, content: Vec<Node<'a>>) -> Result<Node<'a>> {
-    let closed = Fragment::copy_of_array(node, content);
+    let closed = Fragment::array_content(content).copy_into(node);
     check_content(node, closed.content())?;
     Ok(closed)
 }
@@ -428,7 +431,7 @@ fn prepare_slice_for_replace<'a>(
     let extra = along.depth() - slice.open_start;
     let mut node = along.node(extra).copy(slice.content.clone());
     for depth in (0..extra).rev() {
-        node = Fragment::copy_of_node(along.node(depth), &node);
+        node = Fragment::node_content(&node).copy_into(along.node(depth));
     }
     let start = node.resolve(slice.open_start + extra)?;
     let size = node.content().size();

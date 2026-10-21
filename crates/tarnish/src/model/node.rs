@@ -478,7 +478,7 @@ impl<'a> Node<'a> {
         if from == 0 && to == self.content.size() {
             return self.clone();
         }
-        self.content.copy_cut(self, from, to)
+        self.content.cut_content(from, to).copy_into(self)
     }
 
     /// A text node with only its text from `from` to `to`, which mustn't be empty; `None` for
@@ -556,7 +556,8 @@ impl<'a> Node<'a> {
         }
         let node = Node::at(chunk, id);
         node.content
-            .copy_replaced_child(&node, index as usize, child)
+            .replace_child_content(index as usize, child)
+            .copy_into(&node)
     }
 
     /// The node directly after `pos`.

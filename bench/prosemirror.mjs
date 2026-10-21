@@ -1,11 +1,8 @@
 // Times real ProseMirror on the documents bench/document.mjs writes to target/bench/, once the
 // JIT has warmed up: each row of the README's table, and fromJSON, the steps and toJSON together,
 // the work tarnish's apply_steps does. document.json is read in prosemirror-schema-basic, as the
-// README's table has it, and the others in the schema each file holds.
-//
-// TARNISH_BENCH_DOC may name a card stack's fixture, `{doc, changes: [{steps}]}`, with each
-// change's steps applying to `doc`; its schema's spec is the fixture's `schema`, or the JSON file
-// TARNISH_BENCH_SCHEMA names.
+// README's table has it, and the others in the schema each file holds: given.json too, the card
+// stack TARNISH_BENCH_DOC names, when bench/document.mjs has written it.
 //
 // Every case of every document runs in each of TARNISH_BENCH_ROUNDS rounds (7 unless given), in
 // turn, so that the machine's drift lands on all of them alike. A round times a case's calls for
@@ -20,69 +17,43 @@
 // places, and time one message more, typing in the first place. The "chained" rows are the 100
 // messages a socket takes after those 100: each types "x" in one of 10 or 100 places spread evenly,
 // in turn, into the document the message before it made, and each call takes the next message.
+// Their messages are the scenarios bench/document.mjs writes.
 import { existsSync, readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
-import { Node, Schema } from "prosemirror-model"
+import { Node } from "prosemirror-model"
 import { schema as basic } from "prosemirror-schema-basic"
 import { Step, Transform } from "prosemirror-transform"
+import { fromData } from "./schema.mjs"
 
 const rounds = Number(process.env.TARNISH_BENCH_ROUNDS ?? 7)
 const milliseconds = Number(process.env.TARNISH_BENCH_MS ?? 150)
 const bench = (name) => fileURLToPath(new URL(`../target/bench/${name}`, import.meta.url))
 
-// A spec as data says an attribute's default is undefined with `hasDefault` and no `default`, as
-// tarnish reads it, since JSON has no undefined. ProseMirror reads `default: undefined`.
-const fromData = (spec) => {
-  const types = (types = {}) =>
-    Object.fromEntries(
-      Object.entries(types).map(([name, type]) => [
-        name,
-        type.attrs
-          ? {
-              ...type,
-              attrs: Object.fromEntries(
-                Object.entries(type.attrs).map(([attr, { hasDefault, ...rest }]) => [
-                  attr,
-                  hasDefault && !Object.hasOwn(rest, "default") ? { ...rest, default: undefined } : rest,
-                ]),
-              ),
-            }
-          : type,
-      ]),
-    )
-  return new Schema({ ...spec, nodes: types(spec.nodes), marks: types(spec.marks) })
-}
-
-// Each document: a name, its schema, its JSON, and the step lists that each apply to it.
+// Each document: a name, its schema, its JSON, the step lists that each apply to it, and its
+// scenarios.
 const documents = []
-const load = (name, path, schemaFor) => {
-  const file = JSON.parse(readFileSync(path, "utf8"))
-  const schema = schemaFor(file)
-  if (!schema) return
-  const changes = file.changes ? file.changes.map((change) => change.steps) : [file.steps]
-  documents.push({ name, schema, doc: file.doc, changes })
-}
-load("document.json: 200 paragraphs", bench("document.json"), () => basic)
-for (const [name, about] of [
-  ["nested.json", "a long list and a table"],
-  ["cards.json", "a 50-card stack"],
+for (const [file, name] of [
+  ["document.json", "document.json: 200 paragraphs"],
+  ["nested.json", "nested.json: a long list and a table"],
+  ["cards.json", "cards.json: a 50-card stack"],
+  ["given.json", `TARNISH_BENCH_DOC: ${process.env.TARNISH_BENCH_DOC}`],
 ]) {
-  load(`${name}: ${about}`, bench(name), (file) => fromData(file.schema))
-}
-if (process.env.TARNISH_BENCH_DOC) {
-  const path = process.env.TARNISH_BENCH_DOC
-  load(`TARNISH_BENCH_DOC: ${path}`, path, (file) => {
-    const given = process.env.TARNISH_BENCH_SCHEMA
-    const spec = file.schema ?? (given && existsSync(given) ? JSON.parse(readFileSync(given, "utf8")) : undefined)
-    if (spec) return fromData(spec)
-    console.log(`Skipping ${path}: it holds no schema, and TARNISH_BENCH_SCHEMA names no spec.\n`)
+  const path = bench(file)
+  if (file === "given.json" && !(process.env.TARNISH_BENCH_DOC && existsSync(path))) continue
+  const { schema, doc, changes, scenarios } = JSON.parse(readFileSync(path, "utf8"))
+  documents.push({
+    name,
+    schema: schema ? fromData(schema) : basic,
+    doc,
+    changes: changes.map((change) => change.steps),
+    scenarios,
   })
 }
 
 // What a call returns is kept, so that the JIT can't drop the work.
 let kept
 const cases = []
-for (const { name, schema, doc, changes } of documents) {
+for (const { name, schema, doc, changes, scenarios } of documents) {
   // The document and steps as JSON text, as a server receives them.
   const docText = JSON.stringify(doc)
   const changesText = changes.map((steps) => JSON.stringify(steps))
@@ -116,42 +87,26 @@ for (const { name, schema, doc, changes } of documents) {
     let at = 0
     return () => items[at++ % items.length]
   }
-  // A message that types "x" at a position, and the positions where one applies, in order.
-  const typing = (at) => [{ stepType: "replace", from: at, to: at, slice: { content: [{ type: "text", text: "x" }] } }]
-  const places = []
-  for (let at = 0; at <= node.content.size; at++) {
-    if (!Step.fromJSON(schema, typing(at)[0]).apply(node).failed) places.push(at)
-  }
-  // The kept node after `count` messages, each typing "x" in the first place or, spread evenly,
-  // in a place of its own, the last first so that each place is where it was read.
-  const typed = (count, spread) => {
-    let kept = node
-    for (let index = count - 1; index >= 0; index--) {
-      kept = step(kept, typing(spread ? places[Math.floor((index * places.length) / count)] : places[0]))
-    }
-    return kept
-  }
-  const messageAfter = (kept) => () => step(kept, typing(places[0])).toJSON()
-  const inOnePlace = typed(100, false)
-  const in10Places = typed(10, true)
-  const in100Places = typed(100, true)
-  const typedOnceMore = step(in100Places, typing(places[0]))
-  // The 100 messages after in100Places, each typing in the next of `count` places spread evenly,
-  // where that place is by then, with the document the message before it made.
-  const chained = (count) => {
-    const typedAt = Array.from({ length: 100 }, (_, index) => places[Math.floor((index * places.length) / 100)])
-    const chain = []
-    let before = in100Places
-    for (let index = 0; index < 100; index++) {
-      const place = places[Math.floor((Math.floor((index * count) / 100) * places.length) / count)]
-      const steps = typing(place + typedAt.filter((at) => at < place).length)
-      typedAt.push(place)
+  // The node each message of `messages` makes of the one the message before it made, from
+  // `start`, each with the node it was applied to and its steps.
+  const fold = (start, messages) => {
+    let before = start
+    return messages.map((steps) => {
       const changed = step(before, steps)
-      chain.push({ before, steps, changed })
+      const one = { before, steps, changed }
       before = changed
-    }
-    return cycle(chain)
+      return one
+    })
   }
+  const last = (folded) => folded[folded.length - 1].changed
+  // The first message of typed_once_100 types in the first place.
+  const first = scenarios.typed_once_100[0]
+  const messageAfter = (kept) => () => step(kept, first).toJSON()
+  const inOnePlace = last(fold(node, scenarios.typed_once_100))
+  const in10Places = last(fold(node, scenarios.typed_10))
+  const in100Places = last(fold(node, scenarios.typed_100))
+  const typedOnceMore = step(in100Places, first)
+  const chained = (count) => cycle(fold(in100Places, scenarios[`chained_${count}`]))
   const chainedIn10 = chained(10)
   const chainedIn100 = chained(100)
   const chainedIn100Written = chained(100)

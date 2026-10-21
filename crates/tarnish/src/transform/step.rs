@@ -237,7 +237,7 @@ fn map_children<'a>(
             let mut mapped = child.clone();
             if child.content().size() > 0 {
                 let children = stack::grow(|| map_children(child.content(), f, &child));
-                mapped = Fragment::copy_of_array(&child, children);
+                mapped = Fragment::array_content(children).copy_into(&child);
             }
             if mapped.is_inline() {
                 mapped = f(&mapped, parent);

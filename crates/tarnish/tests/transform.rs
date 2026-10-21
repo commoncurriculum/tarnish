@@ -2,6 +2,7 @@
 //! `npm run test:js`, with what `harness/record-model.mjs` records of each: the steps undoing it,
 //! and where every position maps through it.
 
+use tarnish::chunk::Chunk;
 use tarnish::json::{Value, json};
 use tarnish::{Node, Schema, api};
 use tarnish_fixtures::{assert_same, expect, mapped, read, records, schemas};
@@ -116,6 +117,24 @@ fn paragraph(content: Value) -> Value {
     json!({ "type": "paragraph", "content": content })
 }
 
+/// `steps` applied to `doc` one call a step.
+fn apply_one_at_a_time<'a>(doc: &Node<'a>, steps: &[Value]) -> Node<'a> {
+    let mut changed = doc.clone();
+    for step in steps {
+        changed = api::apply_steps(&changed, &json!([step])).expect("a step");
+    }
+    changed
+}
+
+/// The number of chunks `changed` holds that `doc` doesn't: the chunks its change wrote.
+fn written(changed: &Node, doc: &Node) -> usize {
+    let held = Chunk::closure(doc.chunk());
+    Chunk::closure(changed.chunk())
+        .iter()
+        .filter(|chunk| !held.iter().any(|old| old.ptr_eq(chunk)))
+        .count()
+}
+
 /// Each kind of step, deep in a document: a step writes the node it changes with its list of
 /// children, and each ancestor the same way, which gives the document ProseMirror's step gives,
 /// read back the same from its chunks. Two steps in one call change the second time the nodes
@@ -199,17 +218,23 @@ fn each_kind_of_step_deep_in_a_document_gives_the_document_it_should() {
         ),
     ];
     let kept = vec![doc.chunk().clone()];
-    for (steps, content) in cases {
+    // An insert writes the paragraph, each blockquote and the document, a chunk each.
+    let one_insert = depth + 2;
+    for (index, (steps, content)) in cases.into_iter().enumerate() {
         let changed = api::apply_steps(&doc, &steps).expect("the steps");
         let expected = quoted(depth, content);
         assert_same(&expected, &changed.to_json());
         changed.check().expect("a valid document");
         assert_same(&expected, &reloaded(schema, &changed, &kept).to_json());
-        let mut one_at_a_time = doc.clone();
-        for step in steps.as_array().expect("steps") {
-            one_at_a_time = api::apply_steps(&one_at_a_time, &json!([step])).expect("a step");
-        }
+        let one_at_a_time = apply_one_at_a_time(&doc, steps.as_array().expect("steps"));
         assert!(one_at_a_time == changed, "{}", steps);
+        match index {
+            0 => assert_eq!(written(&changed, &doc), one_insert, "{steps}"),
+            // The second insert writes the paragraph and the blockquotes anew, and changes the
+            // document's list, in the chunk the first wrote it in, in place.
+            1 => assert_eq!(written(&changed, &doc), 2 * one_insert - 1, "{steps}"),
+            _ => {}
+        }
     }
     assert_same(&start, &doc.to_json());
 }
@@ -273,11 +298,13 @@ fn many_steps_in_one_call_give_the_document_one_call_a_step_gives() {
         let changed = api::apply_steps(&doc, &Value::Array(steps.clone())).expect("the steps");
         assert_same(&quoted(depth, paragraphs("x")), &changed.to_json());
         changed.check().expect("a valid document");
-        let mut one_at_a_time = doc.clone();
-        for step in &steps {
-            one_at_a_time = api::apply_steps(&one_at_a_time, &json!([step])).expect("a step");
-        }
+        let one_at_a_time = apply_one_at_a_time(&doc, &steps);
         assert!(one_at_a_time == changed);
+        // Fewer chunks than a step each writing its paragraph and every ancestor anew.
+        assert!(
+            written(&changed, &doc) < count * (depth + 2),
+            "at depth {depth}"
+        );
         assert_same(&quoted(depth, paragraphs("")), &doc.to_json());
         let kept = vec![doc.chunk().clone()];
         assert_same(
@@ -309,13 +336,12 @@ fn a_chunk_read_from_json_changes_in_place_only_when_nothing_else_holds_it() {
     // The typed paragraph refers to the text it kept, so its chunk imports the read one.
     let changed = held.into_replaced(2, 2, &insert).expect("a replace");
     assert_same(&typed, &changed.to_json());
-    let mut imported = vec![changed.chunk().clone()];
-    let mut found = false;
-    while let Some(chunk) = imported.pop() {
-        found |= chunk.bytes() == bytes.as_slice();
-        imported.extend(chunk.imports().iter().cloned());
-    }
-    assert!(found, "the read chunk among the imports");
+    assert!(
+        Chunk::closure(changed.chunk())
+            .iter()
+            .any(|chunk| chunk.bytes() == bytes.as_slice()),
+        "the read chunk among the imports"
+    );
     // A paragraph's content replaced whole by the slice's shares nothing with the read chunk,
     // which nothing else holds, so its list changes in place.
     let doc = Node::from_json(schema, &start).expect("a document");

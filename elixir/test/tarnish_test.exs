@@ -1,5 +1,6 @@
 defmodule TarnishTest do
   use ExUnit.Case, async: true
+  import Tarnish.TestDocs
 
   @native Application.compile_env(:tarnish, :native, Tarnish.Native)
 
@@ -88,49 +89,48 @@ defmodule TarnishTest do
     end
   end
 
+  defp apply_one_at_a_time(doc, steps) do
+    Enum.reduce_while(steps, {:ok, doc}, fn step, {:ok, doc} ->
+      case Tarnish.Step.apply(doc, [step]) do
+        {:ok, changed} -> {:cont, {:ok, changed}}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp assert_same_as_one_at_a_time(doc, steps) do
+    case {Tarnish.Step.apply(doc, steps), apply_one_at_a_time(doc, steps)} do
+      {{:ok, whole}, {:ok, stepped}} ->
+        assert Tarnish.Node.to_json(whole) === Tarnish.Node.to_json(stepped)
+
+      {whole, stepped} ->
+        assert whole === stepped
+    end
+  end
+
   # A message's steps after its first change, in place, the nodes the steps before them wrote,
   # which one step a message never does: the document must be the one the steps give one
-  # message at a time. The card stack TARNISH_BENCH_DOC names, read here and never kept in the
-  # repo, has a change of two steps.
-  test "a message of several steps gives what one message a step gives", %{schemas: schemas} do
-    one_at_a_time = fn doc, steps ->
-      Enum.reduce_while(steps, {:ok, doc}, fn step, {:ok, doc} ->
-        case Tarnish.Step.apply(doc, [step]) do
-          {:ok, changed} -> {:cont, {:ok, changed}}
-          error -> {:halt, error}
-        end
-      end)
-    end
-
-    same = fn doc, steps ->
-      case {Tarnish.Step.apply(doc, steps), one_at_a_time.(doc, steps)} do
-        {{:ok, whole}, {:ok, stepped}} ->
-          assert Tarnish.Node.to_json(whole) === Tarnish.Node.to_json(stepped)
-
-        {whole, stepped} ->
-          assert whole === stepped
-      end
-    end
-
+  # message at a time.
+  test "fixture messages of several steps give what one message a step gives", %{
+    schemas: schemas
+  } do
     %{"tests" => tests} = @fixtures |> File.read!() |> Jason.decode!()
 
     for %{"schema" => schema, "start" => start, "steps" => [_, _ | _] = steps} <- tests do
       {:ok, doc} = Tarnish.Node.from_json(Enum.at(schemas, schema), start)
-      same.(doc, steps)
+      assert_same_as_one_at_a_time(doc, steps)
     end
+  end
 
-    with path when is_binary(path) <- System.get_env("TARNISH_BENCH_DOC"),
-         true <- File.exists?(path) do
-      file = Jason.decode!(File.read!(path))
-      ordered = &(&1 |> File.read!() |> Jason.decode!(objects: :ordered_objects))
-      spec = ordered.(path)["schema"] || ordered.(System.fetch_env!("TARNISH_BENCH_SCHEMA"))
-      {:ok, schema} = Tarnish.Schema.new(spec)
-      {:ok, doc} = Tarnish.Node.from_json(schema, file["doc"])
-      steps = Enum.flat_map(file["changes"], & &1["steps"])
-      assert Enum.any?(file["changes"], &match?([_, _ | _], &1["steps"]))
-      for %{"steps" => steps} <- file["changes"], do: same.(doc, steps)
+  # The card stack TARNISH_BENCH_DOC names has a change of two steps.
+  @tag :bench_doc
+  test "TARNISH_BENCH_DOC messages of several steps give what one message a step gives" do
+    with %{doc: doc, changes: changes} <- bench_doc() do
+      steps = Enum.flat_map(changes, & &1["steps"])
+      assert Enum.any?(changes, &match?([_, _ | _], &1["steps"]))
+      for %{"steps" => steps} <- changes, do: assert_same_as_one_at_a_time(doc, steps)
       # Every change's steps as one message, failing where a change applies only to the doc.
-      same.(doc, steps)
+      assert_same_as_one_at_a_time(doc, steps)
     end
   end
 
@@ -219,11 +219,6 @@ defmodule TarnishTest do
     end
   end
 
-  defp doc(schema, json) do
-    {:ok, doc} = Tarnish.Node.from_json(schema, json)
-    doc
-  end
-
   describe "schemas" do
     test "take their types as {name, spec} pairs, in order", _ do
       spec = %{nodes: [doc: %{content: "text*"}, text: %{}], marks: [strong: %{}, em: %{}]}
@@ -259,15 +254,6 @@ defmodule TarnishTest do
     json = %{"type" => "doc", "content" => [%{"type" => "paragraph", "content" => [text]}]}
     assert_raise ArgumentError, fn -> Tarnish.Node.from_json(schema, json) end
   end
-
-  defp text(text, marks \\ []) do
-    case marks do
-      [] -> %{"type" => "text", "text" => text}
-      marks -> %{"type" => "text", "text" => text, "marks" => marks}
-    end
-  end
-
-  defp paragraph(content), do: %{"type" => "paragraph", "content" => content}
 
   defp paragraphs(count, text),
     do: %{"type" => "doc", "content" => List.duplicate(paragraph([text(text)]), count)}
@@ -397,17 +383,6 @@ defmodule TarnishTest do
         refute :erts_debug.same(changed_two, second)
       end
     end
-
-    defp item(content), do: %{"type" => "list_item", "content" => content}
-    defp list(items), do: %{"type" => "bullet_list", "content" => items}
-
-    defp insert(at, text),
-      do: %{
-        "stepType" => "replace",
-        "from" => at,
-        "to" => at,
-        "slice" => %{"content" => [text(text)]}
-      }
 
     test "shares the map of every node steps leave, at every depth", %{schema: schema} do
       item = &item([paragraph([text(&1)])])

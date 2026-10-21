@@ -1,5 +1,6 @@
 defmodule Tarnish.KeptTest do
   use ExUnit.Case, async: true
+  import Tarnish.TestDocs
 
   # A node written with Node.to_json_kept keeps the JSON written, which the JSON of the nodes
   # changes make of it then shares: what it gives must be what Node.to_json gives a node that
@@ -13,8 +14,6 @@ defmodule Tarnish.KeptTest do
   # The documents `npm run bench` writes, when it has.
   @bench Path.expand("../../target/bench", __DIR__)
 
-  defp ordered(path), do: path |> File.read!() |> Jason.decode!(objects: :ordered_objects)
-
   setup_all do
     # prosemirror-schema-basic with prosemirror-schema-list.
     {:ok, schema} =
@@ -22,29 +21,6 @@ defmodule Tarnish.KeptTest do
 
     %{schema: schema}
   end
-
-  defp doc(schema, json) do
-    {:ok, doc} = Tarnish.Node.from_json(schema, json)
-    doc
-  end
-
-  defp text(text, marks \\ []) do
-    case marks do
-      [] -> %{"type" => "text", "text" => text}
-      marks -> %{"type" => "text", "text" => text, "marks" => marks}
-    end
-  end
-
-  defp paragraph(content), do: %{"type" => "paragraph", "content" => content}
-  defp item(content), do: %{"type" => "list_item", "content" => content}
-
-  defp insert(at, text),
-    do: %{
-      "stepType" => "replace",
-      "from" => at,
-      "to" => at,
-      "slice" => %{"content" => [text(text)]}
-    }
 
   # What the node's JSON must be: what a node with no JSON kept but the one read writes.
   defp fresh(node), do: Tarnish.Node.to_json(Map.put(node, :base, nil))
@@ -116,19 +92,13 @@ defmodule Tarnish.KeptTest do
     # each apply to the document as read, so each is one message from the kept node, and one
     # more from where a chain of messages left it, where those that fail must fail as they do on
     # a node that keeps no JSON.
+    @tag :bench_doc
     test "is what Node.to_json gives on TARNISH_BENCH_DOC's card stack" do
-      with path when is_binary(path) <- System.get_env("TARNISH_BENCH_DOC"),
-           true <- File.exists?(path) do
-        file = Jason.decode!(File.read!(path))
-
-        schema =
-          schema(ordered(path)["schema"] || ordered(System.fetch_env!("TARNISH_BENCH_SCHEMA")))
-
-        node = doc(schema, file["doc"])
+      with %{doc: node, changes: changes} <- bench_doc() do
         {_, read} = kept(node)
         chained = chain(node)
 
-        for %{"steps" => steps} <- file["changes"], from <- [read, chained] do
+        for %{"steps" => steps} <- changes, from <- [read, chained] do
           case Tarnish.Step.apply(from, steps) do
             {:ok, changed} -> kept(changed)
             error -> assert error === Tarnish.Step.apply(Map.put(from, :base, nil), steps)
@@ -310,11 +280,6 @@ defmodule Tarnish.KeptTest do
   # The schema a bench document holds.
   defp own_schema(path), do: path |> ordered() |> Access.get("schema") |> schema()
 
-  defp schema(spec) do
-    {:ok, schema} = Tarnish.Schema.new(spec)
-    schema
-  end
-
   describe "a node's JSON kept for another" do
     setup %{schema: schema} do
       content = for text <- ~w(one two three), do: paragraph([text(text)])
@@ -392,11 +357,22 @@ defmodule Tarnish.KeptTest do
     assert kept(again) |> elem(0) === expected
   end
 
-  test "a kept node holds no more than its JSON read and its JSON written", %{schema: schema} do
+  # The heap's size counts a chunk binary as its header only: the chunks of the ref the JSON was
+  # written for are bounded apart.
+  test "a kept node's heap holds no more than its JSON read and its JSON written", %{
+    schema: schema
+  } do
     content = for index <- 1..50, do: paragraph([text("paragraph #{index}")])
     json = %{"type" => "doc", "content" => content}
     node = json |> then(&doc(schema, &1)) |> chain()
     written = Tarnish.Node.to_json(node)
     assert :erts_debug.size(node) <= :erts_debug.size(json) + :erts_debug.flat_size(written) + 256
+    # The document the JSON was written for shares its oldest chunk, the biggest by far.
+    bytes = fn {_schema, chunks} -> chunks |> Enum.map(&byte_size/1) |> Enum.sum() end
+
+    for at <- [3, 40, 200] do
+      {:ok, changed} = Tarnish.Step.apply(node, [insert(at, "y")])
+      assert bytes.(elem(changed.base, 0)) <= 2 * bytes.(changed.ref)
+    end
   end
 end

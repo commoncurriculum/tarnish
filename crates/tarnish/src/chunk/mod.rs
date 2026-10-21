@@ -423,17 +423,18 @@ impl<'a> Chunk<'a> {
         })
     }
 
-    /// A chunk a builder packed, with where it put each section and how many of each there are.
+    /// A chunk a builder packed, with where it put each section and how many of each there are,
+    /// and its strings and text sections as it wrote them, which are UTF-8 already.
     pub(crate) fn from_parts(
         bytes: Vec<u8>,
         schema: Schema,
         imports: Vec<Arc<Chunk<'a>>>,
-        starts: [u32; SECTIONS],
-        counts: [u32; SECTIONS],
+        (starts, counts): ([u32; SECTIONS], [u32; SECTIONS]),
+        strings: String,
+        text: String,
     ) -> Chunk<'a> {
         let bytes = Cow::Owned(bytes);
-        let (strings, text) =
-            utf8_sections(&bytes, (&starts, &counts)).unwrap_or_else(|| corrupt());
+        let (strings, text) = (Cow::Owned(strings), Cow::Owned(text));
         Chunk {
             id: double_word(&bytes, 16),
             bytes,
@@ -695,59 +696,54 @@ impl<'a> Chunk<'a> {
             return false;
         };
         let record = chunk.record(id);
-        if record.a & EXTERN == 0 {
-            return chunk.replace_own_kid(id, record, position, holder, index, size);
+        if position >= record.b {
+            return false;
         }
-        let (slot, start) = chunk.external(record.a);
-        let at = start.checked_add(position).unwrap_or_else(|| corrupt());
-        let Some(list) = (chunk.imports.get_mut(slot as usize))
-            .and_then(Arc::get_mut)
-            .filter(|list| list.is_owned())
-        else {
+        let new_size = if record.a & EXTERN == 0 {
+            // A list in this chunk only for its last node, which no node in it lists, and whose
+            // list no other node in it lists either, each list being written for the node
+            // after it.
+            if id.checked_add(1) != Some(chunk.counts[NODES]) {
+                return false;
+            }
+            let at = record.a.checked_add(position).unwrap_or_else(|| corrupt());
+            chunk.put_kid(at, record.size, holder, index, size)
+        } else {
+            let (slot, start) = chunk.external(record.a);
+            let at = start.checked_add(position).unwrap_or_else(|| corrupt());
+            let Some(list) = (chunk.imports.get_mut(slot as usize))
+                .and_then(Arc::get_mut)
+                .filter(|list| list.is_owned())
+            else {
+                return false;
+            };
+            list.put_kid(at, record.size, holder, index, size)
+        };
+        let Some(content) = new_size else {
             return false;
         };
-        let content = u64::from(record.size) - u64::from(list.kid(at).size) + u64::from(size);
-        let Ok(content) = u32::try_from(content) else {
-            return false;
-        };
-        let Some(slot) = list.import_in_place(holder) else {
-            return false;
-        };
-        let kid = list.at(KIDS, at);
-        list.write_words(kid, &[slot, index, size]);
         let node = chunk.at(NODES, id);
         chunk.write_words(node + 20, &[content]);
         true
     }
 
-    /// [`replace_kid_in_place`](Self::replace_kid_in_place) of a node whose list is in this
-    /// chunk: only for the chunk's last node, which no node in it lists, and whose list no
-    /// other node in it lists either, each list being written for the node after it.
-    fn replace_own_kid(
+    /// Puts node `index` of `holder`, `size` positions long, as kid `at` of this chunk, which
+    /// must own its bytes, importing `holder`: the size of content `content_size` long with the
+    /// kid changed, or `None`, having changed nothing, where that or the import doesn't fit.
+    fn put_kid(
         &mut self,
-        id: u32,
-        record: Record,
-        position: u32,
+        at: u32,
+        content_size: u32,
         holder: &Arc<Chunk<'a>>,
         index: u32,
         size: u32,
-    ) -> bool {
-        if id.checked_add(1) != Some(self.counts[NODES]) || position >= record.b {
-            return false;
-        }
-        let at = record.a.checked_add(position).unwrap_or_else(|| corrupt());
-        let content = u64::from(record.size) - u64::from(self.kid(at).size) + u64::from(size);
-        let Ok(content) = u32::try_from(content) else {
-            return false;
-        };
-        let Some(slot) = self.import_in_place(holder) else {
-            return false;
-        };
+    ) -> Option<u32> {
+        let content = u64::from(content_size) - u64::from(self.kid(at).size) + u64::from(size);
+        let content = u32::try_from(content).ok()?;
+        let slot = self.import_in_place(holder)?;
         let kid = self.at(KIDS, at);
         self.write_words(kid, &[slot, index, size]);
-        let node = self.at(NODES, id);
-        self.write_words(node + 20, &[content]);
-        true
+        Some(content)
     }
 
     fn is_owned(&self) -> bool {
@@ -790,6 +786,26 @@ impl<'a> Chunk<'a> {
         self.write_words(24 + IMPORTS * 4, &[slot + 1]);
         self.imports.push(chunk.clone());
         Some(slot)
+    }
+
+    /// The chunks this one imports, and theirs, each once, this one's last.
+    pub fn closure(this: &Arc<Chunk<'a>>) -> Vec<Arc<Chunk<'a>>> {
+        let mut found: Vec<Arc<Chunk<'a>>> = Vec::new();
+        let mut stack = vec![(this.clone(), false)];
+        while let Some((chunk, expanded)) = stack.pop() {
+            if found.iter().any(|seen| Arc::ptr_eq(seen, &chunk)) {
+                continue;
+            }
+            if expanded {
+                found.push(chunk);
+                continue;
+            }
+            stack.push((chunk.clone(), true));
+            for import in chunk.imports.iter().rev() {
+                stack.push((import.clone(), false));
+            }
+        }
+        found
     }
 }
 

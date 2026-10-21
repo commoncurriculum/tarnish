@@ -1,10 +1,7 @@
 # Times Tarnish on the documents `npm run bench` writes to target/bench/: document.json, read in
 # prosemirror-schema-basic with prosemirror-schema-list, and nested.json and cards.json, each in
-# the schema it holds.
-#
-# TARNISH_BENCH_DOC may name a card stack's fixture, `{doc, changes: [{steps}]}`, with each
-# change's steps applying to `doc`; its schema's spec is the fixture's `schema`, or the JSON file
-# TARNISH_BENCH_SCHEMA names.
+# the schema it holds, and given.json too, the card stack TARNISH_BENCH_DOC names, when
+# `npm run bench` has written it with TARNISH_BENCH_DOC set.
 #
 # Each call runs back to back, as a server's would, and the mean is what a call costs: a median
 # hides the collections that free what earlier calls left, and the pages the allocator faults
@@ -27,7 +24,8 @@
 # rows are the 100 messages a socket takes after those 100: each types "x" in one of 10 or 100
 # places spread evenly, in turn, into the node the message before it made, and is written back with
 # Node.to_json_kept, whose node the next message takes, so that what each shares is the map the
-# message before it wrote; each call takes the next message.
+# message before it wrote; each call takes the next message. Their messages are the scenarios
+# bench/document.mjs writes.
 #
 #     MIX_ENV=test mix run bench/apply_steps.exs
 
@@ -42,62 +40,55 @@ schema = fn spec ->
   schema
 end
 
-ordered = &(&1 |> File.read!() |> Jason.decode!(objects: :ordered_objects))
-
-# Each document: a name, its schema, its JSON, and the step lists that each apply to it.
-load = fn name, path, schema_for ->
-  file = path |> File.read!() |> Jason.decode!()
-
-  case schema_for.(path) do
-    nil ->
-      []
-
-    schema ->
-      changes =
-        case file do
-          %{"changes" => changes} -> Enum.map(changes, & &1["steps"])
-          %{"steps" => steps} -> [steps]
-        end
-
-      [%{name: name, schema: schema, json: file["doc"], changes: changes}]
-  end
-end
-
 # prosemirror-schema-basic with prosemirror-schema-list, as prosemirror-transform's tests
 # record it.
-basic = fixtures |> ordered.() |> Access.get("schemas") |> hd() |> schema.()
-own = &(&1 |> ordered.() |> Access.get("schema") |> schema.())
+basic =
+  fixtures
+  |> File.read!()
+  |> Jason.decode!(objects: :ordered_objects)
+  |> Access.get("schemas")
+  |> hd()
+  |> schema.()
 
-given =
-  case System.get_env("TARNISH_BENCH_DOC") do
-    nil ->
-      []
+# A file's JSON as plain maps, but for its schema's spec, whose order matters.
+plain = fn value ->
+  walk = fn walk, value ->
+    case value do
+      %Jason.OrderedObject{values: values} ->
+        Map.new(values, fn {key, value} -> {key, walk.(walk, value)} end)
 
-    path ->
-      load.("TARNISH_BENCH_DOC: #{path}", path, fn path ->
-        spec_path = System.get_env("TARNISH_BENCH_SCHEMA")
+      list when is_list(list) ->
+        Enum.map(list, &walk.(walk, &1))
 
-        cond do
-          spec = path |> ordered.() |> Access.get("schema") ->
-            schema.(spec)
-
-          spec_path && File.exists?(spec_path) ->
-            spec_path |> ordered.() |> schema.()
-
-          true ->
-            IO.puts(
-              "Skipping #{path}: it holds no schema, and TARNISH_BENCH_SCHEMA names no spec.\n"
-            )
-
-            nil
-        end
-      end)
+      value ->
+        value
+    end
   end
 
+  walk.(walk, value)
+end
+
+# Each document: a name, its schema, its JSON, the step lists that each apply to it, and its
+# scenarios.
 documents =
-  load.("document.json: 200 paragraphs", bench.("document.json"), fn _ -> basic end) ++
-    load.("nested.json: a long list and a table", bench.("nested.json"), own) ++
-    load.("cards.json: a 50-card stack", bench.("cards.json"), own) ++ given
+  for {file, name} <- [
+        {"document.json", "document.json: 200 paragraphs"},
+        {"nested.json", "nested.json: a long list and a table"},
+        {"cards.json", "cards.json: a 50-card stack"},
+        {"given.json", "TARNISH_BENCH_DOC: #{System.get_env("TARNISH_BENCH_DOC")}"}
+      ],
+      path = bench.(file),
+      file != "given.json" or (System.get_env("TARNISH_BENCH_DOC") && File.exists?(path)) do
+    file = path |> File.read!() |> Jason.decode!(objects: :ordered_objects)
+
+    %{
+      name: name,
+      schema: if(spec = file["schema"], do: schema.(spec), else: basic),
+      json: plain.(file["doc"]),
+      changes: Enum.map(file["changes"], &plain.(&1["steps"])),
+      scenarios: plain.(file["scenarios"])
+    }
+  end
 
 stat = fn ->
   fields = "/proc/self/stat" |> File.read!() |> String.split()
@@ -124,7 +115,13 @@ run_for = fn call, milliseconds ->
 end
 
 cases =
-  Enum.flat_map(documents, fn %{name: name, schema: schema, json: json, changes: changes} ->
+  Enum.flat_map(documents, fn %{
+                                name: name,
+                                schema: schema,
+                                json: json,
+                                changes: changes,
+                                scenarios: scenarios
+                              } ->
     {:ok, doc} = Tarnish.Node.from_json(schema, json)
 
     # Each change applies to the document as read, and the last one's result is what's written.
@@ -169,62 +166,44 @@ cases =
       end)
       |> cycle.()
 
-    # A message that types "x" at a position, and the positions where one applies, in order:
-    # those between 0 and the document's size, the last position an empty replace applies at.
-    typing = fn at ->
-      [
-        %{
-          "stepType" => "replace",
-          "from" => at,
-          "to" => at,
-          "slice" => %{"content" => [%{"type" => "text", "text" => "x"}]}
-        }
-      ]
-    end
-
-    applies = &match?({:ok, _}, Tarnish.Step.apply(doc, &1))
-    empty = &[%{"stepType" => "replace", "from" => &1, "to" => &1}]
-    size = Enum.find(Stream.iterate(1, &(&1 * 2)), &(not applies.(empty.(&1))))
-    size = Enum.find((size - 1)..div(size, 2)//-1, &applies.(empty.(&1)))
-    places = Enum.filter(0..size, &applies.(typing.(&1)))
-
-    # The kept node after `count` messages, each typing "x" in the first place or, spread evenly,
-    # in a place of its own, the last first so that each place is where it was read.
-    typed = fn count, spread ->
-      at = fn index ->
-        if spread, do: Enum.at(places, div(index * length(places), count)), else: hd(places)
-      end
-
-      Enum.reduce((count - 1)..0//-1, doc, fn index, before ->
-        {:ok, after_typing} = Tarnish.Step.apply(before, typing.(at.(index)))
-        after_typing
+    # The node each message of `messages` makes of the one the message before it made, from
+    # `start`, each with the node it was applied to and its steps.
+    fold = fn start, messages ->
+      messages
+      |> Enum.map_reduce(start, fn steps, before ->
+        {:ok, changed} = Tarnish.Step.apply(before, steps)
+        {{before, steps, changed}, changed}
       end)
+      |> elem(0)
     end
+
+    last = fn folded -> folded |> List.last() |> elem(2) end
+
+    # The first message of typed_once_100 types in the first place.
+    first = hd(scenarios["typed_once_100"])
 
     message_after = fn kept ->
       fn ->
-        {:ok, changed} = Tarnish.Step.apply(kept, typing.(hd(places)))
+        {:ok, changed} = Tarnish.Step.apply(kept, first)
         Tarnish.Node.to_json(changed)
       end
     end
 
-    in_one_place = typed.(100, false)
-    in_10_places = typed.(10, true)
-    in_100_places = typed.(100, true)
-    {:ok, typed_once_more} = Tarnish.Step.apply(in_100_places, typing.(hd(places)))
+    in_one_place = last.(fold.(doc, scenarios["typed_once_100"]))
+    in_10_places = last.(fold.(doc, scenarios["typed_10"]))
+    in_100_places = last.(fold.(doc, scenarios["typed_100"]))
+    {:ok, typed_once_more} = Tarnish.Step.apply(in_100_places, first)
 
-    # The 100 messages after in_100_places, each typing in the next of `count` places spread
-    # evenly, where that place is by then, with the node the message before it made and wrote.
+    # The 100 messages after in_100_places, each with the node the message before it made and
+    # wrote.
     chained = fn count ->
-      typed_at = Enum.map(0..99, &Enum.at(places, div(&1 * length(places), 100)))
       {_, kept} = Tarnish.Node.to_json_kept(in_100_places)
 
-      Enum.map_reduce(0..99, {kept, typed_at}, fn index, {before, typed_at} ->
-        place = Enum.at(places, div(div(index * count, 100) * length(places), count))
-        steps = typing.(place + Enum.count(typed_at, &(&1 < place)))
+      scenarios["chained_#{count}"]
+      |> Enum.map_reduce(kept, fn steps, before ->
         {:ok, changed} = Tarnish.Step.apply(before, steps)
         {_, written} = Tarnish.Node.to_json_kept(changed)
-        {{before, steps, changed}, {written, [place | typed_at]}}
+        {{before, steps, changed}, written}
       end)
       |> elem(0)
       |> cycle.()
