@@ -23,7 +23,11 @@
 # Those rows apply every message to the node as read. A socket's node is what its earlier
 # messages made of it, while what Node.to_json shares is the map it read, so the "typed" rows
 # keep a node that 100 messages each typed "x" into, in one place or in a place of its own, or
-# that 10 did in 10 places, and time one message more, typing in the first place.
+# that 10 did in 10 places, and time one message more, typing in the first place. The "chained"
+# rows are the 100 messages a socket takes after those 100: each types "x" in one of 10 or 100
+# places spread evenly, in turn, into the node the message before it made, and is written back with
+# Node.to_json_kept, whose node the next message takes, so that what each shares is the map the
+# message before it wrote; each call takes the next message.
 #
 #     MIX_ENV=test mix run bench/apply_steps.exs
 
@@ -209,6 +213,35 @@ cases =
     in_100_places = typed.(100, true)
     {:ok, typed_once_more} = Tarnish.Step.apply(in_100_places, typing.(hd(places)))
 
+    # The 100 messages after in_100_places, each typing in the next of `count` places spread
+    # evenly, where that place is by then, with the node the message before it made and wrote.
+    chained = fn count ->
+      typed_at = Enum.map(0..99, &Enum.at(places, div(&1 * length(places), 100)))
+      {_, kept} = Tarnish.Node.to_json_kept(in_100_places)
+
+      Enum.map_reduce(0..99, {kept, typed_at}, fn index, {before, typed_at} ->
+        place = Enum.at(places, div(div(index * count, 100) * length(places), count))
+        steps = typing.(place + Enum.count(typed_at, &(&1 < place)))
+        {:ok, changed} = Tarnish.Step.apply(before, steps)
+        {_, written} = Tarnish.Node.to_json_kept(changed)
+        {{before, steps, changed}, {written, [place | typed_at]}}
+      end)
+      |> elem(0)
+      |> cycle.()
+    end
+
+    chained_in_10 = chained.(10)
+    chained_in_100 = chained.(100)
+    chained_in_100_written = chained.(100)
+
+    chained_message = fn chain ->
+      fn ->
+        {before, steps, _} = chain.()
+        {:ok, changed} = Tarnish.Step.apply(before, steps)
+        Tarnish.Node.to_json_kept(changed)
+      end
+    end
+
     [
       {"Node.from_json", fn -> Tarnish.Node.from_json(schema, json) end},
       {"Jason, then Node.from_json",
@@ -256,7 +289,14 @@ cases =
       {"kept node, typed in 10 places: a message", message_after.(in_10_places)},
       {"kept node, typed in 100 places: a message", message_after.(in_100_places)},
       {"kept node, typed in 100 places: its Node.to_json",
-       fn -> Tarnish.Node.to_json(typed_once_more) end}
+       fn -> Tarnish.Node.to_json(typed_once_more) end},
+      {"kept node, chained in 10 places: a message", chained_message.(chained_in_10)},
+      {"kept node, chained in 100 places: a message", chained_message.(chained_in_100)},
+      {"kept node, chained in 100 places: its to_json_kept",
+       fn ->
+         {_, _, changed} = chained_in_100_written.()
+         Tarnish.Node.to_json_kept(changed)
+       end}
     ]
     |> Enum.map(fn {row, call} -> {name, row, call} end)
   end)

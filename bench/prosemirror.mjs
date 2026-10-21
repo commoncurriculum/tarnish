@@ -17,7 +17,9 @@
 // call takes the next change in turn; the row for one step takes each step in turn, applied alone
 // to the document the steps before it in its change made. The "typed" rows keep the document that
 // 100 messages each typed "x" into, in one place or in a place of its own, or that 10 did in 10
-// places, and time one message more, typing in the first place.
+// places, and time one message more, typing in the first place. The "chained" rows are the 100
+// messages a socket takes after those 100: each types "x" in one of 10 or 100 places spread evenly,
+// in turn, into the document the message before it made, and each call takes the next message.
 import { existsSync, readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { Node, Schema } from "prosemirror-model"
@@ -134,6 +136,25 @@ for (const { name, schema, doc, changes } of documents) {
   const in10Places = typed(10, true)
   const in100Places = typed(100, true)
   const typedOnceMore = step(in100Places, typing(places[0]))
+  // The 100 messages after in100Places, each typing in the next of `count` places spread evenly,
+  // where that place is by then, with the document the message before it made.
+  const chained = (count) => {
+    const typedAt = Array.from({ length: 100 }, (_, index) => places[Math.floor((index * places.length) / 100)])
+    const chain = []
+    let before = in100Places
+    for (let index = 0; index < 100; index++) {
+      const place = places[Math.floor((Math.floor((index * count) / 100) * places.length) / count)]
+      const steps = typing(place + typedAt.filter((at) => at < place).length)
+      typedAt.push(place)
+      const changed = step(before, steps)
+      chain.push({ before, steps, changed })
+      before = changed
+    }
+    return cycle(chain)
+  }
+  const chainedIn10 = chained(10)
+  const chainedIn100 = chained(100)
+  const chainedIn100Written = chained(100)
   const message = cycle(messages)
   const oneStep = cycle(steps)
   const add = (row, run) => cases.push({ document: name, row, run, times: [] })
@@ -163,6 +184,15 @@ for (const { name, schema, doc, changes } of documents) {
   add("kept node, typed in 10 places: a message", messageAfter(in10Places))
   add("kept node, typed in 100 places: a message", messageAfter(in100Places))
   add("kept node, typed in 100 places: its toJSON", () => typedOnceMore.toJSON())
+  add("kept node, chained in 10 places: a message", () => {
+    const { before, steps } = chainedIn10()
+    return step(before, steps).toJSON()
+  })
+  add("kept node, chained in 100 places: a message", () => {
+    const { before, steps } = chainedIn100()
+    return step(before, steps).toJSON()
+  })
+  add("kept node, chained in 100 places: its toJSON", () => chainedIn100Written().changed.toJSON())
 }
 
 for (const { run } of cases) for (let call = 0; call < 2000; call++) kept = run()
