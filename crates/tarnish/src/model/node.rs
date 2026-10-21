@@ -478,7 +478,7 @@ impl<'a> Node<'a> {
         if from == 0 && to == self.content.size() {
             return self.clone();
         }
-        self.copy(self.content.cut(from, to))
+        self.content.copy_cut(self, from, to)
     }
 
     /// A text node with only its text from `from` to `to`, which mustn't be empty; `None` for
@@ -539,33 +539,24 @@ impl<'a> Node<'a> {
     }
 
     /// The node with its child at `index` replaced: in place, when the node's record is in a
-    /// chunk only the node holds, and its list in one only that chunk holds.
+    /// chunk only the node holds, and its list in that chunk or in one only that chunk holds.
     fn with_child(self, index: u32, child: Node<'a>) -> Node<'a> {
         let Node {
-            content,
-            record,
-            id,
-            own,
+            content, id, own, ..
         } = self;
-        let node = match own {
-            None => Node {
-                content,
-                record,
-                id,
-                own: None,
-            },
-            Some(mut chunk) => {
-                // The content holds the list's chunk, which nothing else may hold to change it.
-                drop(content);
-                let size = child.node_size() as u32;
-                if Chunk::replace_kid_in_place(&mut chunk, id, index, child.chunk(), child.id, size)
-                {
-                    return Node::at(chunk, id);
-                }
-                Node::at(chunk, id)
-            }
+        // The content holds the list's chunk, which is the node's own when it has no other,
+        // and which nothing else may hold to change it.
+        let mut chunk = match own {
+            Some(chunk) => chunk,
+            None => content.into_chunk().expect("a node is in a chunk"),
         };
-        node.copy(node.content.replace_child(index as usize, child))
+        let size = child.node_size() as u32;
+        if Chunk::replace_kid_in_place(&mut chunk, id, index, child.chunk(), child.id, size) {
+            return Node::at(chunk, id);
+        }
+        let node = Node::at(chunk, id);
+        node.content
+            .copy_replaced_child(&node, index as usize, child)
     }
 
     /// The node directly after `pos`.

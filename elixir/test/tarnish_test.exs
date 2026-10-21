@@ -88,6 +88,52 @@ defmodule TarnishTest do
     end
   end
 
+  # A message's steps after its first change, in place, the nodes the steps before them wrote,
+  # which one step a message never does: the document must be the one the steps give one
+  # message at a time. The card stack TARNISH_BENCH_DOC names, read here and never kept in the
+  # repo, has a change of two steps.
+  test "a message of several steps gives what one message a step gives", %{schemas: schemas} do
+    one_at_a_time = fn doc, steps ->
+      Enum.reduce_while(steps, {:ok, doc}, fn step, {:ok, doc} ->
+        case Tarnish.Step.apply(doc, [step]) do
+          {:ok, changed} -> {:cont, {:ok, changed}}
+          error -> {:halt, error}
+        end
+      end)
+    end
+
+    same = fn doc, steps ->
+      case {Tarnish.Step.apply(doc, steps), one_at_a_time.(doc, steps)} do
+        {{:ok, whole}, {:ok, stepped}} ->
+          assert Tarnish.Node.to_json(whole) === Tarnish.Node.to_json(stepped)
+
+        {whole, stepped} ->
+          assert whole === stepped
+      end
+    end
+
+    %{"tests" => tests} = @fixtures |> File.read!() |> Jason.decode!()
+
+    for %{"schema" => schema, "start" => start, "steps" => [_, _ | _] = steps} <- tests do
+      {:ok, doc} = Tarnish.Node.from_json(Enum.at(schemas, schema), start)
+      same.(doc, steps)
+    end
+
+    with path when is_binary(path) <- System.get_env("TARNISH_BENCH_DOC"),
+         true <- File.exists?(path) do
+      file = Jason.decode!(File.read!(path))
+      ordered = &(&1 |> File.read!() |> Jason.decode!(objects: :ordered_objects))
+      spec = ordered.(path)["schema"] || ordered.(System.fetch_env!("TARNISH_BENCH_SCHEMA"))
+      {:ok, schema} = Tarnish.Schema.new(spec)
+      {:ok, doc} = Tarnish.Node.from_json(schema, file["doc"])
+      steps = Enum.flat_map(file["changes"], & &1["steps"])
+      assert Enum.any?(file["changes"], &match?([_, _ | _], &1["steps"]))
+      for %{"steps" => steps} <- file["changes"], do: same.(doc, steps)
+      # Every change's steps as one message, failing where a change applies only to the doc.
+      same.(doc, steps)
+    end
+  end
+
   for {fixture, index} <- Enum.with_index(from_json) do
     @fixture fixture
     test "node #{index} from JSON is the one ProseMirror reads", %{model_schemas: schemas} do

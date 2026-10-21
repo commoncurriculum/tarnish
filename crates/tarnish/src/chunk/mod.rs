@@ -675,8 +675,8 @@ impl<'a> Chunk<'a> {
 
     /// Puts node `index` of `holder`, `size` positions long, in place of kid `position` of node
     /// `id`'s list of kids, and changes the node's size to match: `false`, having changed
-    /// nothing, unless the list is in an import, and this chunk and that one are held by
-    /// nothing else and own their bytes.
+    /// nothing, unless this chunk is held by nothing else and owns its bytes, and the list is
+    /// in it, the node being its last, or in an import held by nothing else that owns its bytes.
     pub(crate) fn replace_kid_in_place(
         this: &mut Arc<Chunk<'a>>,
         id: u32,
@@ -690,7 +690,7 @@ impl<'a> Chunk<'a> {
         };
         let record = chunk.record(id);
         if record.a & EXTERN == 0 {
-            return false;
+            return chunk.replace_own_kid(id, record, position, holder, index, size);
         }
         let (slot, start) = chunk.external(record.a);
         let at = start.checked_add(position).unwrap_or_else(|| corrupt());
@@ -711,6 +711,36 @@ impl<'a> Chunk<'a> {
         list.write_words(kid, &[slot, index, size]);
         let node = chunk.at(NODES, id);
         chunk.write_words(node + 20, &[content]);
+        true
+    }
+
+    /// [`replace_kid_in_place`](Self::replace_kid_in_place) of a node whose list is in this
+    /// chunk: only for the chunk's last node, which no node in it lists, and whose list no
+    /// other node in it lists either, each list being written for the node after it.
+    fn replace_own_kid(
+        &mut self,
+        id: u32,
+        record: Record,
+        position: u32,
+        holder: &Arc<Chunk<'a>>,
+        index: u32,
+        size: u32,
+    ) -> bool {
+        if id.checked_add(1) != Some(self.counts[NODES]) || position >= record.b {
+            return false;
+        }
+        let at = record.a.checked_add(position).unwrap_or_else(|| corrupt());
+        let content = u64::from(record.size) - u64::from(self.kid(at).size) + u64::from(size);
+        let Ok(content) = u32::try_from(content) else {
+            return false;
+        };
+        let Some(slot) = self.import_in_place(holder) else {
+            return false;
+        };
+        let kid = self.at(KIDS, at);
+        self.write_words(kid, &[slot, index, size]);
+        let node = self.at(NODES, id);
+        self.write_words(node + 20, &[content]);
         true
     }
 

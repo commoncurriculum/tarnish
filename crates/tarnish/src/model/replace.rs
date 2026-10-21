@@ -267,7 +267,7 @@ fn replace_outer<'a>(
     let node = from.node(depth);
     if index == to.index(depth) && depth < from.depth() - slice.open_start {
         let inner = stack::grow(|| replace_outer(from, to, slice, depth + 1))?;
-        Ok(node.copy(node.content().replace_child(index, inner)))
+        Ok(node.content().copy_replaced_child(node, index, inner))
     } else if slice.content.size() == 0 {
         close(node, replace_two_way(from, to, depth)?)
     } else if slice.open_start == 0
@@ -345,9 +345,12 @@ fn add_range<'a>(
     }
 }
 
-fn close<'a>(node: &Node<'a>, content: Fragment<'a>) -> Result<Node<'a>> {
-    check_content(node, &content)?;
-    Ok(node.copy(content))
+/// The node with these children, which [`Fragment::from_array`] joins, when they're valid
+/// content for it.
+fn close<'a>(node: &Node<'a>, content: Vec<Node<'a>>) -> Result<Node<'a>> {
+    let closed = Fragment::copy_of_array(node, content);
+    check_content(node, closed.content())?;
+    Ok(closed)
 }
 
 fn check_content(node: &Node, content: &Fragment) -> Result<()> {
@@ -366,7 +369,7 @@ fn replace_three_way<'a>(
     end: &ResolvedPos<'a>,
     to: &ResolvedPos<'a>,
     depth: usize,
-) -> Result<Fragment<'a>> {
+) -> Result<Vec<Node<'a>>> {
     let open_start = if from.depth() > depth {
         Some(joinable(from, start, depth + 1)?)
     } else {
@@ -398,14 +401,14 @@ fn replace_three_way<'a>(
         }
     }
     add_range(Some(to), None, depth, &mut content);
-    Ok(Fragment::from_array(content))
+    Ok(content)
 }
 
 fn replace_two_way<'a>(
     from: &ResolvedPos<'a>,
     to: &ResolvedPos<'a>,
     depth: usize,
-) -> Result<Fragment<'a>> {
+) -> Result<Vec<Node<'a>>> {
     let mut content = Vec::new();
     add_range(None, Some(from), depth, &mut content);
     if from.depth() > depth {
@@ -414,7 +417,7 @@ fn replace_two_way<'a>(
         content.push(close(node, inner)?);
     }
     add_range(Some(to), None, depth, &mut content);
-    Ok(Fragment::from_array(content))
+    Ok(content)
 }
 
 /// The slice placed in copies of `along`'s ancestors, and resolved where it starts and ends.
@@ -425,7 +428,7 @@ fn prepare_slice_for_replace<'a>(
     let extra = along.depth() - slice.open_start;
     let mut node = along.node(extra).copy(slice.content.clone());
     for depth in (0..extra).rev() {
-        node = along.node(depth).copy(Fragment::from_node(node));
+        node = Fragment::copy_of_node(along.node(depth), &node);
     }
     let start = node.resolve(slice.open_start + extra)?;
     let size = node.content().size();

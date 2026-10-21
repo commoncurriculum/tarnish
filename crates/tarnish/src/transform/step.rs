@@ -222,20 +222,29 @@ fn map_fragment<'a>(
     f: &dyn Fn(&Node<'a>, &Node<'a>) -> Node<'a>,
     parent: &Node<'a>,
 ) -> Fragment<'a> {
-    let mapped = fragment
+    Fragment::from_array(map_children(fragment, f, parent))
+}
+
+/// [`map_fragment`]'s children, before they're listed.
+fn map_children<'a>(
+    fragment: &Fragment<'a>,
+    f: &dyn Fn(&Node<'a>, &Node<'a>) -> Node<'a>,
+    parent: &Node<'a>,
+) -> Vec<Node<'a>> {
+    fragment
         .children()
         .map(|child| {
             let mut mapped = child.clone();
             if child.content().size() > 0 {
-                mapped = mapped.copy(stack::grow(|| map_fragment(child.content(), f, &child)));
+                let children = stack::grow(|| map_children(child.content(), f, &child));
+                mapped = Fragment::copy_of_array(&child, children);
             }
             if mapped.is_inline() {
                 mapped = f(&mapped, parent);
             }
             mapped
         })
-        .collect();
-    Fragment::from_array(mapped)
+        .collect()
 }
 
 /// A slice that puts `node` in place of the node at a position, which keeps its content when

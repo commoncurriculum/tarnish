@@ -164,10 +164,15 @@ impl<'a> List<'a> {
         Fragment::of(self.builder.seal(), self.start, self.count, size, u32::MAX)
     }
 
-    /// A node with `node`'s markup holding the list, written with it.
+    /// A node with `node`'s markup holding the list, written with it: `node.copy` of the
+    /// fragment [`finish`](Self::finish) gives, which for none is the node itself when it has
+    /// no children.
     fn finish_copy(mut self, node: &Node<'a>) -> Node<'a> {
         self.flush();
-        let first = if self.count == 0 { 0 } else { self.start };
+        if self.count == 0 {
+            return node.copy(Fragment::empty());
+        }
+        let first = self.start;
         let (count, size) = (self.count, self.size());
         let id = node.write_copy(&mut self.builder, first, count, size);
         Node::at(self.builder.seal(), id)
@@ -226,6 +231,11 @@ impl<'a> Fragment<'a> {
         self.chunk.as_ref()
     }
 
+    /// The chunk the list is in, given up by the fragment.
+    pub(crate) fn into_chunk(self) -> Option<Arc<Chunk<'a>>> {
+        self.chunk
+    }
+
     /// A fragment of these nodes, joining adjacent text nodes with the same marks.
     pub fn from_array(nodes: Vec<Node<'a>>) -> Fragment<'a> {
         let Some(first) = nodes.first() else {
@@ -243,6 +253,26 @@ impl<'a> Fragment<'a> {
         let mut list = List::new(node.schema());
         list.push(&node);
         list.finish()
+    }
+
+    /// `node.copy(Fragment::from_array(nodes))`, the list written with the node.
+    pub(crate) fn copy_of_array(node: &Node<'a>, nodes: Vec<Node<'a>>) -> Node<'a> {
+        if nodes.is_empty() {
+            return node.copy(Fragment::empty());
+        }
+        let mut list = List::new(node.schema());
+        for child in nodes {
+            let size = child.node_size();
+            list.add_child(child, 0, size);
+        }
+        list.finish_copy(node)
+    }
+
+    /// `node.copy(Fragment::from_node(child))`, the list written with the node.
+    pub(crate) fn copy_of_node(node: &Node<'a>, child: &Node<'a>) -> Node<'a> {
+        let mut list = List::new(node.schema());
+        list.push(child);
+        list.finish_copy(node)
     }
 
     /// The schema of the chunk the fragment's list is in; `None` for a fragment made empty.
@@ -476,6 +506,19 @@ impl<'a> Fragment<'a> {
         list.finish()
     }
 
+    /// `node.copy(this.cut(from, to))`, this being the node's content, written with its list.
+    pub(crate) fn copy_cut(&self, node: &Node<'a>, from: usize, to: usize) -> Node<'a> {
+        if from == 0 && to == self.size() {
+            return node.copy(self.clone());
+        }
+        let Some(schema) = self.schema().filter(|_| to > from) else {
+            return node.copy(Fragment::empty());
+        };
+        let mut list = List::new(schema);
+        list.add_cut(self, from, to.min(self.size()));
+        list.finish_copy(node)
+    }
+
     /// The children from index `from` to `to`: a part of the same list.
     pub fn cut_by_index(&self, from: usize, to: usize) -> Fragment<'a> {
         let to = to.min(self.child_count());
@@ -536,6 +579,26 @@ impl<'a> Fragment<'a> {
         list.push(&node);
         list.extend(self, index + 1, self.count);
         list.finish()
+    }
+
+    /// `node.copy(this.replace_child(index, child))`, this being the node's content, written
+    /// with its list.
+    pub(crate) fn copy_replaced_child(
+        &self,
+        node: &Node<'a>,
+        index: usize,
+        child: Node<'a>,
+    ) -> Node<'a> {
+        let current = self.node(index as u32);
+        if current.ptr_eq(&child) {
+            return node.copy(self.clone());
+        }
+        let index = index as u32;
+        let mut list = List::new(child.schema());
+        list.extend(self, 0, index);
+        list.push(&child);
+        list.extend(self, index + 1, self.count);
+        list.finish_copy(node)
     }
 
     pub fn add_to_start(&self, node: Node<'a>) -> Fragment<'a> {
