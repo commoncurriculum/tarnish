@@ -38,7 +38,7 @@ mod value;
 use std::borrow::Cow;
 use std::sync::Arc;
 
-pub(crate) use build::Builder;
+pub(crate) use build::{Builder, KidSlots};
 pub use utf8::Check;
 use utf8::{CHECKED_WHOLE, Utf8, str_span, utf8, utf8_sections};
 pub(crate) use value::JsonView;

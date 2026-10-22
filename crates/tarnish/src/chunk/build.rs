@@ -19,6 +19,49 @@ use crate::json::Map;
 use crate::model::compare_deep::deep_equal;
 use crate::model::{Schema, TextRef};
 
+/// The slots in a chunk built of the kids of a list it copies from another, found once for each
+/// slot these cover: the other chunk's own, and each of its first [`KidSlots::COVERED`] imports.
+/// A kid in another import has its slot found each time.
+pub(crate) struct KidSlots([u32; KidSlots::COVERED + 1]);
+
+impl KidSlots {
+    const COVERED: usize = 16;
+    const UNSEEN: u32 = u32::MAX - 1;
+
+    pub fn new() -> KidSlots {
+        KidSlots([KidSlots::UNSEEN; KidSlots::COVERED + 1])
+    }
+
+    /// The entry for a kid's slot, when these cover it.
+    #[inline]
+    fn entry(slot: u32) -> Option<usize> {
+        match slot {
+            LOCAL => Some(KidSlots::COVERED),
+            slot => Some(slot as usize).filter(|&slot| slot < KidSlots::COVERED),
+        }
+    }
+
+    /// The slot found for a kid's slot, when these cover it and it has been found.
+    #[inline]
+    pub fn get(&self, slot: u32) -> Option<u32> {
+        let found = self.0[KidSlots::entry(slot)?];
+        (found != KidSlots::UNSEEN).then_some(found)
+    }
+
+    /// The slot for a kid's slot, which `find` finds unless these hold it already, and whether
+    /// these cover it, keeping what `find` found when they do.
+    #[inline]
+    pub fn get_or_find(&mut self, slot: u32, find: impl FnOnce() -> u32) -> (u32, bool) {
+        let Some(entry) = KidSlots::entry(slot) else {
+            return (find(), false);
+        };
+        if self.0[entry] == KidSlots::UNSEEN {
+            self.0[entry] = find();
+        }
+        (self.0[entry], true)
+    }
+}
+
 pub(crate) struct Builder<'a> {
     schema: Schema,
     imports: Vec<Arc<Chunk<'a>>>,
@@ -282,15 +325,15 @@ impl<'a> Builder<'a> {
         size
     }
 
-    /// Adds the `count` kids listed from `start` in `chunk`, the slot of each that `slots`
-    /// covers rewritten as it maps it, its last entry mapping `chunk`'s own, and then the kids
-    /// `written` gives, by their position, in their place: where they start.
+    /// Adds the `count` kids listed from `start` in `chunk`, the slot of each that `slots` maps
+    /// rewritten as it maps it, and then the kids `written` gives, by their position, in their
+    /// place: where they start.
     pub fn copy_kid_list(
         &mut self,
         chunk: &Chunk<'_>,
         start: u32,
         count: u32,
-        slots: &[u32],
+        slots: &KidSlots,
         written: &[(u32, Kid)],
     ) -> u32 {
         let first = self.counts[KIDS];
@@ -302,14 +345,10 @@ impl<'a> Builder<'a> {
         let at = list.len();
         list.extend_from_slice(chunk.span(KIDS, start, count));
         let kids = list[at..].as_chunks_mut::<12>().0;
-        let own = slots.len() - 1;
         for kid in kids.iter_mut() {
-            let slot = match u32::from_le_bytes([kid[0], kid[1], kid[2], kid[3]]) {
-                LOCAL => slots[own],
-                slot if (slot as usize) < own => slots[slot as usize],
-                _ => continue,
-            };
-            kid[..4].copy_from_slice(&slot.to_le_bytes());
+            if let Some(slot) = slots.get(u32::from_le_bytes([kid[0], kid[1], kid[2], kid[3]])) {
+                kid[..4].copy_from_slice(&slot.to_le_bytes());
+            }
         }
         for &(position, kid) in written {
             kids[position as usize] = kid.to_bytes();
