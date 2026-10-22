@@ -9,7 +9,7 @@
 use rustler::{Encoder, Env, NifResult, Resource, ResourceArc, Term};
 use tarnish::js::stack;
 use tarnish::transform::TRANSFORM_ERROR;
-use tarnish::{Change, Error, Node, NodeRef, REPLACE_ERROR, Schema, Text, Value, api};
+use tarnish::{Change, Error, Node, REPLACE_ERROR, Schema, Text, Value, api};
 
 use crate::doc::Doc;
 use crate::share::{self, Base};
@@ -196,7 +196,14 @@ fn write_node<'a>(
     base: Option<Term<'a>>,
 ) -> Answer<'a> {
     let doc = load(doc)?;
-    write_sharing(env, doc.view(), None, &doc, json, base, limits.write)
+    write_sharing(
+        env,
+        &Change::whole(doc.root()),
+        &doc,
+        json,
+        base,
+        limits.write,
+    )
 }
 
 /// What a write of a node shares: the map `doc` was read from, the map written for `doc`
@@ -208,15 +215,13 @@ enum Shared<'a> {
     Beside(Doc<'a>, Term<'a>),
 }
 
-/// The JSON of `node`, which is `doc` or a document made from it, sharing the map `doc` was
-/// read from, `json`, or with a `base`, `{ref, map}`, the map written for `doc` or for a
-/// document `doc` may have been changed from, unless `base` names a document that shares none
-/// of its nodes, or isn't one. With a `path`, it is `node` with the descendant the path leads
-/// to replaced by its bottom.
+/// The JSON of what `change` makes of `doc`, or of a document made from it, sharing the map
+/// `doc` was read from, `json`, or with a `base`, `{ref, map}`, the map written for `doc` or
+/// for a document `doc` may have been changed from, unless `base` names a document that shares
+/// none of its nodes, or isn't one.
 fn write_sharing<'a>(
     env: Env<'a>,
-    node: NodeRef<'_>,
-    path: Option<(&[u32], NodeRef<'_>)>,
+    change: &Change<'_>,
     doc: &Doc<'a>,
     json: Term<'a>,
     base: Option<Term<'a>>,
@@ -234,7 +239,7 @@ fn write_sharing<'a>(
         Shared::This(map) => (doc.view(), *map, Base::Written),
         Shared::Beside(written, map) => (written.view(), *map, Base::Written),
     };
-    share::json(env, node, path, read, map, kind, limit).map_err(|share::TooBig| Unanswered::Dirty)
+    share::json(env, change, read, map, kind, limit).map_err(|share::TooBig| Unanswered::Dirty)
 }
 
 fn check_node<'a>(env: Env<'a>, limits: &Limits, doc: Term<'a>) -> Answer<'a> {
@@ -276,14 +281,7 @@ fn apply_written<'a>(
         Err(failed) => return Ok(failure(env, failed)),
     };
     let limit = write_left(limits, applying);
-    let (node, path) = match change.path.is_empty() {
-        true => (change.bottom.view(), None),
-        false => (
-            change.doc.view(),
-            Some((&change.path[..], change.bottom.view())),
-        ),
-    };
-    let written = write_sharing(env, node, path, &loaded, json, Some(base), limit)?;
+    let written = write_sharing(env, &change, &loaded, json, Some(base), limit)?;
     Ok((ok(), (loaded.changed(env, &change), written)).encode(env))
 }
 

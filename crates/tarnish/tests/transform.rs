@@ -218,9 +218,8 @@ fn each_kind_of_step_deep_in_a_document_gives_the_document_it_should() {
         ),
     ];
     let kept = vec![doc.chunk().clone()];
-    // An insert writes the slice and the paragraph, the blockquotes below the document in one
-    // chunk, and the document: however deep the paragraph, the same few chunks.
-    let one_insert = 3;
+    // An insert writes the paragraph, each blockquote and the document, a chunk each.
+    let one_insert = depth + 2;
     for (index, (steps, content)) in cases.into_iter().enumerate() {
         let changed = api::apply_steps(&doc, &steps).expect("the steps");
         let expected = quoted(depth, content);
@@ -231,8 +230,8 @@ fn each_kind_of_step_deep_in_a_document_gives_the_document_it_should() {
         assert!(one_at_a_time == changed, "{}", steps);
         match index {
             0 => assert_eq!(written(&changed, &doc), one_insert, "{steps}"),
-            // The second insert writes its slice, paragraph and blockquotes anew, and changes
-            // the document's list, in the chunk the first wrote it in, in place.
+            // The second insert writes the paragraph and the blockquotes anew, and changes the
+            // document's list, in the chunk the first wrote it in, in place.
             1 => assert_eq!(written(&changed, &doc), 2 * one_insert - 1, "{steps}"),
             _ => {}
         }

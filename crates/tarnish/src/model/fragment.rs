@@ -548,14 +548,6 @@ impl<'a> Fragment<'a> {
         })
     }
 
-    /// Copies kids `from..to` into `builder`'s kids section: the positions they take.
-    pub(crate) fn copy_kids_into(&self, builder: &mut Builder<'a>, from: u32, to: u32) -> u64 {
-        match &self.chunk {
-            Some(chunk) if from < to => builder.copy_kids(chunk, self.start, self.bound, from, to),
-            _ => 0,
-        }
-    }
-
     /// The fragment with the child at `index` replaced by `node`.
     pub fn replace_child(&self, index: usize, node: Node<'a>) -> Fragment<'a> {
         self.replace_child_content(index, node).into_fragment()

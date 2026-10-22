@@ -4,7 +4,7 @@
 
 use rustler::{Env, Term};
 use tarnish::js::stack;
-use tarnish::{Field, Fields, NodeId, NodeRef};
+use tarnish::{Change, Field, Fields, NodeId, NodeRef};
 
 use crate::term::Writer;
 
@@ -30,15 +30,14 @@ pub enum Base {
     Written,
 }
 
-/// The JSON of `doc`, `read` being the document read from the map `json`, or that it was written
-/// for, doing no more than `limit` bytes' worth of work. A node of `read` is its map again,
-/// unless, for `Base::Read`, its reading flagged it. With a `path`, it is `doc` with the
-/// descendant the path leads to, child index by child index, replaced by its bottom: the nodes
-/// along it written from `doc`'s, without their being written into a chunk first.
+/// The JSON of the document `change` makes, `read` being the document read from the map `json`,
+/// or that it was written for, doing no more than `limit` bytes' worth of work. A node of `read`
+/// is its map again, unless, for `Base::Read`, its reading flagged it. The nodes along the
+/// change's path are written from those of the document it changes, without their being written
+/// into a chunk first.
 pub fn json<'a, 'v>(
     env: Env<'a>,
-    doc: NodeRef<'v>,
-    path: Option<(&[u32], NodeRef<'v>)>,
+    change: &'v Change<'_>,
     read: NodeRef<'v>,
     json: Term<'a>,
     base: Base,
@@ -50,10 +49,7 @@ pub fn json<'a, 'v>(
         base,
     };
     let read = Some((read.id(), json));
-    match path {
-        None => sharer.node(doc.id(), read),
-        Some((path, bottom)) => sharer.path(doc, path, bottom, read),
-    }
+    sharer.path(change.doc.view(), &change.path, change.bottom.view(), read)
 }
 
 struct Sharer<'a, 'v> {
@@ -96,7 +92,7 @@ impl<'a, 'v> Sharer<'a, 'v> {
                     && read.child_count() > 0
                     && node.child_count() > 0 =>
             {
-                stack::grow(|| self.rebuild(node, read, map))
+                stack::grow(|| self.rebuild(node, Some((read, map)), None))
             }
             _ => {
                 self.spend(node.node_size() * BYTES_PER_POSITION)?;
@@ -106,7 +102,7 @@ impl<'a, 'v> Sharer<'a, 'v> {
     }
 
     /// The term of `node` with the descendant `path` leads to replaced by `bottom`, `read`
-    /// being the node read that `node` may be, and its map.
+    /// being the node read that `node` may be, and its map. With no path, it is `bottom`'s.
     fn path(
         &mut self,
         node: NodeRef<'v>,
@@ -114,24 +110,17 @@ impl<'a, 'v> Sharer<'a, 'v> {
         bottom: NodeRef<'v>,
         read: Option<(NodeId<'v>, Term<'a>)>,
     ) -> Result<Term<'a>, TooBig> {
+        if path.is_empty() {
+            return self.node(bottom.id(), read);
+        }
         let read = read.map(|(read, map)| (read.view(), map));
         let read = read.filter(|(read, _)| read.node_type() == node.node_type());
-        stack::grow(|| self.rebuild_with(node, read, Some((path, bottom))))
+        stack::grow(|| self.rebuild(node, read, Some((path, bottom))))
     }
 
-    /// A new map for the node, whose children may be those of the node read.
+    /// A new map for the node, whose children may be those of the node read, and the child at
+    /// `path[0]` replaced as [`path`](Self::path) replaces it.
     fn rebuild(
-        &mut self,
-        node: NodeRef<'v>,
-        read: NodeRef<'v>,
-        map: Term<'a>,
-    ) -> Result<Term<'a>, TooBig> {
-        self.rebuild_with(node, Some((read, map)), None)
-    }
-
-    /// [`rebuild`](Self::rebuild), with no node read, and the child at `path[0]` replaced as
-    /// [`path`](Self::path) replaces it.
-    fn rebuild_with(
         &mut self,
         node: NodeRef<'v>,
         read: Option<(NodeRef<'v>, Term<'a>)>,
@@ -204,9 +193,8 @@ impl<'a, 'v> Sharer<'a, 'v> {
                 .zip(read_items)
                 .map(|(index, items)| (read_children[index], items[index]));
             let term = match replaced {
-                Some(([_], bottom)) => self.node(bottom.id(), pair)?,
-                Some(([_, below @ ..], bottom)) => self.path(child.view(), below, bottom, pair)?,
-                _ => self.node(child, pair)?,
+                Some((path, bottom)) => self.path(child.view(), &path[1..], bottom, pair)?,
+                None => self.node(child, pair)?,
             };
             self.writer.item(term);
         }

@@ -8,7 +8,8 @@ use super::node::{Change, Node};
 use super::schema::Schema;
 use super::view::{NodeRef, SetRef};
 use crate::chunk::{
-    Builder, Chunk, EMPTY_OBJECT, EMPTY_SET, Holder, Kid, LOCAL, Record, ValueRef, corrupt,
+    Builder, Chunk, EMPTY_OBJECT, EMPTY_SET, Holder, KIDS, Kid, LOCAL, NODES, Record, ValueRef,
+    WIDTHS, corrupt,
 };
 use crate::js::stack;
 
@@ -211,7 +212,7 @@ impl<'a> Change<'a> {
         let mut bytes = 0;
         let mut node = self.doc.view();
         for &index in &self.path {
-            bytes += 24 + 12 * node.child_count() as usize;
+            bytes += WIDTHS[NODES] + WIDTHS[KIDS] * node.child_count() as usize;
             node = node.child(index);
         }
         ([self.doc.chunk(), self.bottom.chunk()], bytes)

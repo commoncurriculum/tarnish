@@ -70,6 +70,20 @@ pub enum StepResult<'a> {
     Failed(String),
 }
 
+/// A step applied: the change it makes, its nodes along the path not written yet, or why it
+/// can't apply.
+pub(crate) type Applied<'a> = std::result::Result<Change<'a>, String>;
+
+/// `doc.replace(from, to, slice)`, the nodes along the path left unwritten, a slice that doesn't
+/// fit being a failure.
+fn replace<'a>(doc: Node<'a>, from: usize, to: usize, slice: &Slice<'a>) -> Result<Applied<'a>> {
+    match doc.replace_change(from, to, slice) {
+        Ok(change) => Ok(Ok(change)),
+        Err(Error::Of(class, message)) if *class == REPLACE_ERROR => Ok(Err(message)),
+        Err(error) => Err(error),
+    }
+}
+
 impl<'a> StepResult<'a> {
     /// `doc.replace(from, to, slice)`, a slice that doesn't fit being a failure.
     pub fn from_replace(
@@ -78,27 +92,14 @@ impl<'a> StepResult<'a> {
         to: usize,
         slice: &Slice<'a>,
     ) -> Result<StepResult<'a>> {
-        Ok(
-            match StepResult::change_from_replace(doc, from, to, slice)? {
-                Ok(change) => StepResult::Ok(change.into_node()),
-                Err(message) => StepResult::Failed(message),
-            },
-        )
+        replace(doc, from, to, slice).map(StepResult::written)
     }
 
-    /// [`from_replace`](Self::from_replace), leaving the nodes along the path to the deepest
-    /// node the range lies inside unwritten: the change, or why it failed.
-    #[doc(hidden)]
-    pub fn change_from_replace(
-        doc: Node<'a>,
-        from: usize,
-        to: usize,
-        slice: &Slice<'a>,
-    ) -> Result<std::result::Result<Change<'a>, String>> {
-        match doc.replace_change(from, to, slice) {
-            Ok(change) => Ok(Ok(change)),
-            Err(Error::Of(class, message)) if *class == REPLACE_ERROR => Ok(Err(message)),
-            Err(error) => Err(error),
+    /// The change written into the document it makes.
+    fn written(applied: Applied<'a>) -> StepResult<'a> {
+        match applied {
+            Ok(change) => StepResult::Ok(change.into_node()),
+            Err(message) => StepResult::Failed(message),
         }
     }
 
@@ -293,16 +294,12 @@ impl<'a> Step<'a> {
     /// Apply the step to a document. A caller that keeps the document passes a clone of it; one
     /// that gives it up lets a replace change it in place.
     pub fn apply(&self, doc: Node<'a>) -> Result<StepResult<'a>> {
-        Ok(match self.apply_change(doc)? {
-            Ok(change) => StepResult::Ok(change.into_node()),
-            Err(message) => StepResult::Failed(message),
-        })
+        self.apply_change(doc).map(StepResult::written)
     }
 
     /// [`apply`](Self::apply), leaving the nodes along the path to the deepest node a replace
     /// changes unwritten: the change, or why the step can't apply.
-    #[doc(hidden)]
-    pub fn apply_change(&self, doc: Node<'a>) -> Result<std::result::Result<Change<'a>, String>> {
+    pub(crate) fn apply_change(&self, doc: Node<'a>) -> Result<Applied<'a>> {
         match self {
             Step::Replace {
                 from,
@@ -313,7 +310,7 @@ impl<'a> Step<'a> {
                 if *structure && content_between(&doc, *from, *to)? {
                     return Ok(Err("Structure replace would overwrite content".into()));
                 }
-                StepResult::change_from_replace(doc, *from, *to, slice)
+                replace(doc, *from, *to, slice)
             }
             Step::ReplaceAround {
                 from,
@@ -335,7 +332,7 @@ impl<'a> Step<'a> {
                     return Ok(Err("Gap is not a flat range".into()));
                 }
                 match slice.insert_at(*insert, gap.content())? {
-                    Some(inserted) => StepResult::change_from_replace(doc, *from, *to, &inserted),
+                    Some(inserted) => replace(doc, *from, *to, &inserted),
                     None => Ok(Err("Content does not fit in gap".into())),
                 }
             }
@@ -357,7 +354,7 @@ impl<'a> Step<'a> {
                 };
                 let content = map_fragment(old.content(), &add, parent);
                 let slice = Slice::new(content, old.open_start(), old.open_end());
-                StepResult::change_from_replace(doc, *from, *to, &slice)
+                replace(doc, *from, *to, &slice)
             }
             Step::Mark {
                 op: MarkOp::Remove,
@@ -370,7 +367,7 @@ impl<'a> Step<'a> {
                     |node: &Node<'a>, _: &Node<'a>| node.mark(mark.remove_from_set(&node.marks()));
                 let content = map_fragment(old.content(), &remove, &doc);
                 let slice = Slice::new(content, old.open_start(), old.open_end());
-                StepResult::change_from_replace(doc, *from, *to, &slice)
+                replace(doc, *from, *to, &slice)
             }
             Step::NodeMark { op, pos, mark } => {
                 let Some(node) = doc.node_at(*pos)? else {
@@ -386,7 +383,7 @@ impl<'a> Step<'a> {
                     &marks.to_vec(),
                 )?;
                 let slice = node_slice(updated, node.is_leaf());
-                StepResult::change_from_replace(doc, *pos, *pos + 1, &slice)
+                replace(doc, *pos, *pos + 1, &slice)
             }
             Step::Attr { pos, attr, value } => {
                 let Some(node) = doc.node_at(*pos)? else {
@@ -399,7 +396,7 @@ impl<'a> Step<'a> {
                     &node.marks().to_vec(),
                 )?;
                 let slice = node_slice(updated, node.is_leaf());
-                StepResult::change_from_replace(doc, *pos, *pos + 1, &slice)
+                replace(doc, *pos, *pos + 1, &slice)
             }
             Step::DocAttr { attr, value } => {
                 let attrs = attrs_with(doc.attrs().to_map(), attr, value);

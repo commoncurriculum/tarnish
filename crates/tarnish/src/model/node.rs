@@ -17,6 +17,7 @@ use crate::Text;
 use crate::chunk::{
     ASCII, Builder, Chunk, EMPTY_OBJECT, EXTERN, Holder, Kid, NODES, Record, TEXT_NODE, ValueRef,
 };
+use crate::js::stack;
 use crate::json::{self, Map};
 use crate::{Error, Result};
 
@@ -554,8 +555,12 @@ impl<'a> Node<'a> {
 
     /// [`into_replaced`](Self::into_replaced), leaving the nodes along the path to the deepest
     /// node the range lies inside unwritten.
-    #[doc(hidden)]
-    pub fn replace_change(self, from: usize, to: usize, slice: &Slice<'a>) -> Result<Change<'a>> {
+    pub(crate) fn replace_change(
+        self,
+        from: usize,
+        to: usize,
+        slice: &Slice<'a>,
+    ) -> Result<Change<'a>> {
         // The positions hold the node, which must be held by nothing else to change in place.
         let (path, bottom) = {
             let start = self.resolve(from)?;
@@ -579,51 +584,21 @@ impl<'a> Node<'a> {
         })
     }
 
-    /// The node with the descendant `path` leads to replaced by `bottom`, the nodes below the top
-    /// along the path written in one chunk.
+    /// The node with the descendant `path` leads to replaced by `bottom`, each node along the
+    /// path given the child below it.
     pub(crate) fn with_path(self, path: &[u32], bottom: Node<'a>) -> Node<'a> {
-        let child = match path {
-            [_] => bottom,
-            [index, below @ ..] => {
-                let child = self
-                    .maybe_child(*index as usize)
-                    .expect("a child on the path");
-                child.write_path(below, bottom)
-            }
-            [] => return bottom,
+        let [index, below @ ..] = path else {
+            return bottom;
         };
-        self.with_child(path[0], child)
-    }
-
-    /// The node with the descendant `path` leads to replaced by `bottom`, it and the nodes along
-    /// the path written in one chunk, each after the child below it.
-    fn write_path(&self, path: &[u32], bottom: Node<'a>) -> Node<'a> {
-        let mut nodes = Vec::with_capacity(path.len());
-        let mut node = self.clone();
-        for &index in &path[..path.len() - 1] {
-            let child = node
-                .maybe_child(index as usize)
-                .expect("a child on the path");
-            nodes.push(node);
-            node = child;
-        }
-        nodes.push(node);
-        let mut builder = Builder::new(self.schema());
-        let mut kid = builder.kid(bottom.chunk(), bottom.index(), bottom.node_size());
-        let mut id = 0;
-        for (node, &index) in nodes.iter().zip(path).rev() {
-            let content = node.content();
-            let count = content.child_count() as u32;
-            let first = builder.kids_end();
-            let mut size = content.copy_kids_into(&mut builder, 0, index);
-            builder.push_kids(std::iter::once(kid));
-            size += u64::from(kid.size);
-            size += content.copy_kids_into(&mut builder, index + 1, count);
-            let size = u32::try_from(size).expect("a fragment smaller than 4G positions");
-            id = node.write_copy(&mut builder, first, count, size);
-            kid = Kid::local(id, size + 2);
-        }
-        Node::at(builder.seal(), id)
+        let child = match below {
+            [] => bottom,
+            _ => {
+                let child = self.maybe_child(*index as usize);
+                let child = child.expect("a child on the path");
+                stack::grow(|| child.with_path(below, bottom))
+            }
+        };
+        self.with_child(*index, child)
     }
 
     /// The node with its child at `index` replaced: in place, when the node's record is in a
