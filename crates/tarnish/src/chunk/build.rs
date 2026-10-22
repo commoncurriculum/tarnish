@@ -288,9 +288,7 @@ impl<'a> Builder<'a> {
         let written = list.len();
         list.resize(written + kids.len(), 0);
         let copies = list[written..].as_chunks_mut::<12>().0;
-        // `chunk`'s own slot here, and its first import slots, once used.
-        let mut own = LOCAL;
-        let mut slots = [LOCAL; 8];
+        let mut slots = KidSlots::new();
         let mut size = 0;
         for (kid, copy) in kids
             .as_chunks::<12>()
@@ -300,25 +298,13 @@ impl<'a> Builder<'a> {
             .zip(copies)
         {
             size += u64::from(kid.size);
-            let slot = match kid.slot {
-                LOCAL if kid.index >= bound => corrupt(),
-                LOCAL if own != LOCAL => own,
-                LOCAL => {
-                    own = self.import(chunk);
-                    own
-                }
-                theirs => {
-                    let import = chunk.import(theirs);
-                    match slots.get_mut(theirs as usize) {
-                        Some(slot) if *slot != LOCAL => *slot,
-                        Some(slot) => {
-                            *slot = self.import(import);
-                            *slot
-                        }
-                        None => self.import(import),
-                    }
-                }
-            };
+            if kid.slot == LOCAL && kid.index >= bound {
+                corrupt();
+            }
+            let (slot, _) = slots.get_or_find(kid.slot, || match kid.slot {
+                LOCAL => self.import(chunk),
+                theirs => self.import(chunk.import(theirs)),
+            });
             *copy = Kid { slot, ..kid }.to_bytes();
         }
         self.scratch.sections[KIDS] = list;
