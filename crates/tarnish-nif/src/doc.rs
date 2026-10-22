@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use rustler::{Binary, Encoder, Env, NewBinary, ResourceArc, Term};
-use tarnish::chunk::{Chunk, Header};
+use tarnish::chunk::{Check, Chunk, Header};
 use tarnish::{Node, NodeRef};
 
 use crate::prosemirror::SchemaResource;
@@ -31,6 +31,7 @@ pub struct Doc<'a> {
     binaries: Vec<Term<'a>>,
     /// The chunks, oldest first.
     chunks: Vec<Arc<Chunk<'a>>>,
+    check: Check,
 }
 
 /// A chunk's bytes as a binary.
@@ -63,12 +64,18 @@ fn read_map_suffices<'a>(newer: &[Term<'a>], doc: &Doc<'a>) -> bool {
 impl<'a> Doc<'a> {
     /// The document a ref names; `None` for a term that isn't one.
     pub fn load(term: Term<'a>) -> Option<Doc<'a>> {
-        Doc::load_with(term, &[])
+        Doc::load_with(term, &[], Check::Whole)
+    }
+
+    /// [`load`](Self::load) for a call that reads little of the document, as one applying
+    /// steps does: its text is checked as UTF-8 where it is read, rather than all of it here.
+    pub fn load_for_steps(term: Term<'a>) -> Option<Doc<'a>> {
+        Doc::load_with(term, &[], Check::OnRead)
     }
 
     /// [`load`](Self::load), taking the chunks of `reuse` for the binaries they were loaded
     /// from rather than loading them again.
-    fn load_with(term: Term<'a>, reuse: &[Arc<Chunk<'a>>]) -> Option<Doc<'a>> {
+    fn load_with(term: Term<'a>, reuse: &[Arc<Chunk<'a>>], check: Check) -> Option<Doc<'a>> {
         let (schema, binaries): (Term<'a>, Vec<Term<'a>>) = term.decode().ok()?;
         let resource: ResourceArc<SchemaResource> = schema.decode().ok()?;
         let mut chunks: Vec<Arc<Chunk<'a>>> = Vec::with_capacity(binaries.len());
@@ -87,7 +94,8 @@ impl<'a> Doc<'a> {
                 .iter()
                 .map(|id| chunks.iter().find(|chunk| chunk.id() == *id).cloned())
                 .collect::<Option<Vec<_>>>()?;
-            let chunk = Chunk::load(Cow::Borrowed(bytes), &resource.0, imports).ok()?;
+            let chunk =
+                Chunk::load_checking(Cow::Borrowed(bytes), &resource.0, imports, check).ok()?;
             chunks.push(Arc::new(chunk));
         }
         NodeRef::root(chunks.last()?)?;
@@ -96,6 +104,7 @@ impl<'a> Doc<'a> {
             schema,
             binaries,
             chunks,
+            check,
         })
     }
 
@@ -113,7 +122,7 @@ impl<'a> Doc<'a> {
         {
             return None;
         }
-        Doc::load_with(term, &doc.chunks)
+        Doc::load_with(term, &doc.chunks, doc.check)
     }
 
     /// Whether `term` is this document's ref: the same schema, and the very binaries this

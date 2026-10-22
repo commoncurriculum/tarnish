@@ -88,9 +88,20 @@ impl From<Unread> for Unanswered {
 
 type Answer<'a> = Result<Term<'a>, Unanswered>;
 
+/// A call, where a chunk found corrupt, which only a ref tarnish didn't write holds, is a bad
+/// argument, as a ref that doesn't load is.
+fn unless_corrupt<'a>(call: impl FnOnce() -> Answer<'a>) -> Answer<'a> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(call)).unwrap_or_else(|panic| match panic
+        .downcast_ref::<&str>(
+    ) {
+        Some(&message) if message == tarnish::chunk::CORRUPT => Err(Unanswered::BadArg),
+        _ => std::panic::resume_unwind(panic),
+    })
+}
+
 /// Makes a call on the caller's scheduler.
 fn normal<'a>(env: Env<'a>, call: impl FnOnce(&Limits) -> Answer<'a>) -> NifResult<Term<'a>> {
-    match crate::light(env, || call(&NORMAL)) {
+    match crate::light(env, || unless_corrupt(|| call(&NORMAL))) {
         Ok(term) => Ok(term),
         Err(Unanswered::Dirty) => Ok(crate::dirty(env)),
         Err(Unanswered::BadArg) => Err(rustler::Error::BadArg),
@@ -99,7 +110,7 @@ fn normal<'a>(env: Env<'a>, call: impl FnOnce(&Limits) -> Answer<'a>) -> NifResu
 
 /// Makes a call on a dirty scheduler, with no limits.
 fn dirty<'a>(call: impl FnOnce(&Limits) -> Answer<'a>) -> NifResult<Term<'a>> {
-    match call(&DIRTY) {
+    match unless_corrupt(|| call(&DIRTY)) {
         Ok(term) => Ok(term),
         Err(Unanswered::Dirty) => unreachable!("a dirty call has no limits"),
         Err(Unanswered::BadArg) => Err(rustler::Error::BadArg),
@@ -234,7 +245,7 @@ fn check_node<'a>(env: Env<'a>, limits: &Limits, doc: Term<'a>) -> Answer<'a> {
 }
 
 fn apply<'a>(env: Env<'a>, limits: &Limits, doc: Term<'a>, json: Term<'a>) -> Answer<'a> {
-    let doc = load(doc)?;
+    let doc = Doc::load_for_steps(doc).ok_or(Unanswered::BadArg)?;
     let root = doc.root();
     let applied = api::apply_steps(&root, &steps(limits, &root, json)?.0);
     Ok(respond(env, applied, |node| doc.changed(env, &node)))
@@ -255,7 +266,7 @@ fn apply_written<'a>(
     json: Term<'a>,
     base: Term<'a>,
 ) -> Answer<'a> {
-    let loaded = load(doc)?;
+    let loaded = Doc::load_for_steps(doc).ok_or(Unanswered::BadArg)?;
     let root = loaded.root();
     let (steps, applying) = self::steps(limits, &root, steps)?;
     let applied = match api::apply_steps(&root, &steps) {

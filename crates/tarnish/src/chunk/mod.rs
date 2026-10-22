@@ -278,10 +278,8 @@ pub struct Chunk<'a> {
     /// Where each section starts in `bytes`.
     starts: [u32; SECTIONS],
     counts: [u32; SECTIONS],
-    /// The strings and text sections, checked as UTF-8 once so that a read only slices them:
-    /// borrowed from the bytes when they are, so that loading a chunk copies none of its text.
-    strings: Cow<'a, str>,
-    text: Cow<'a, str>,
+    strings: Utf8<'a>,
+    text: Utf8<'a>,
 }
 
 /// A section of UTF-8, or `None` when it isn't. simdutf8 checks a section of a large document
@@ -297,21 +295,51 @@ fn utf8_section<'b>(
     simdutf8::basic::from_utf8(bytes.get(start..end)?).ok()
 }
 
+/// A chunk's strings or text section: checked as UTF-8 once, so that a read only slices it,
+/// or checked span by span as it is read, which costs less when a call reads a few spans of a
+/// large chunk, as a step does.
+enum Utf8<'a> {
+    Checked(Cow<'a, str>),
+    OnRead,
+}
+
+/// The most bytes of strings and text a chunk loaded to be checked where it is read checks
+/// as it loads all the same.
+const CHECKED_WHOLE: u32 = 4096;
+
+/// When a chunk loaded checks its strings and text are UTF-8.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Check {
+    /// As it loads, for a call that reads much of it.
+    Whole,
+    /// As each span is read, for a call that reads little of it. A span that isn't UTF-8 then
+    /// panics, as a corrupt record does.
+    OnRead,
+}
+
 /// The strings and text sections of a chunk's bytes, borrowed when the bytes are.
 fn utf8_sections<'a>(
     bytes: &Cow<'a, [u8]>,
     sections: (&[u32; SECTIONS], &[u32; SECTIONS]),
-) -> Option<(Cow<'a, str>, Cow<'a, str>)> {
+) -> Option<(Utf8<'a>, Utf8<'a>)> {
     Some(match bytes {
         Cow::Borrowed(bytes) => (
-            Cow::Borrowed(utf8_section(bytes, sections, STRINGS)?),
-            Cow::Borrowed(utf8_section(bytes, sections, TEXT)?),
+            Utf8::Checked(Cow::Borrowed(utf8_section(bytes, sections, STRINGS)?)),
+            Utf8::Checked(Cow::Borrowed(utf8_section(bytes, sections, TEXT)?)),
         ),
         Cow::Owned(bytes) => (
-            Cow::Owned(utf8_section(bytes, sections, STRINGS)?.to_owned()),
-            Cow::Owned(utf8_section(bytes, sections, TEXT)?.to_owned()),
+            Utf8::Checked(Cow::Owned(
+                utf8_section(bytes, sections, STRINGS)?.to_owned(),
+            )),
+            Utf8::Checked(Cow::Owned(utf8_section(bytes, sections, TEXT)?.to_owned())),
         ),
     })
+}
+
+/// A span of bytes as UTF-8, which panics when it isn't, as a corrupt record does.
+#[inline]
+fn utf8(span: &[u8]) -> &str {
+    std::str::from_utf8(span).unwrap_or_else(|_| corrupt())
 }
 
 /// `len` bytes of a section of UTF-8 from `start`.
@@ -333,8 +361,11 @@ pub struct Header {
 #[cold]
 #[track_caller]
 pub(crate) fn corrupt() -> ! {
-    panic!("a corrupt chunk")
+    std::panic::panic_any(CORRUPT)
 }
+
+/// What a read of a corrupt chunk panics with.
+pub const CORRUPT: &str = "a corrupt chunk";
 
 #[inline]
 fn word(bytes: &[u8], at: usize) -> u32 {
@@ -395,6 +426,16 @@ impl<'a> Chunk<'a> {
         schema: &Schema,
         imports: Vec<Arc<Chunk<'a>>>,
     ) -> Result<Chunk<'a>> {
+        Chunk::load_checking(bytes, schema, imports, Check::Whole)
+    }
+
+    /// [`load`](Self::load), checking its strings and text are UTF-8 as `check` says.
+    pub fn load_checking(
+        bytes: Cow<'a, [u8]>,
+        schema: &Schema,
+        imports: Vec<Arc<Chunk<'a>>>,
+        check: Check,
+    ) -> Result<Chunk<'a>> {
         let (starts, counts) = layout(&bytes)?;
         if double_word(&bytes, 8) != schema.fingerprint() {
             return Err(Error::Range(
@@ -408,8 +449,14 @@ impl<'a> Chunk<'a> {
         {
             return Err(invalid());
         }
-        let Some((strings, text)) = utf8_sections(&bytes, (&starts, &counts)) else {
-            return Err(invalid());
+        // A small chunk's text is checked whole, which costs less than a check of each span read.
+        let small = counts[STRINGS].saturating_add(counts[TEXT]) <= CHECKED_WHOLE;
+        let (strings, text) = match check {
+            Check::OnRead if !small => (Utf8::OnRead, Utf8::OnRead),
+            _ => match utf8_sections(&bytes, (&starts, &counts)) {
+                Some(sections) => sections,
+                None => return Err(invalid()),
+            },
         };
         Ok(Chunk {
             id: double_word(&bytes, 16),
@@ -434,7 +481,10 @@ impl<'a> Chunk<'a> {
         text: String,
     ) -> Chunk<'a> {
         let bytes = Cow::Owned(bytes);
-        let (strings, text) = (Cow::Owned(strings), Cow::Owned(text));
+        let (strings, text) = (
+            Utf8::Checked(Cow::Owned(strings)),
+            Utf8::Checked(Cow::Owned(text)),
+        );
         Chunk {
             id: double_word(&bytes, 16),
             bytes,
@@ -661,12 +711,18 @@ impl<'a> Chunk<'a> {
 
     #[inline]
     pub(crate) fn string(&self, start: u32, len: u32) -> &str {
-        str_span(&self.strings, start, len)
+        match &self.strings {
+            Utf8::Checked(strings) => str_span(strings, start, len),
+            Utf8::OnRead => utf8(self.span(STRINGS, start, len)),
+        }
     }
 
     #[inline]
     pub(crate) fn text(&self, start: u32, len: u32) -> &str {
-        str_span(&self.text, start, len)
+        match &self.text {
+            Utf8::Checked(text) => str_span(text, start, len),
+            Utf8::OnRead => utf8(self.span(TEXT, start, len)),
+        }
     }
 
     /// The UTF-16 units from `start`, `len` of them, as little-endian bytes.
@@ -832,7 +888,7 @@ impl std::fmt::Debug for Chunk<'_> {
 mod tests {
     use std::borrow::Cow;
 
-    use super::{Chunk, STRINGS, layout};
+    use super::{Check, Chunk, STRINGS, TEXT, layout};
     use crate::{Error, Node, api, json};
 
     /// A chunk's strings are checked as it loads, so one whose strings aren't UTF-8 is refused
@@ -851,5 +907,45 @@ mod tests {
         bytes[starts[STRINGS] as usize] = 0xff;
         let refused = Chunk::load(Cow::Owned(bytes), &schema, Vec::new()).err();
         assert!(refused == Some(Error::Range("Invalid document chunk".into())));
+    }
+
+    /// A chunk loaded to check its text where it is read loads with strings that aren't UTF-8,
+    /// and the read that comes across them panics, as one of a corrupt record does. A small
+    /// chunk is checked as it loads all the same, and refused.
+    #[test]
+    fn checks_strings_where_read_when_loaded_so() {
+        let spec = r#"{"nodes": {"doc": {"content": "text*", "attrs": {"a": {"default": "x"}}},
+                                 "text": {}}}"#;
+        let schema = api::schema(&json::from_str(spec).expect("JSON")).expect("a schema");
+        for (text, small) in [
+            ("é".to_owned(), true),
+            (format!("é{}", "x".repeat(5000)), false),
+        ] {
+            let doc = json::json!({ "type": "doc", "attrs": { "a": "é" }, "content": [{ "type": "text", "text": text }] });
+            let doc = Node::from_json(&schema, &doc).expect("a document");
+            let good = doc.chunk().bytes().to_vec();
+            let loaded =
+                Chunk::load_checking(Cow::Borrowed(&good), &schema, Vec::new(), Check::OnRead);
+            let loaded = Node::root(std::sync::Arc::new(loaded.expect("a chunk"))).expect("a node");
+            assert_eq!(loaded.to_json(), doc.to_json());
+            for section in [STRINGS, TEXT] {
+                let mut bytes = good.clone();
+                let (starts, counts) = layout(&bytes).expect("a layout");
+                assert!(counts[section] > 0);
+                bytes[starts[section] as usize] = 0xff;
+                let chunk =
+                    Chunk::load_checking(Cow::Borrowed(&bytes), &schema, Vec::new(), Check::OnRead);
+                assert!(Chunk::load(Cow::Borrowed(&bytes), &schema, Vec::new()).is_err());
+                if small {
+                    assert!(chunk.is_err());
+                    continue;
+                }
+                let node =
+                    Node::root(std::sync::Arc::new(chunk.expect("a chunk"))).expect("a node");
+                let read =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| node.to_json()));
+                assert!(read.is_err());
+            }
+        }
     }
 }

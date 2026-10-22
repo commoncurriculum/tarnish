@@ -255,6 +255,26 @@ defmodule TarnishTest do
     assert_raise ArgumentError, fn -> Tarnish.Node.from_json(schema, json) end
   end
 
+  # A ref holds a document's bytes, so a forged one can hold text that isn't UTF-8. A call that
+  # comes across it raises, as it does for a ref that doesn't load: one that checks the text as
+  # it loads, and one applying steps, which checks only the text it reads.
+  test "a ref whose text isn't UTF-8 is refused", %{schemas: [schema | _]} do
+    # Long enough that a step checks only the text it reads.
+    read = doc(schema, paragraphs(1, "aéb" <> String.duplicate("c", 5000)))
+    {schema_ref, [bytes]} = read.ref
+    forged = %{read | ref: {schema_ref, [:binary.replace(bytes, "aéb", <<?a, 0xFF, 0xA9, ?b>>)]}}
+
+    step = %{
+      "stepType" => "replace",
+      "from" => 3,
+      "to" => 3,
+      "slice" => %{"content" => [text("x")]}
+    }
+
+    assert_raise ArgumentError, fn -> Tarnish.Node.text_content(forged) end
+    assert_raise ArgumentError, fn -> Tarnish.Step.apply(forged, [step]) end
+  end
+
   defp paragraphs(count, text),
     do: %{"type" => "doc", "content" => List.duplicate(paragraph([text(text)]), count)}
 
