@@ -46,21 +46,6 @@ pub fn read<'a>(env: Env<'a>, schema: Term<'a>, doc: &Node) -> Term<'a> {
     (schema, [binary(env, doc.chunk().bytes())].as_slice()).encode(env)
 }
 
-/// Whether a document whose newer chunks are `newer`, and whose oldest is `doc`'s, shares with
-/// `doc` only nodes read, whose maps the map read holds: when `doc` holds none of its newer
-/// chunks, having taken them all in, and its reading flagged no node.
-fn read_map_suffices<'a>(newer: &[Term<'a>], doc: &Doc<'a>) -> bool {
-    let held = |binary: &Term<'a>| {
-        Binary::from_term(*binary).is_ok_and(|binary| {
-            let bytes = binary.as_slice();
-            doc.chunks[1..]
-                .iter()
-                .any(|chunk| std::ptr::eq(bytes, chunk.bytes()))
-        })
-    };
-    !newer.iter().any(held) && !doc.chunks[0].any_flagged()
-}
-
 impl<'a> Doc<'a> {
     /// The document a ref names; `None` for a term that isn't one.
     pub fn load(term: Term<'a>) -> Option<Doc<'a>> {
@@ -110,16 +95,11 @@ impl<'a> Doc<'a> {
 
     /// The document a ref names that `doc` may have been changed from, which a JSON was written
     /// for: `None` for a term that isn't a ref, or one in another schema or whose oldest chunk
-    /// isn't `doc`'s, which shares no node with `doc`. `None` too when the map read shares the
-    /// same nodes, as [`read_map_suffices`] tells.
+    /// isn't `doc`'s, which shares no node with `doc`.
     pub fn load_beside(term: Term<'a>, doc: &Doc<'a>) -> Option<Doc<'a>> {
         let (schema, binaries): (Term<'a>, Vec<Term<'a>>) = term.decode().ok()?;
-        let (oldest, newer) = binaries.split_last()?;
-        let oldest = Binary::from_term(*oldest).ok()?.as_slice();
-        if schema != doc.schema
-            || !std::ptr::eq(oldest, doc.chunks[0].bytes())
-            || read_map_suffices(newer, doc)
-        {
+        let oldest = Binary::from_term(*binaries.last()?).ok()?.as_slice();
+        if schema != doc.schema || !std::ptr::eq(oldest, doc.chunks[0].bytes()) {
             return None;
         }
         Doc::load_with(term, &doc.chunks, doc.check)

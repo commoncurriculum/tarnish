@@ -67,7 +67,7 @@ defmodule Tarnish.DeepTest do
     {:ok, json, again} = Tarnish.Step.apply_kept(changed, step)
     paragraph = %{"type" => "paragraph", "content" => [%{text | "text" => "xx"}]}
     assert json === %{"type" => "doc", "content" => [quotes(paragraph)]}
-    assert Tarnish.Node.to_json(Map.put(again, :base, nil)) === json
+    assert Tarnish.Node.to_json(Map.merge(again, %{json: nil, of: :none})) === json
   end
 
   test "a document holds attributes that nest deep, read, checked and written whole", %{

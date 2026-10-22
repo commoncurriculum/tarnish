@@ -11,13 +11,13 @@ defmodule Tarnish.Node do
   @compile {:no_warn_undefined, @native}
 
   # The binaries of the chunks that hold the node, newest first, which Rust reads in place, as
-  # `{schema, chunks}`. And the JSON it was read from, whose parts its own JSON shares where
-  # they're what ProseMirror writes. And `base`, nil or `{ref, json}`, the JSON `to_json_kept/1`
-  # last wrote, for the ref it wrote it for, whose parts its own JSON shares where its nodes are
-  # that ref's.
+  # `{schema, chunks}`. And a JSON whose parts its own JSON shares, and `of`, what that JSON is
+  # of: nil for the JSON the node was read from, whose parts are what ProseMirror writes for the
+  # nodes read, or the ref `to_json_kept/1` or `Tarnish.Step.apply_kept/2` last wrote it for,
+  # whose parts are the JSON of that ref's nodes.
   @derive {Inspect, only: []}
   @enforce_keys [:ref, :json]
-  defstruct [:ref, :json, base: nil]
+  defstruct [:ref, :json, of: nil]
 
   @type t :: %__MODULE__{}
 
@@ -34,41 +34,37 @@ defmodule Tarnish.Node do
   @doc "The node's JSON, as `node.toJSON()` gives it."
   @spec to_json(t()) :: Tarnish.json()
   def to_json(%__MODULE__{ref: ref, json: json} = node) do
-    case Map.get(node, :base) do
+    case Map.get(node, :of) do
       nil ->
         with :dirty <- @native.to_json(ref, json), do: @native.to_json_dirty(ref, json)
 
-      {^ref, written} ->
-        written
+      ^ref ->
+        json
 
-      base ->
-        with :dirty <- @native.to_json_from(ref, json, base),
-             do: @native.to_json_from_dirty(ref, json, base)
+      of ->
+        with :dirty <- @native.to_json_from(ref, json, of),
+             do: @native.to_json_from_dirty(ref, json, of)
     end
   end
 
   @doc """
-  The node's JSON, as `to_json/1` gives it, and the node, which keeps that JSON as its base.
+  The node's JSON, as `to_json/1` gives it, and the node, which keeps that JSON in place of the
+  one it held.
 
   A process that keeps a node between changes, as a socket's does between messages, writes it
   with this and keeps the node it returns. `Tarnish.Step.apply/2` and `Tarnish.Transform.new/2`
   carry that JSON to the nodes they make of it, whose JSON then shares the parts written here for
-  the nodes still held where this write found them, rather than only the parts of the JSON the
-  node was read from. A change that takes in the chunk holding a node writes that node again,
-  equal but a new term, so a document whose every change rewrites its top-level list, such as a
-  flat one, gains little; `Tarnish.Step.apply_kept/2`, which applies a message's steps and
-  writes the document they make in one call, shares those nodes too. What either gives is the
+  the nodes they left. `Tarnish.Step.apply_kept/2` applies a message's steps and writes the
+  document they make in one call, and shares more, as its docs say. What either gives is the
   same, term for term.
 
-  The node returned is the same document, and holds this JSON besides the one it was read from,
-  so it is no longer `==` to the node given, and sending it to another process copies both. It
-  also holds the chunks of the document this JSON was written for, until it is written again
-  with this.
+  The node returned is the same document, and is no longer `==` to the node given. It also holds
+  the chunks of the document this JSON was written for, until it is written again with this.
   """
   @spec to_json_kept(t()) :: {Tarnish.json(), t()}
   def to_json_kept(%__MODULE__{ref: ref} = node) do
     json = to_json(node)
-    {json, Map.put(node, :base, {ref, json})}
+    {json, Map.merge(node, %{json: json, of: ref})}
   end
 
   @doc "Checks that the node conforms to its schema, as `node.check()` does."

@@ -491,12 +491,6 @@ impl<'a> Chunk<'a> {
         u16::from_le_bytes([self.bytes[at + 2], self.bytes[at + 3]])
     }
 
-    /// Whether a binding's reading flagged any node this chunk holds, as
-    /// [`NodeRef::flagged`](crate::model::NodeRef::flagged) reads one.
-    pub fn any_flagged(&self) -> bool {
-        (0..self.count(NODES)).any(|id| self.flags(id) & BINDING != 0)
-    }
-
     #[inline]
     fn kid(&self, index: u32) -> Kid {
         let at = self.at(KIDS, index);

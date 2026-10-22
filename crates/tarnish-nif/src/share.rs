@@ -31,14 +31,14 @@ pub enum Base {
 }
 
 /// The JSON of the document `change` makes, `read` being the document read from the map `json`,
-/// or that it was written for, doing no more than `limit` bytes' worth of work. A node of `read`
-/// is its map again, unless, for `Base::Read`, its reading flagged it. The nodes along the
-/// change's path are written from those of the document it changes, without their being written
-/// into a chunk first.
+/// or that it was written for, or none, doing no more than `limit` bytes' worth of work. A node
+/// of `read` is its map again, unless, for `Base::Read`, its reading flagged it. The nodes along
+/// the change's path are written from those of the document it changes, without their being
+/// written into a chunk first.
 pub fn json<'a, 'v>(
     env: Env<'a>,
     change: &'v Change<'_>,
-    read: NodeRef<'v>,
+    read: Option<NodeRef<'v>>,
     json: Term<'a>,
     base: Base,
     limit: usize,
@@ -48,7 +48,7 @@ pub fn json<'a, 'v>(
         left: limit,
         base,
     };
-    let read = Some((read.id(), json));
+    let read = read.map(|read| (read.id(), json));
     sharer.path(change.doc.view(), &change.path, change.bottom.view(), read)
 }
 

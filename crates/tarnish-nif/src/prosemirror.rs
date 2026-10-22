@@ -193,7 +193,7 @@ fn write_node<'a>(
     limits: &Limits,
     doc: Term<'a>,
     json: Term<'a>,
-    base: Option<Term<'a>>,
+    of: Option<Term<'a>>,
 ) -> Answer<'a> {
     let doc = load(doc)?;
     write_sharing(
@@ -201,45 +201,34 @@ fn write_node<'a>(
         &Change::whole(doc.root()),
         &doc,
         json,
-        base,
+        of,
         limits.write,
     )
 }
 
-/// What a write of a node shares: the map `doc` was read from, the map written for `doc`
-/// itself, or the map written for a document `doc` may have been changed from, with that
-/// document.
-enum Shared<'a> {
-    Read,
-    This(Term<'a>),
-    Beside(Doc<'a>, Term<'a>),
-}
-
-/// The JSON of what `change` makes of `doc`, or of a document made from it, sharing the map
-/// `doc` was read from, `json`, or with a `base`, `{ref, map}`, the map written for `doc` or
-/// for a document `doc` may have been changed from, unless `base` names a document that shares
-/// none of its nodes, or isn't one.
+/// The JSON of what `change` makes of `doc`, sharing the map `json`: the map `doc` was read from
+/// when `of` is `None`, or else the map written for the document `of` names, which is `doc` or
+/// one `doc` may have been changed from. A node of that document is its map again. When `of`
+/// names no such document, every node is written anew.
 fn write_sharing<'a>(
     env: Env<'a>,
     change: &Change<'_>,
     doc: &Doc<'a>,
     json: Term<'a>,
-    base: Option<Term<'a>>,
+    of: Option<Term<'a>>,
     limit: usize,
 ) -> Answer<'a> {
-    // The base is most often the map written for `doc` itself, which is loaded already.
-    let shared = match base.and_then(|base| base.decode::<(Term<'a>, Term<'a>)>().ok()) {
-        Some((written, map)) if doc.is_ref(written) => Shared::This(map),
-        Some((written, map)) => Doc::load_beside(written, doc)
-            .map_or(Shared::Read, |written| Shared::Beside(written, map)),
-        None => Shared::Read,
+    let beside;
+    let (read, base) = match of {
+        None => (Some(doc.read()), Base::Read),
+        // Most often `doc` itself, which is loaded already.
+        Some(of) if doc.is_ref(of) => (Some(doc.view()), Base::Written),
+        Some(of) => {
+            beside = Doc::load_beside(of, doc);
+            (beside.as_ref().map(Doc::view), Base::Written)
+        }
     };
-    let (read, map, kind) = match &shared {
-        Shared::Read => (doc.read(), json, Base::Read),
-        Shared::This(map) => (doc.view(), *map, Base::Written),
-        Shared::Beside(written, map) => (written.view(), *map, Base::Written),
-    };
-    share::json(env, change, read, map, kind, limit).map_err(|share::TooBig| Unanswered::Dirty)
+    share::json(env, change, read, json, base, limit).map_err(|share::TooBig| Unanswered::Dirty)
 }
 
 fn check_node<'a>(env: Env<'a>, limits: &Limits, doc: Term<'a>) -> Answer<'a> {
@@ -259,19 +248,20 @@ fn apply<'a>(env: Env<'a>, limits: &Limits, doc: Term<'a>, json: Term<'a>) -> An
 }
 
 /// The steps applied, as [`apply`] applies them, and the JSON of the document they make, as
-/// [`write_node`] writes it with `base`, in one: `{:ok, {ref, json}}`, or the failure.
+/// [`write_node`] writes it with `of`, `nil` for none, in one: `{:ok, {ref, json}}`, or the
+/// failure.
 ///
 /// The JSON is written from the document the steps make before its chunks are flattened into
 /// one, whose nodes the steps left are still the nodes of the document they were applied to. So
-/// when `base` is `{doc, map}`, the map written for this very document, those nodes are that
-/// map's again, and only the nodes the steps changed are written.
+/// when `json` is the map written for this very document, those nodes are that map's again, and
+/// only the nodes the steps changed are written.
 fn apply_written<'a>(
     env: Env<'a>,
     limits: &Limits,
     doc: Term<'a>,
     steps: Term<'a>,
     json: Term<'a>,
-    base: Term<'a>,
+    of: Term<'a>,
 ) -> Answer<'a> {
     let loaded = Doc::load_for_steps(doc).ok_or(Unanswered::BadArg)?;
     let root = loaded.root();
@@ -281,7 +271,8 @@ fn apply_written<'a>(
         Err(failed) => return Ok(failure(env, failed)),
     };
     let limit = write_left(limits, applying);
-    let written = write_sharing(env, &change, &loaded, json, Some(base), limit)?;
+    let of = (of != rustler::types::atom::nil().to_term(env)).then_some(of);
+    let written = write_sharing(env, &change, &loaded, json, of, limit)?;
     Ok((ok(), (loaded.changed(env, &change), written)).encode(env))
 }
 
@@ -411,9 +402,9 @@ fn to_json_from<'a>(
     env: Env<'a>,
     doc: Term<'a>,
     json: Term<'a>,
-    base: Term<'a>,
+    of: Term<'a>,
 ) -> NifResult<Term<'a>> {
-    normal(env, |limits| write_node(env, limits, doc, json, Some(base)))
+    normal(env, |limits| write_node(env, limits, doc, json, Some(of)))
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
@@ -421,9 +412,9 @@ fn to_json_from_dirty<'a>(
     env: Env<'a>,
     doc: Term<'a>,
     json: Term<'a>,
-    base: Term<'a>,
+    of: Term<'a>,
 ) -> NifResult<Term<'a>> {
-    dirty(|limits| write_node(env, limits, doc, json, Some(base)))
+    dirty(|limits| write_node(env, limits, doc, json, Some(of)))
 }
 
 #[rustler::nif]
@@ -452,10 +443,10 @@ fn apply_write<'a>(
     doc: Term<'a>,
     steps: Term<'a>,
     json: Term<'a>,
-    base: Term<'a>,
+    of: Term<'a>,
 ) -> NifResult<Term<'a>> {
     normal(env, |limits| {
-        apply_written(env, limits, doc, steps, json, base)
+        apply_written(env, limits, doc, steps, json, of)
     })
 }
 
@@ -465,9 +456,9 @@ fn apply_write_dirty<'a>(
     doc: Term<'a>,
     steps: Term<'a>,
     json: Term<'a>,
-    base: Term<'a>,
+    of: Term<'a>,
 ) -> NifResult<Term<'a>> {
-    dirty(|limits| apply_written(env, limits, doc, steps, json, base))
+    dirty(|limits| apply_written(env, limits, doc, steps, json, of))
 }
 
 #[rustler::nif]
