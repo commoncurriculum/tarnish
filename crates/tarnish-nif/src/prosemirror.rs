@@ -9,7 +9,7 @@
 use rustler::{Encoder, Env, NifResult, Resource, ResourceArc, Term};
 use tarnish::js::stack;
 use tarnish::transform::TRANSFORM_ERROR;
-use tarnish::{Error, Node, NodeRef, REPLACE_ERROR, Schema, Text, Value, api};
+use tarnish::{Change, Error, Node, NodeRef, REPLACE_ERROR, Schema, Text, Value, api};
 
 use crate::doc::Doc;
 use crate::share::{self, Base};
@@ -196,7 +196,7 @@ fn write_node<'a>(
     base: Option<Term<'a>>,
 ) -> Answer<'a> {
     let doc = load(doc)?;
-    write_sharing(env, doc.view(), &doc, json, base, limits.write)
+    write_sharing(env, doc.view(), None, &doc, json, base, limits.write)
 }
 
 /// What a write of a node shares: the map `doc` was read from, the map written for `doc`
@@ -211,10 +211,12 @@ enum Shared<'a> {
 /// The JSON of `node`, which is `doc` or a document made from it, sharing the map `doc` was
 /// read from, `json`, or with a `base`, `{ref, map}`, the map written for `doc` or for a
 /// document `doc` may have been changed from, unless `base` names a document that shares none
-/// of its nodes, or isn't one.
+/// of its nodes, or isn't one. With a `path`, it is `node` with the descendant the path leads
+/// to replaced by its bottom.
 fn write_sharing<'a>(
     env: Env<'a>,
     node: NodeRef<'_>,
+    path: Option<(&[u32], NodeRef<'_>)>,
     doc: &Doc<'a>,
     json: Term<'a>,
     base: Option<Term<'a>>,
@@ -232,7 +234,7 @@ fn write_sharing<'a>(
         Shared::This(map) => (doc.view(), *map, Base::Written),
         Shared::Beside(written, map) => (written.view(), *map, Base::Written),
     };
-    share::json(env, node, read, map, kind, limit).map_err(|share::TooBig| Unanswered::Dirty)
+    share::json(env, node, path, read, map, kind, limit).map_err(|share::TooBig| Unanswered::Dirty)
 }
 
 fn check_node<'a>(env: Env<'a>, limits: &Limits, doc: Term<'a>) -> Answer<'a> {
@@ -247,8 +249,8 @@ fn check_node<'a>(env: Env<'a>, limits: &Limits, doc: Term<'a>) -> Answer<'a> {
 fn apply<'a>(env: Env<'a>, limits: &Limits, doc: Term<'a>, json: Term<'a>) -> Answer<'a> {
     let doc = Doc::load_for_steps(doc).ok_or(Unanswered::BadArg)?;
     let root = doc.root();
-    let applied = api::apply_steps(&root, &steps(limits, &root, json)?.0);
-    Ok(respond(env, applied, |node| doc.changed(env, &node)))
+    let applied = api::apply_steps_change(&root, &steps(limits, &root, json)?.0);
+    Ok(respond(env, applied, |change| doc.changed(env, &change)))
 }
 
 /// The steps applied, as [`apply`] applies them, and the JSON of the document they make, as
@@ -269,13 +271,20 @@ fn apply_written<'a>(
     let loaded = Doc::load_for_steps(doc).ok_or(Unanswered::BadArg)?;
     let root = loaded.root();
     let (steps, applying) = self::steps(limits, &root, steps)?;
-    let applied = match api::apply_steps(&root, &steps) {
-        Ok(node) => node,
+    let change = match api::apply_steps_change(&root, &steps) {
+        Ok(change) => change,
         Err(failed) => return Ok(failure(env, failed)),
     };
     let limit = write_left(limits, applying);
-    let written = write_sharing(env, applied.view(), &loaded, json, Some(base), limit)?;
-    Ok((ok(), (loaded.changed(env, &applied), written)).encode(env))
+    let (node, path) = match change.path.is_empty() {
+        true => (change.bottom.view(), None),
+        false => (
+            change.doc.view(),
+            Some((&change.path[..], change.bottom.view())),
+        ),
+    };
+    let written = write_sharing(env, node, path, &loaded, json, Some(base), limit)?;
+    Ok((ok(), (loaded.changed(env, &change), written)).encode(env))
 }
 
 /// Steps' term, when they're small enough for the limits: a step undoing a deletion holds the
@@ -322,7 +331,7 @@ fn transformed<'a>(env: Env<'a>, limits: &Limits, doc: Term<'a>, json: Term<'a>)
     match api::transform(&root, &ops(limits, &root, json)?) {
         Ok((node, steps)) => {
             let steps = write_steps(env, limits, &steps)?;
-            Ok((ok(), doc.changed(env, &node), steps).encode(env))
+            Ok((ok(), doc.changed(env, &Change::whole(node)), steps).encode(env))
         }
         Err(failed) => Ok(failure(env, failed)),
     }

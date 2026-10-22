@@ -32,6 +32,33 @@ pub struct Node<'a> {
     own: Option<Arc<Chunk<'a>>>,
 }
 
+/// What a replace makes of a document: `doc` with the descendant `path` leads to, child index
+/// by child index from the top, replaced by `bottom`, the nodes along the path not written yet.
+/// With no path, `bottom` is the document.
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct Change<'a> {
+    pub doc: Node<'a>,
+    pub path: Vec<u32>,
+    pub bottom: Node<'a>,
+}
+
+impl<'a> Change<'a> {
+    /// The change that gives `doc`, written already.
+    pub fn whole(doc: Node<'a>) -> Change<'a> {
+        Change {
+            doc: doc.clone(),
+            path: Vec::new(),
+            bottom: doc,
+        }
+    }
+
+    /// The changed document, written.
+    pub fn into_node(self) -> Node<'a> {
+        self.doc.with_path(&self.path, self.bottom)
+    }
+}
+
 /// A child found by [`Node::child_after`] or [`Node::child_before`]: the child, if there is one,
 /// its index, and its offset in the parent.
 pub struct ChildAt<'a> {
@@ -522,20 +549,81 @@ impl<'a> Node<'a> {
     /// one of its children, and nothing else holds the document or the list of its children,
     /// the new child takes the old one's place in the list, which isn't copied.
     pub fn into_replaced(self, from: usize, to: usize, slice: &Slice<'a>) -> Result<Node<'a>> {
+        Ok(self.replace_change(from, to, slice)?.into_node())
+    }
+
+    /// [`into_replaced`](Self::into_replaced), leaving the nodes along the path to the deepest
+    /// node the range lies inside unwritten.
+    #[doc(hidden)]
+    pub fn replace_change(self, from: usize, to: usize, slice: &Slice<'a>) -> Result<Change<'a>> {
         // The positions hold the node, which must be held by nothing else to change in place.
-        let replaced = {
+        let (path, bottom) = {
             let start = self.resolve(from)?;
             let end = if to == from {
                 None
             } else {
                 Some(self.resolve(to)?)
             };
-            replace::replace_top(&start, end.as_ref().unwrap_or(&start), slice)?
+            let (path, bottom) =
+                replace::replace_top(&start, end.as_ref().unwrap_or(&start), slice)?;
+            // A replace that changes nothing deep down gives the document itself.
+            match !path.is_empty() && bottom.ptr_eq(start.node(path.len())) {
+                true => return Ok(Change::whole(self)),
+                false => (path, bottom),
+            }
         };
-        Ok(match replaced {
-            replace::Replaced::Node(node) => node,
-            replace::Replaced::Child(index, child) => self.with_child(index as u32, child),
+        Ok(Change {
+            doc: self,
+            path,
+            bottom,
         })
+    }
+
+    /// The node with the descendant `path` leads to replaced by `bottom`, the nodes below the top
+    /// along the path written in one chunk.
+    pub(crate) fn with_path(self, path: &[u32], bottom: Node<'a>) -> Node<'a> {
+        let child = match path {
+            [_] => bottom,
+            [index, below @ ..] => {
+                let child = self
+                    .maybe_child(*index as usize)
+                    .expect("a child on the path");
+                child.write_path(below, bottom)
+            }
+            [] => return bottom,
+        };
+        self.with_child(path[0], child)
+    }
+
+    /// The node with the descendant `path` leads to replaced by `bottom`, it and the nodes along
+    /// the path written in one chunk, each after the child below it.
+    fn write_path(&self, path: &[u32], bottom: Node<'a>) -> Node<'a> {
+        let mut nodes = Vec::with_capacity(path.len());
+        let mut node = self.clone();
+        for &index in &path[..path.len() - 1] {
+            let child = node
+                .maybe_child(index as usize)
+                .expect("a child on the path");
+            nodes.push(node);
+            node = child;
+        }
+        nodes.push(node);
+        let mut builder = Builder::new(self.schema());
+        let mut kid = builder.kid(bottom.chunk(), bottom.index(), bottom.node_size());
+        let mut id = 0;
+        for (node, &index) in nodes.iter().zip(path).rev() {
+            let content = node.content();
+            let count = content.child_count() as u32;
+            let first = builder.kids_end();
+            let mut size = content.copy_kids_into(&mut builder, 0, index);
+            builder.push_kids(std::iter::once(kid));
+            size += u64::from(kid.size);
+            size += content.copy_kids_into(&mut builder, index + 1, count);
+            let size = u32::try_from(size).expect("a fragment smaller than 4G positions");
+            id = node.write_copy(&mut builder, first, count, size);
+            kid = Kid::local(id, size + 2);
+        }
+        Node::at(builder.seal(), id)
     }
 
     /// The node with its child at `index` replaced: in place, when the node's record is in a

@@ -4,10 +4,12 @@ use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
 
-use super::node::Node;
+use super::node::{Change, Node};
 use super::schema::Schema;
 use super::view::{NodeRef, SetRef};
-use crate::chunk::{Builder, Chunk, EMPTY_OBJECT, EMPTY_SET, Holder, Kid, Record, ValueRef};
+use crate::chunk::{
+    Builder, Chunk, EMPTY_OBJECT, EMPTY_SET, Holder, Kid, Record, ValueRef, corrupt,
+};
 use crate::js::stack;
 
 /// What a copy has written of what it copies: each value and set it copied, by where it was,
@@ -104,13 +106,33 @@ impl<'k, 'a> Copier<'k, 'a> {
                 None => self.builder.text_of(record.ty, marks, &text.to_text()),
             };
         }
+        self.element(node, marks, None, record.size)
+    }
+
+    /// Writes the record of `node`, `size` positions long, and its list of kids, each kid's node
+    /// copied unless a chunk kept holds it, and kid `at` replaced by `kid` when `substitute` is
+    /// `(at, kid)`: its index.
+    fn element(
+        &mut self,
+        node: NodeRef,
+        marks: u32,
+        substitute: Option<(u32, Kid)>,
+        size: u32,
+    ) -> u32 {
+        let record = node.record;
         let (list, start, bound) = node.kids();
         let count = node.child_count();
         let mut kids = Vec::with_capacity(count as usize);
         // Kids come in runs from one slot, whose slot here, if its chunk is kept, is found once
         // a run.
         let mut run: Option<(u32, Option<u32>)> = None;
-        for kid in list.kid_list(start, count) {
+        for (position, kid) in (0..count).zip(list.kid_list(start, count)) {
+            if let Some((at, kid)) = substitute
+                && at == position
+            {
+                kids.push(kid);
+                continue;
+            }
             let chunk = list.holder(kid, bound);
             let slot = match run {
                 Some((last, slot)) if last == kid.slot => slot,
@@ -131,7 +153,54 @@ impl<'k, 'a> Copier<'k, 'a> {
         let attrs = self.value(node.attrs());
         let first = self.builder.push_kids(kids.into_iter());
         self.builder
-            .element(record.ty, marks, attrs, first, count, record.size)
+            .element(record.ty, marks, attrs, first, count, size)
+    }
+
+    /// [`copy`](Self::copy) of `node` with the descendant `path` leads to replaced by `bottom`:
+    /// its index, and its size.
+    fn copy_path(&mut self, node: NodeRef, path: &[u32], bottom: NodeRef) -> (u32, u32) {
+        let marks = self.set(node.marks());
+        let (list, start, bound) = node.kids();
+        let old = list
+            .kid_list(start, node.child_count())
+            .nth(path[0] as usize)
+            .unwrap_or_else(|| corrupt());
+        let (id, size) = match path {
+            [_] => (stack::grow(|| self.copy(bottom)), bottom.node_size() as u32),
+            [_, below @ ..] => {
+                let child = NodeRef::at(list.holder(old, bound), old.index);
+                stack::grow(|| self.copy_path(child, below, bottom))
+            }
+            [] => unreachable!("a path"),
+        };
+        let content = node.record.size - old.size + size;
+        let substitute = Some((path[0], Kid::local(id, size)));
+        (self.element(node, marks, substitute, content), content + 2)
+    }
+}
+
+impl<'a> Change<'a> {
+    /// The changed document written into a new chunk, as [`Node::flatten`] writes it, the nodes
+    /// along the path written there and nowhere else.
+    pub fn flatten(&self, kept: &[Arc<Chunk<'a>>]) -> Node<'a> {
+        if self.path.is_empty() {
+            return self.bottom.flatten(kept);
+        }
+        let mut copier = Copier::new(self.doc.schema(), kept);
+        let (id, _) = copier.copy_path(self.doc.view(), &self.path, self.bottom.view());
+        Node::at(copier.builder.seal(), id)
+    }
+
+    /// The chunks the change wrote, the document's and the bottom's, and the bytes the nodes
+    /// along the path take once written: a record and a list each.
+    pub fn written(&self) -> ([&Arc<Chunk<'a>>; 2], usize) {
+        let mut bytes = 0;
+        let mut node = self.doc.view();
+        for &index in &self.path {
+            bytes += 24 + 12 * node.child_count() as usize;
+            node = node.child(index);
+        }
+        ([self.doc.chunk(), self.bottom.chunk()], bytes)
     }
 }
 

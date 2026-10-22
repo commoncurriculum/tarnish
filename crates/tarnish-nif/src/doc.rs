@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use rustler::{Binary, Encoder, Env, NewBinary, ResourceArc, Term};
 use tarnish::chunk::{Check, Chunk, Header};
-use tarnish::{Node, NodeRef};
+use tarnish::{Change, Node, NodeRef};
 
 use crate::prosemirror::SchemaResource;
 
@@ -157,11 +157,11 @@ impl<'a> Doc<'a> {
     }
 
     /// The ref of `doc`, which this document was changed into.
-    pub fn changed(&self, env: Env<'a>, doc: &Node<'a>) -> Term<'a> {
-        if doc.ptr_eq(&self.root()) {
+    pub fn changed(&self, env: Env<'a>, change: &Change<'a>) -> Term<'a> {
+        if change.path.is_empty() && change.bottom.ptr_eq(&self.root()) {
             return self.term;
         }
-        let (flat, kept) = self.flatten(doc);
+        let (flat, kept) = self.flatten(change);
         let mut binaries = Vec::with_capacity(kept + 1);
         binaries.push(binary(env, flat.chunk().bytes()));
         binaries.extend_from_slice(&self.binaries[self.binaries.len() - kept..]);
@@ -171,13 +171,14 @@ impl<'a> Doc<'a> {
     /// `doc` in a new chunk, and how many of the oldest chunks it refers into. The chunks the
     /// change wrote, which hold no less than the new chunk will, tell how big it is before it's
     /// written, so that it's written once.
-    fn flatten(&self, doc: &Node<'a>) -> (Node<'a>, usize) {
+    fn flatten(&self, change: &Change<'a>) -> (Node<'a>, usize) {
         // The chunks the change wrote: those `doc` imports, and theirs, up to the chunks held,
         // which import only one another. A chunk is known by its address, and the many a change
         // deep down writes are found again in a set.
         let held = |chunk: &Chunk| self.chunks.iter().any(|held| std::ptr::eq(&**held, chunk));
-        let (mut size, mut written, mut many) = (0, Vec::new(), HashSet::new());
-        let mut next = vec![&**doc.chunk()];
+        let (mut written, mut many) = (Vec::new(), HashSet::new());
+        let (starts, mut size) = change.written();
+        let mut next: Vec<&Chunk> = starts.into_iter().map(|chunk| &**chunk).collect();
         while let Some(chunk) = next.pop() {
             let address = std::ptr::from_ref(chunk).addr();
             let seen = match written.len() < WRITTEN_SEARCHED {
@@ -205,6 +206,6 @@ impl<'a> Doc<'a> {
             kept -= 1;
             size += newest;
         }
-        (doc.flatten(&self.chunks[..kept]), kept)
+        (change.flatten(&self.chunks[..kept]), kept)
     }
 }

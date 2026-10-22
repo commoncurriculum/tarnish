@@ -382,6 +382,38 @@ defmodule Tarnish.KeptTest do
       assert Enum.all?(Enum.zip(rest, first_rest), fn {a, b} -> :erts_debug.same(a, b) end)
     end
 
+    # A step deep down writes only the nodes along the path to the node it changes, and shares
+    # the terms of the siblings off it.
+    test "writes the nodes along the path a step takes, at every depth", %{schema: schema} do
+      for depth <- [0, 1, 9] do
+        bottom = [paragraph([text("s")]), paragraph([text("ab")]), paragraph([text("t")])]
+
+        content =
+          Enum.reduce(1..depth//1, bottom, fn _, inner ->
+            [
+              paragraph([text("s")]),
+              %{"type" => "blockquote", "content" => inner},
+              paragraph([text("t")])
+            ]
+          end)
+
+        {before, node} = kept(doc(schema, %{"type" => "doc", "content" => content}))
+        {:ok, json, _} = apply_kept(node, [insert(4 * depth + 5, "x")])
+
+        {changed, shared} =
+          Enum.reduce(1..depth//1, {json, before}, fn _, {%{"content" => [s, q, t]}, old} ->
+            %{"content" => [old_s, old_q, old_t]} = old
+            assert :erts_debug.same(s, old_s) and :erts_debug.same(t, old_t)
+            {q, old_q}
+          end)
+
+        %{"content" => [s, typed, t]} = changed
+        %{"content" => [old_s, _, old_t]} = shared
+        assert :erts_debug.same(s, old_s) and :erts_debug.same(t, old_t)
+        assert typed === paragraph([text("axb")])
+      end
+    end
+
     test "is what Step.apply and Node.to_json_kept give on a node another process holds", %{
       schema: schema
     } do

@@ -24,7 +24,7 @@ pub use content::{ContentExpr, ContentMatch};
 pub use fields::{Field, Fields, Json};
 pub use fragment::{Fragment, LeafTextHook, NodeVisitor};
 pub use mark::{Mark, Marks};
-pub use node::{ChildAt, Node};
+pub use node::{Change, ChildAt, Node};
 pub use replace::{REPLACE_ERROR, Slice};
 pub use resolved_pos::{NodePredicate, NodeRange, ResolvedPos};
 pub use schema::{

@@ -227,21 +227,15 @@ fn insert_into<'a>(
     Ok(inner.map(|inner| content.replace_child_content(index, inner.copy_into(&child))))
 }
 
-/// What replacing a range makes of the top node.
-pub(crate) enum Replaced<'a> {
-    /// The node anew.
-    Node(Node<'a>),
-    /// The node's child at this index anew, the range lying inside it.
-    Child(usize, Node<'a>),
-}
-
-/// The document `from` is in, with `from` to `to` replaced by `slice`, leaving the top node for
-/// the caller to put a child it made anew in.
+/// The document `from` is in, with `from` to `to` replaced by `slice`: the deepest node the range
+/// lies inside made anew, and the path to it, child index by child index from the top, which
+/// leaves the nodes along it for the caller to write, each with the child below it in place of
+/// the old one. With no path, the node is the document.
 pub(crate) fn replace_top<'a>(
     from: &ResolvedPos<'a>,
     to: &ResolvedPos<'a>,
     slice: &Slice<'a>,
-) -> Result<Replaced<'a>> {
+) -> Result<(Vec<u32>, Node<'a>)> {
     if slice.open_start > from.depth() {
         return Err(Error::Of(
             &REPLACE_ERROR,
@@ -251,29 +245,24 @@ pub(crate) fn replace_top<'a>(
     if from.depth() + slice.open_end != to.depth() + slice.open_start {
         return Err(Error::Of(&REPLACE_ERROR, "Inconsistent open depths".into()));
     }
-    let index = from.index(0);
-    if index == to.index(0) && 0 < from.depth() - slice.open_start {
-        let child = stack::grow(|| replace_outer(from, to, slice, 1))?;
-        return Ok(Replaced::Child(index, child));
+    let mut path = Vec::new();
+    let mut depth = 0;
+    while from.index(depth) == to.index(depth) && depth < from.depth() - slice.open_start {
+        path.push(from.index(depth) as u32);
+        depth += 1;
     }
-    replace_outer(from, to, slice, 0).map(Replaced::Node)
+    Ok((path, replace_inside(from, to, slice, depth)?))
 }
 
-fn replace_outer<'a>(
+/// The node at `depth` with the range replaced, the range not lying inside one of its children.
+fn replace_inside<'a>(
     from: &ResolvedPos<'a>,
     to: &ResolvedPos<'a>,
     slice: &Slice<'a>,
     depth: usize,
 ) -> Result<Node<'a>> {
-    let index = from.index(depth);
     let node = from.node(depth);
-    if index == to.index(depth) && depth < from.depth() - slice.open_start {
-        let inner = stack::grow(|| replace_outer(from, to, slice, depth + 1))?;
-        Ok(node
-            .content()
-            .replace_child_content(index, inner)
-            .copy_into(node))
-    } else if slice.content.size() == 0 {
+    if slice.content.size() == 0 {
         close(node, replace_two_way(from, to, depth)?)
     } else if slice.open_start == 0
         && slice.open_end == 0

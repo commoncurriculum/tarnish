@@ -32,10 +32,13 @@ pub enum Base {
 
 /// The JSON of `doc`, `read` being the document read from the map `json`, or that it was written
 /// for, doing no more than `limit` bytes' worth of work. A node of `read` is its map again,
-/// unless, for `Base::Read`, its reading flagged it.
+/// unless, for `Base::Read`, its reading flagged it. With a `path`, it is `doc` with the
+/// descendant the path leads to, child index by child index, replaced by its bottom: the nodes
+/// along it written from `doc`'s, without their being written into a chunk first.
 pub fn json<'a, 'v>(
     env: Env<'a>,
     doc: NodeRef<'v>,
+    path: Option<(&[u32], NodeRef<'v>)>,
     read: NodeRef<'v>,
     json: Term<'a>,
     base: Base,
@@ -46,7 +49,11 @@ pub fn json<'a, 'v>(
         left: limit,
         base,
     };
-    sharer.node(doc.id(), Some((read.id(), json)))
+    let read = Some((read.id(), json));
+    match path {
+        None => sharer.node(doc.id(), read),
+        Some((path, bottom)) => sharer.path(doc, path, bottom, read),
+    }
 }
 
 struct Sharer<'a, 'v> {
@@ -98,6 +105,20 @@ impl<'a, 'v> Sharer<'a, 'v> {
         }
     }
 
+    /// The term of `node` with the descendant `path` leads to replaced by `bottom`, `read`
+    /// being the node read that `node` may be, and its map.
+    fn path(
+        &mut self,
+        node: NodeRef<'v>,
+        path: &[u32],
+        bottom: NodeRef<'v>,
+        read: Option<(NodeId<'v>, Term<'a>)>,
+    ) -> Result<Term<'a>, TooBig> {
+        let read = read.map(|(read, map)| (read.view(), map));
+        let read = read.filter(|(read, _)| read.node_type() == node.node_type());
+        stack::grow(|| self.rebuild_with(node, read, Some((path, bottom))))
+    }
+
     /// A new map for the node, whose children may be those of the node read.
     fn rebuild(
         &mut self,
@@ -105,19 +126,34 @@ impl<'a, 'v> Sharer<'a, 'v> {
         read: NodeRef<'v>,
         map: Term<'a>,
     ) -> Result<Term<'a>, TooBig> {
+        self.rebuild_with(node, Some((read, map)), None)
+    }
+
+    /// [`rebuild`](Self::rebuild), with no node read, and the child at `path[0]` replaced as
+    /// [`path`](Self::path) replaces it.
+    fn rebuild_with(
+        &mut self,
+        node: NodeRef<'v>,
+        read: Option<(NodeRef<'v>, Term<'a>)>,
+        path: Option<(&[u32], NodeRef<'v>)>,
+    ) -> Result<Term<'a>, TooBig> {
         let content = self.writer.name("content");
-        let count = read.child_count() as usize;
-        let read_items = map
-            .map_get(content)
-            .ok()
-            .map(|list| items(list, count))
-            .filter(|items| items.len() == count);
+        let read_items = read.and_then(|(read, map)| {
+            let count = read.child_count() as usize;
+            map.map_get(content)
+                .ok()
+                .map(|list| items(list, count))
+                .filter(|items| items.len() == count)
+        });
         self.spend(BYTES_PER_ITEM)?;
         let base = self.writer.begin_map();
         for field in node.fields() {
             let value = match field {
                 Field::Type(name) => self.writer.name(name),
-                Field::Content(node) => self.children(node, read, read_items.as_deref())?,
+                Field::Content(node) => {
+                    let read = read.map(|(read, _)| read);
+                    self.children(node, read, read_items.as_deref(), path)?
+                }
                 Field::Attrs(attrs) => {
                     self.spend(BYTES_PER_ITEM)?;
                     self.writer.value_ref(attrs)
@@ -143,20 +179,22 @@ impl<'a, 'v> Sharer<'a, 'v> {
     fn children(
         &mut self,
         node: NodeRef<'v>,
-        read: NodeRef<'v>,
+        read: Option<NodeRef<'v>>,
         read_items: Option<&[Term<'a>]>,
+        path: Option<(&[u32], NodeRef<'v>)>,
     ) -> Result<Term<'a>, TooBig> {
-        let read_children: Vec<NodeId> = match read_items {
-            Some(_) => read.child_ids().collect(),
-            None => Vec::new(),
+        let read_children: Vec<NodeId> = match (read_items, read) {
+            (Some(_), Some(read)) => read.child_ids().collect(),
+            _ => Vec::new(),
         };
         let children: Vec<NodeId> = node.child_ids().collect();
         let base = self.writer.begin_list();
         let paired = pairing(&children, &read_children, |a, b| a.same(b));
-        for (&child, index) in children.iter().zip(paired) {
+        for (at, (&child, index)) in children.iter().zip(paired).enumerate() {
             self.spend(BYTES_PER_ITEM)?;
+            let replaced = path.filter(|(path, _)| path[0] as usize == at);
             // Most children are the very child read in the same place.
-            if let (Some(index), Some(items)) = (index, read_items)
+            if let (Some(index), Some(items), None) = (index, read_items, replaced)
                 && self.is_its_map(read_children[index], child)
             {
                 self.writer.item(items[index]);
@@ -165,7 +203,11 @@ impl<'a, 'v> Sharer<'a, 'v> {
             let pair = index
                 .zip(read_items)
                 .map(|(index, items)| (read_children[index], items[index]));
-            let term = self.node(child, pair)?;
+            let term = match replaced {
+                Some(([_], bottom)) => self.node(bottom.id(), pair)?,
+                Some(([_, below @ ..], bottom)) => self.path(child.view(), below, bottom, pair)?,
+                _ => self.node(child, pair)?,
+            };
             self.writer.item(term);
         }
         Ok(self.writer.list(base))
