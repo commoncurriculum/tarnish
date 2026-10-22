@@ -357,3 +357,52 @@ fn a_chunk_read_from_json_changes_in_place_only_when_nothing_else_holds_it() {
     changed.check().expect("a valid document");
     assert_same(&replaced, &reloaded(schema, &changed, &[]).to_json());
 }
+
+/// A list whose kids are held in more chunks than a flatten looks up the slots of once (24
+/// chunks, so slots 16 and above too), the last kid in the list's own chunk, flattened with
+/// each choice of chunks kept, is the document it was, read back from its bytes.
+#[test]
+fn a_list_of_kids_in_many_chunks_flattens_to_the_same_document() {
+    let fixtures = read("transform");
+    let schema = &schemas(&fixtures)[0];
+    let count = 24;
+    let start: Vec<Value> = (0..count)
+        .map(|index| paragraph(json!([text(&format!("p{index}"))])))
+        .collect();
+    let doc =
+        Node::from_json(schema, &json!({ "type": "doc", "content": start })).expect("a document");
+    let mut node = reloaded(schema, &doc, &[]);
+    let mut chunks = vec![node.chunk().clone()];
+    for index in 0..count {
+        // Typing into the start of paragraph `index`, each paragraph before it a character longer.
+        let before: usize = (0..index)
+            .map(|before| format!("p{before}").len() + 3)
+            .sum();
+        let pos = before + 1;
+        let step = json!([{ "stepType": "replace", "from": pos, "to": pos, "slice": { "content": [text("x")] } }]);
+        let changed = api::apply_steps(&node, &step).expect("a step");
+        node = reloaded(schema, &changed, &chunks);
+        chunks.push(node.chunk().clone());
+    }
+    let header = tarnish::chunk::Header::read(node.chunk().bytes()).expect("a header");
+    assert!(
+        header.imports.len() > 16,
+        "{} imports",
+        header.imports.len()
+    );
+    let expected = node.to_json();
+    let own = chunks.len() - 1;
+    let choices: [Vec<usize>; 5] = [
+        vec![],
+        (0..own).collect(),
+        (0..=own).collect(),
+        (0..own).step_by(2).collect(),
+        (1..=own).step_by(2).collect(),
+    ];
+    for choice in choices {
+        let kept: Vec<_> = choice.iter().map(|&at| chunks[at].clone()).collect();
+        let flat = reloaded(schema, &node, &kept);
+        assert_same(&expected, &flat.to_json());
+        flat.check().expect("a valid document");
+    }
+}

@@ -282,6 +282,41 @@ impl<'a> Builder<'a> {
         size
     }
 
+    /// Adds the `count` kids listed from `start` in `chunk`, the slot of each that `slots`
+    /// covers rewritten as it maps it, its last entry mapping `chunk`'s own, and then the kids
+    /// `written` gives, by their position, in their place: where they start.
+    pub fn copy_kid_list(
+        &mut self,
+        chunk: &Chunk<'_>,
+        start: u32,
+        count: u32,
+        slots: &[u32],
+        written: &[(u32, Kid)],
+    ) -> u32 {
+        let first = self.counts[KIDS];
+        self.counts[KIDS] = first
+            .checked_add(count)
+            .filter(|&total| total < EXTERN)
+            .expect("a chunk holds fewer than 2^31 of anything");
+        let list = &mut self.scratch.sections[KIDS];
+        let at = list.len();
+        list.extend_from_slice(chunk.span(KIDS, start, count));
+        let kids = list[at..].as_chunks_mut::<12>().0;
+        let own = slots.len() - 1;
+        for kid in kids.iter_mut() {
+            let slot = match u32::from_le_bytes([kid[0], kid[1], kid[2], kid[3]]) {
+                LOCAL => slots[own],
+                slot if (slot as usize) < own => slots[slot as usize],
+                _ => continue,
+            };
+            kid[..4].copy_from_slice(&slot.to_le_bytes());
+        }
+        for &(position, kid) in written {
+            kids[position as usize] = kid.to_bytes();
+        }
+        first
+    }
+
     /// A kid for node `index` of `chunk`, which is `size` positions long.
     pub fn kid(&mut self, chunk: &Arc<Chunk<'a>>, index: u32, size: usize) -> Kid {
         Kid {

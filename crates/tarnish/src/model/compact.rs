@@ -8,7 +8,7 @@ use super::node::{Change, Node};
 use super::schema::Schema;
 use super::view::{NodeRef, SetRef};
 use crate::chunk::{
-    Builder, Chunk, EMPTY_OBJECT, EMPTY_SET, Holder, Kid, Record, ValueRef, corrupt,
+    Builder, Chunk, EMPTY_OBJECT, EMPTY_SET, Holder, Kid, LOCAL, Record, ValueRef, corrupt,
 };
 use crate::js::stack;
 
@@ -122,36 +122,50 @@ impl<'k, 'a> Copier<'k, 'a> {
         let record = node.record;
         let (list, start, bound) = node.kids();
         let count = node.child_count();
-        let mut kids = Vec::with_capacity(count as usize);
-        // Kids come in runs from one slot, whose slot here, if its chunk is kept, is found once
-        // a run.
-        let mut run: Option<(u32, Option<u32>)> = None;
+        // Each of the first slots, and the list's own, names a chunk kept, whose slot here is
+        // found once, or one not kept, whose kids' nodes are copied first. The list is then
+        // copied as it is, with those slots rewritten, and the other kids written over it.
+        const SLOTS: usize = 16;
+        const UNSEEN: u32 = u32::MAX - 1;
+        let mut slots = [UNSEEN; SLOTS + 1];
+        let mut written = Vec::new();
         for (position, kid) in (0..count).zip(list.kid_list(start, count)) {
             if let Some((at, kid)) = substitute
                 && at == position
             {
-                kids.push(kid);
+                written.push((position, kid));
                 continue;
             }
-            let chunk = list.holder(kid, bound);
-            let slot = match run {
-                Some((last, slot)) if last == kid.slot => slot,
+            let at = match kid.slot {
+                LOCAL if kid.index >= bound => corrupt(),
+                LOCAL => Some(SLOTS),
+                slot => Some(slot as usize).filter(|&slot| slot < SLOTS),
+            };
+            let slot = match at.map(|at| slots[at]) {
+                Some(slot) if slot != UNSEEN => slot,
                 _ => {
-                    let slot = self.kept_chunk(chunk).map(|kept| self.builder.import(kept));
-                    run = Some((kid.slot, slot));
+                    let slot = match self.kept_chunk(list.holder(kid, bound)) {
+                        Some(kept) => self.builder.import(kept),
+                        None => LOCAL,
+                    };
+                    if let Some(at) = at {
+                        slots[at] = slot;
+                    }
                     slot
                 }
             };
-            kids.push(match slot {
-                Some(slot) => Kid { slot, ..kid },
-                None => {
-                    let node = NodeRef::at(chunk, kid.index);
-                    Kid::local(stack::grow(|| self.copy(node)), kid.size)
-                }
-            });
+            if slot == LOCAL {
+                let node = NodeRef::at(list.holder(kid, bound), kid.index);
+                let index = stack::grow(|| self.copy(node));
+                written.push((position, Kid::local(index, kid.size)));
+            } else if at.is_none() {
+                written.push((position, Kid { slot, ..kid }));
+            }
         }
         let attrs = self.value(node.attrs());
-        let first = self.builder.push_kids(kids.into_iter());
+        let first = self
+            .builder
+            .copy_kid_list(list, start, count, &slots, &written);
         self.builder
             .element(record.ty, marks, attrs, first, count, size)
     }
