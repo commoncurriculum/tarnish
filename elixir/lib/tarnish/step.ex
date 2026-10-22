@@ -6,40 +6,27 @@ defmodule Tarnish.Step do
   @native Application.compile_env(:tarnish, :native, Tarnish.Native)
   @compile {:no_warn_undefined, @native}
 
-  @doc "Applies the steps to the document in order, as `step.apply(doc)` does each."
-  @spec apply(Tarnish.Node.t(), [Tarnish.json()]) :: {:ok, Tarnish.Node.t()} | Tarnish.error()
-  def apply(%Tarnish.Node{ref: ref} = doc, steps) do
-    applied =
-      with :dirty <- @native.apply_steps(ref, steps), do: @native.apply_steps_dirty(ref, steps)
-
-    with {:ok, ref} <- applied, do: {:ok, %{doc | ref: ref}}
-  end
-
   @doc """
-  Applies the steps, as `apply/2` does, and writes the document they make, as
-  `Tarnish.Node.to_json_kept/1` does, in one call: `{:ok, json, node}`, the node keeping that
-  JSON, or the error `apply/2` gives.
+  Applies the steps to the document in order, as `step.apply(doc)` does each, and writes the
+  document they make, which keeps that JSON: `{:ok, doc}`, or the error the first step that
+  fails gives.
 
-  A socket's process, which keeps a node between messages, applies each message with this. The
-  JSON shares what the node's JSON holds for every node the steps left, even where the document
-  they make takes those nodes in a chunk of its own, which `to_json_kept/1` writes again. What it
-  gives is what `apply/2` and then `to_json_kept/1` give, term for term.
+  The document keeps its JSON, and this keeps it current, so `Tarnish.Node.to_json/1` after it
+  costs nothing. A socket's process should keep the document between messages: the JSON written
+  for each message shares what the one before wrote for every node the steps left.
   """
-  @spec apply_kept(Tarnish.Node.t(), [Tarnish.json()]) ::
-          {:ok, Tarnish.json(), Tarnish.Node.t()} | Tarnish.error()
-  def apply_kept(%Tarnish.Node{ref: ref, json: json} = doc, steps) do
-    case {steps, Map.get(doc, :of)} do
-      {[], ^ref} ->
-        {:ok, json, doc}
+  @spec apply(Tarnish.Node.t(), [Tarnish.json()]) :: {:ok, Tarnish.Node.t()} | Tarnish.error()
+  def apply(%Tarnish.Node{} = doc, []), do: {:ok, doc}
 
-      {steps, of} ->
-        applied =
-          with :dirty <- @native.apply_write(ref, steps, json, of),
-               do: @native.apply_write_dirty(ref, steps, json, of)
+  def apply(%Tarnish.Node{ref: ref, json: json} = doc, steps) do
+    of = Map.get(doc, :of)
 
-        with {:ok, {ref, written}} <- applied,
-             do: {:ok, written, Map.merge(doc, %{ref: ref, json: written, of: ref})}
-    end
+    applied =
+      with :dirty <- @native.apply_write(ref, steps, json, of),
+           do: @native.apply_write_dirty(ref, steps, json, of)
+
+    with {:ok, {ref, written}} <- applied,
+         do: {:ok, Map.merge(doc, %{ref: ref, json: written, of: ref})}
   end
 
   @doc """

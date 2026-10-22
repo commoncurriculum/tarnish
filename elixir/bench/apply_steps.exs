@@ -11,22 +11,20 @@
 # A row gives the median of its rounds' means and the range they span, and the median of its
 # minor page faults per call. RSS is where the process ends up.
 #
-# The "kept node" rows are a socket process's message: the %Tarnish.Node{} it read earlier, kept
-# between messages, takes one change's steps and is written back. Each call takes the next change
-# in turn, so a row's mean is one message's; the Step.apply row for one step takes each step in
-# turn, applied alone to the node the steps before it made, which shows what a call costs before
+# The "kept node" rows are a socket process's message: the %Tarnish.Node{} it read earlier,
+# kept between messages, takes one change's steps with Step.apply, which writes the document they
+# make, and Node.to_json then gives that JSON for nothing. Each call takes the next change in turn,
+# so a row's mean is one message's; the Step.apply row for one step takes each step in turn,
+# applied alone to the document the steps before it made, which shows what a call costs before
 # any step's work.
 #
-# Those rows apply every message to the node as read. A socket's node is what its earlier
-# messages made of it, while what Node.to_json shares is the map it read, so the "typed" rows
-# keep a node that 100 messages each typed "x" into, in one place or in a place of its own, or
-# that 10 did in 10 places, and time one message more, typing in the first place. The "chained"
-# rows are the 100 messages a socket takes after those 100: each types "x" in one of 10 or 100
-# places spread evenly, in turn, into the node the message before it made, and is written back with
-# Node.to_json_kept, whose node the next message takes, so that what each shares is the map the
-# message before it wrote; each call takes the next message. Their messages are the scenarios
-# bench/document.mjs writes. The Step.apply_kept rows take the same messages, applied and written
-# in one call, as a socket's process makes them.
+# Those rows apply every message to the document as read. A socket's document is what its earlier
+# messages made of it, so the "typed" rows keep a document that 100 messages each typed "x" into,
+# in one place or in a place of its own, or that 10 did in 10 places, and time one message more,
+# typing in the first place. The "chained" rows are the 100 messages a socket takes after those
+# 100: each types "x" in one of 10 or 100 places spread evenly, in turn, into the document the
+# message before it made, so that what each shares is the map the message before it wrote; each
+# call takes the next message. Their messages are the scenarios bench/document.mjs writes.
 #
 #     MIX_ENV=test mix run bench/apply_steps.exs
 
@@ -147,14 +145,8 @@ cases =
     text = Jason.encode!(json)
     changes_text = Enum.map(changes, &Jason.encode!/1)
 
-    # Each change with what its steps make of the kept node, and each step with the node the
-    # steps before it in its change made.
-    message =
-      Enum.map(changes, fn steps ->
-        {:ok, changed} = Tarnish.Step.apply(doc, steps)
-        {steps, changed}
-      end)
-      |> cycle.()
+    # Each change, and each step with the document the steps before it in its change made.
+    message = cycle.(changes)
 
     one_step =
       Enum.flat_map(changes, fn steps ->
@@ -167,8 +159,8 @@ cases =
       end)
       |> cycle.()
 
-    # The node each message of `messages` makes of the one the message before it made, from
-    # `start`, each with the node it was applied to and its steps.
+    # The document each message of `messages` makes of the one the message before it made, from
+    # `start`, each with the document it was applied to and its steps.
     fold = fn start, messages ->
       messages
       |> Enum.map_reduce(start, fn steps, before ->
@@ -193,39 +185,15 @@ cases =
     in_one_place = last.(fold.(doc, scenarios["typed_once_100"]))
     in_10_places = last.(fold.(doc, scenarios["typed_10"]))
     in_100_places = last.(fold.(doc, scenarios["typed_100"]))
-    {:ok, typed_once_more} = Tarnish.Step.apply(in_100_places, first)
 
-    # The 100 messages after in_100_places, each with the node the message before it made and
-    # wrote.
-    chained = fn count ->
-      {_, kept} = Tarnish.Node.to_json_kept(in_100_places)
-
-      scenarios["chained_#{count}"]
-      |> Enum.map_reduce(kept, fn steps, before ->
-        {:ok, changed} = Tarnish.Step.apply(before, steps)
-        {_, written} = Tarnish.Node.to_json_kept(changed)
-        {{before, steps, changed}, written}
-      end)
-      |> elem(0)
-      |> cycle.()
-    end
-
-    chained_in_10 = chained.(10)
-    chained_in_100 = chained.(100)
-    chained_in_100_written = chained.(100)
+    # The 100 messages after in_100_places, each with the document the message before it made.
+    chained = fn count -> cycle.(fold.(in_100_places, scenarios["chained_#{count}"])) end
 
     chained_message = fn chain ->
       fn ->
         {before, steps, _} = chain.()
         {:ok, changed} = Tarnish.Step.apply(before, steps)
-        Tarnish.Node.to_json_kept(changed)
-      end
-    end
-
-    chained_kept = fn chain ->
-      fn ->
-        {before, steps, _} = chain.()
-        Tarnish.Step.apply_kept(before, steps)
+        Tarnish.Node.to_json(changed)
       end
     end
 
@@ -234,7 +202,6 @@ cases =
       {"Jason, then Node.from_json",
        fn -> Tarnish.Node.from_json(schema, Jason.decode!(text)) end},
       {"Node.to_json, unchanged", fn -> Tarnish.Node.to_json(doc) end},
-      {"Node.to_json after the steps", fn -> Tarnish.Node.to_json(changed) end},
       {"JSON text after the steps", fn -> Jason.encode!(Tarnish.Node.to_json(changed)) end},
       {"Node.check", fn -> Tarnish.Node.check(doc) end},
       {applied, fn -> apply_all.(doc, changes) end},
@@ -253,18 +220,7 @@ cases =
        end},
       {"kept node: one message",
        fn ->
-         {steps, _} = message.()
-         {:ok, changed} = Tarnish.Step.apply(doc, steps)
-         Tarnish.Node.to_json(changed)
-       end},
-      {"kept node: its Step.apply",
-       fn ->
-         {steps, _} = message.()
-         Tarnish.Step.apply(doc, steps)
-       end},
-      {"kept node: its Node.to_json",
-       fn ->
-         {_, changed} = message.()
+         {:ok, changed} = Tarnish.Step.apply(doc, message.())
          Tarnish.Node.to_json(changed)
        end},
       {"kept node: Step.apply, one step",
@@ -275,17 +231,8 @@ cases =
       {"kept node, typed in 1 place 100 times: a message", message_after.(in_one_place)},
       {"kept node, typed in 10 places: a message", message_after.(in_10_places)},
       {"kept node, typed in 100 places: a message", message_after.(in_100_places)},
-      {"kept node, typed in 100 places: its Node.to_json",
-       fn -> Tarnish.Node.to_json(typed_once_more) end},
-      {"kept node, chained in 10 places: a message", chained_message.(chained_in_10)},
-      {"kept node, chained in 100 places: a message", chained_message.(chained_in_100)},
-      {"kept node, chained in 10 places: Step.apply_kept", chained_kept.(chained_in_10)},
-      {"kept node, chained in 100 places: Step.apply_kept", chained_kept.(chained_in_100)},
-      {"kept node, chained in 100 places: its to_json_kept",
-       fn ->
-         {_, _, changed} = chained_in_100_written.()
-         Tarnish.Node.to_json_kept(changed)
-       end}
+      {"kept node, chained in 10 places: a message", chained_message.(chained.(10))},
+      {"kept node, chained in 100 places: a message", chained_message.(chained.(100))}
     ]
     |> Enum.map(fn {row, call} -> {name, row, call} end)
   end)

@@ -2,9 +2,9 @@ defmodule Tarnish.KeptTest do
   use ExUnit.Case, async: true
   import Tarnish.TestDocs
 
-  # A node written with Node.to_json_kept keeps the JSON written, which the JSON of the nodes
-  # changes make of it then shares: what it gives must be what Node.to_json gives a node that
-  # keeps no JSON but the one it was read from, term for term.
+  # A document keeps its JSON, which Step.apply keeps current and the JSON of the documents
+  # changes make of it then shares: what Node.to_json gives must be what it gives a document that
+  # keeps no JSON, term for term.
 
   @native Application.compile_env(:tarnish, :native, Tarnish.Native)
 
@@ -22,50 +22,46 @@ defmodule Tarnish.KeptTest do
     %{schema: schema}
   end
 
-  # The node with no JSON whose parts its own shares: a JSON of a ref that isn't one.
-  defp plain(node), do: Map.merge(node, %{json: nil, of: :none})
+  # The document with no JSON whose parts its own shares: a JSON of a ref that isn't one.
+  defp plain(doc), do: Map.merge(doc, %{json: nil, of: :none})
 
-  # What the node's JSON must be: what the node writes sharing nothing.
-  defp fresh(node), do: Tarnish.Node.to_json(plain(node))
+  # What the document's JSON must be: what it writes sharing nothing.
+  defp fresh(doc), do: Tarnish.Node.to_json(plain(doc))
 
-  # Writes the node with Node.to_json_kept, which must give what a fresh write gives, and the
-  # node that keeps it.
-  defp kept(node) do
-    {json, kept} = Tarnish.Node.to_json_kept(node)
-    expected = fresh(node)
+  # The document's JSON, as Node.to_json gives it, which must be what a fresh write gives.
+  defp json(doc) do
+    json = Tarnish.Node.to_json(doc)
+    expected = fresh(doc)
     assert json === expected
 
     assert :erlang.term_to_binary(json, [:deterministic]) ===
              :erlang.term_to_binary(expected, [:deterministic])
 
-    assert Tarnish.Node.to_json(kept) === json
-    {json, kept}
+    json
   end
 
-  # Applies the steps with Step.apply_kept, which must give what Step.apply and then
-  # Node.to_json_kept give, term for term, or the same error; then what it gave.
-  defp apply_kept(node, steps) do
-    fused = Tarnish.Step.apply_kept(node, steps)
+  # Applies the steps with Step.apply, whose document must keep the JSON it wrote, which is what
+  # a fresh write gives, term for term; or which must fail as the steps alone fail. Then what it
+  # gave.
+  defp applied(doc, steps) do
+    applied = Tarnish.Step.apply(doc, steps)
 
-    case Tarnish.Step.apply(node, steps) do
-      {:ok, changed} ->
-        {json, _} = kept(changed)
-        assert {:ok, written, fused_node} = fused
-        assert written === json
+    case @native.apply_steps_dirty(doc.ref, steps) do
+      {:ok, _} when steps == [] ->
+        assert applied === {:ok, doc}
 
-        assert :erlang.term_to_binary(written, [:deterministic]) ===
-                 :erlang.term_to_binary(json, [:deterministic])
-
-        assert fused_node.of === fused_node.ref
-        assert :erts_debug.same(fused_node.json, written)
-        assert fresh(fused_node) === json
-        assert Tarnish.Node.to_json(fused_node) === json
+      {:ok, _} ->
+        assert {:ok, changed} = applied
+        assert changed.of === changed.ref
+        assert :erts_debug.same(Tarnish.Node.to_json(changed), changed.json)
+        assert json(changed) === changed.json
 
       error ->
-        assert fused === error
+        assert applied === error
+        assert Tarnish.Step.apply(plain(doc), steps) === error
     end
 
-    fused
+    applied
   end
 
   # The size of a document's JSON, as positions.
@@ -76,38 +72,27 @@ defmodule Tarnish.KeptTest do
   defp content_size(json), do: size(json) - 2
 
   # The positions where typing "x" applies, in order.
-  defp places(node) do
-    for at <- 0..content_size(Tarnish.Node.to_json(node)),
-        match?({:ok, _}, Tarnish.Step.apply(node, [insert(at, "x")])),
+  defp places(doc) do
+    for at <- 0..content_size(Tarnish.Node.to_json(doc)),
+        match?({:ok, _}, @native.apply_steps_dirty(doc.ref, [insert(at, "x")])),
         do: at
   end
 
-  # 100 messages typing "x" in a place each, spread evenly, each into the node the message before
-  # it made and wrote, and each checked; then the node the last made.
-  defp chain(node, count \\ 100) do
-    places = places(node)
-    {_, node} = kept(node)
+  # 100 messages typing "x" in a place each, spread evenly, each into the document the message
+  # before it made, and each checked; then the document the last made.
+  defp chain(doc, count \\ 100) do
+    places = places(doc)
+    json(doc)
 
-    {node, _} =
-      Enum.reduce(0..(count - 1), {node, []}, fn index, {before, typed_at} ->
+    {doc, _} =
+      Enum.reduce(0..(count - 1), {doc, []}, fn index, {before, typed_at} ->
         place = Enum.at(places, div(index * length(places), count))
         steps = [insert(place + Enum.count(typed_at, &(&1 < place)), "x")]
-        # Every other message through Step.apply_kept, whose node the next takes.
-        written =
-          case rem(index, 2) do
-            0 ->
-              {:ok, changed} = Tarnish.Step.apply(before, steps)
-              changed |> kept() |> elem(1)
-
-            1 ->
-              {:ok, _, written} = apply_kept(before, steps)
-              written
-          end
-
-        {written, [place | typed_at]}
+        {:ok, changed} = applied(before, steps)
+        {changed, [place | typed_at]}
       end)
 
-    node
+    doc
   end
 
   describe "a kept node's JSON" do
@@ -122,39 +107,33 @@ defmodule Tarnish.KeptTest do
           path = Path.join(@bench, file),
           File.exists?(path) do
         file = Jason.decode!(File.read!(path))
-        node = doc(schema_for.(path), file["doc"])
-        chain(node)
+        doc = doc(schema_for.(path), file["doc"])
+        chain(doc)
       end
     end
 
     # The card stack TARNISH_BENCH_DOC names, read here and never kept in the repo. Its changes
-    # each apply to the document as read, so each is one message from the kept node, and one
+    # each apply to the document as read, so each is one message from the document read, and one
     # more from where a chain of messages left it, where those that fail must fail as they do on
-    # a node that keeps no JSON.
+    # a document that keeps no JSON.
     @tag :bench_doc
     test "is what Node.to_json gives on TARNISH_BENCH_DOC's card stack" do
-      with %{doc: node, changes: changes} <- bench_doc() do
-        {_, read} = kept(node)
-        chained = chain(node)
+      with %{doc: read, changes: changes} <- bench_doc() do
+        json(read)
+        chained = chain(read)
 
         for %{"steps" => steps} <- changes, from <- [read, chained] do
-          case Tarnish.Step.apply(from, steps) do
-            {:ok, changed} -> kept(changed)
-            error -> assert error === Tarnish.Step.apply(plain(from), steps)
-          end
-
-          apply_kept(from, steps)
+          applied(from, steps)
         end
       end
     end
 
-    test "is the JSON written last, when no step has changed the node", %{schema: schema} do
-      node = doc(schema, %{"type" => "doc", "content" => [paragraph([text("a")])]})
-      {:ok, changed} = Tarnish.Step.apply(node, [insert(1, "b")])
-      {json, kept} = kept(changed)
-      {again, _} = Tarnish.Node.to_json_kept(kept)
-      assert :erts_debug.same(again, json)
-      {:ok, unchanged} = Tarnish.Step.apply(kept, [])
+    test "is the JSON written last, when no step has changed the document", %{schema: schema} do
+      doc = doc(schema, %{"type" => "doc", "content" => [paragraph([text("a")])]})
+      {:ok, changed} = applied(doc, [insert(1, "b")])
+      json = json(changed)
+      assert :erts_debug.same(Tarnish.Node.to_json(changed), json)
+      {:ok, unchanged} = applied(changed, [])
       assert :erts_debug.same(Tarnish.Node.to_json(unchanged), json)
     end
 
@@ -163,37 +142,36 @@ defmodule Tarnish.KeptTest do
     } do
       content = for text <- ~w(one two three), do: paragraph([text(text)])
       [_, read_two, _] = content
-      node = doc(schema, %{"type" => "doc", "content" => content})
+      doc = doc(schema, %{"type" => "doc", "content" => content})
 
-      # A long text after "one", then "!" after "three". The second change's chunk takes in the
-      # first's when it is no more than twice as big (doc.rs), and holds copies of its nodes then,
-      # which are written anew; the long text keeps the first chunk.
+      # A long text after "one", then "!" after "three".
       long = String.duplicate("long ", 1000)
-      {:ok, first} = Tarnish.Step.apply(node, [insert(4, long)])
-      {%{"content" => [one, two, three]}, first} = kept(first)
+      {:ok, first} = applied(doc, [insert(4, long)])
+      %{"content" => [one, two, three]} = json(first)
       assert :erts_debug.same(two, read_two)
-      {:ok, second} = Tarnish.Step.apply(first, [insert(5016, "!")])
-      {%{"content" => [one_again, two_again, three_again]}, _} = kept(second)
+      {:ok, second} = applied(first, [insert(5016, "!")])
+      %{"content" => [one_again, two_again, three_again]} = json(second)
 
       assert :erts_debug.same(one_again, one)
       assert :erts_debug.same(two_again, read_two)
       refute :erts_debug.same(three_again, three)
     end
 
-    # What the docs of Node.to_json_kept say: on a flat document every change rewrites the
-    # top-level list, whose chunk then takes in the one before, and the nodes changed in it are
-    # written again.
-    test "writes again a node changed in a chunk the next change takes in", %{schema: schema} do
+    # On a flat document every change rewrites the top-level list, whose chunk then takes in the
+    # one before; the nodes the change left in it are shared still.
+    test "shares a node changed in a chunk the next change takes in", %{schema: schema} do
       for count <- [3, 200] do
         content = for at <- 1..count, do: paragraph([text("p#{at}")])
-        node = doc(schema, %{"type" => "doc", "content" => content})
-        {:ok, first} = Tarnish.Step.apply(node, [insert(1, "a")])
-        {%{"content" => [typed | _]}, first} = kept(first)
-        {:ok, second} = Tarnish.Step.apply(first, [insert(6, "b")])
-        {%{"content" => [typed_again, other | _]}, _} = kept(second)
-        assert typed_again === typed
-        refute :erts_debug.same(typed_again, typed)
+        doc = doc(schema, %{"type" => "doc", "content" => content})
+        {:ok, first} = applied(doc, [insert(1, "a")])
+        %{"content" => [typed | first_rest]} = json(first)
+        {:ok, second} = applied(first, [insert(6, "b")])
+        %{"content" => [typed_again, other | rest]} = json(second)
+        assert typed_again === paragraph([text("ap1")])
+        assert :erts_debug.same(typed_again, typed)
         assert other === paragraph([text("bp2")])
+        [_ | first_rest] = first_rest
+        assert Enum.all?(Enum.zip(rest, first_rest), fn {a, b} -> :erts_debug.same(a, b) end)
       end
     end
 
@@ -202,20 +180,20 @@ defmodule Tarnish.KeptTest do
     test "shares the term written anew for a node whose reading flagged it", %{schema: schema} do
       # A heading without its level, which toJSON writes.
       heading = %{"type" => "heading", "content" => [text("Title")]}
-      node = doc(schema, %{"type" => "doc", "content" => [heading, paragraph([text("a")])]})
+      doc = doc(schema, %{"type" => "doc", "content" => [heading, paragraph([text("a")])]})
       # A long text keeps the first change's chunk, which the JSON kept is shared through.
-      {:ok, first} = Tarnish.Step.apply(node, [insert(8, String.duplicate("long ", 1000))])
-      {%{"content" => [written, _]}, first} = kept(first)
+      {:ok, first} = applied(doc, [insert(8, String.duplicate("long ", 1000))])
+      %{"content" => [written, _]} = json(first)
       assert written === Map.put(heading, "attrs", %{"level" => 1})
       refute :erts_debug.same(written, heading)
-      {:ok, second} = Tarnish.Step.apply(first, [insert(8, "c")])
-      {%{"content" => [again, _]}, _} = kept(second)
+      {:ok, second} = applied(first, [insert(8, "c")])
+      %{"content" => [again, _]} = json(second)
       assert :erts_debug.same(again, written)
     end
 
     # Steps of every kind, made by Transform ops at random places, in random messages of one to
     # five ops each, applied as Tarnish.Transform.new makes them, or as Step.apply applies the
-    # steps it made, in turn.
+    # steps it made, in one call or one at a time, in turn.
     test "is what Node.to_json gives after steps of every kind, at random", %{schema: schema} do
       json = %{
         "type" => "doc",
@@ -244,43 +222,52 @@ defmodule Tarnish.KeptTest do
       for seed <- 1..20 do
         :rand.seed(:exsss, {seed, seed, seed})
 
-        Enum.reduce(1..200, kept(doc(schema, json)) |> elem(1), fn message, node ->
-          size = content_size(Tarnish.Node.to_json(node))
+        Enum.reduce(1..200, doc(schema, json), fn message, doc ->
+          size = content_size(Tarnish.Node.to_json(doc))
           ops = for _ <- 1..:rand.uniform(5), do: op(size)
 
-          case Tarnish.Transform.new(node, ops) do
+          case Tarnish.Transform.new(doc, ops) do
             {:ok, %{doc: transformed, steps: steps}} ->
               case rem(message, 3) do
                 0 ->
-                  transformed |> kept() |> elem(1)
+                  json(transformed)
+                  transformed
 
                 1 ->
-                  {:ok, applied} = Tarnish.Step.apply(node, steps)
-                  applied |> kept() |> elem(1)
+                  {:ok, applied} = applied(doc, steps)
+                  applied
 
                 2 ->
-                  {:ok, _, applied} = apply_kept(node, steps)
-                  applied
+                  Enum.reduce(steps, doc, fn step, before ->
+                    {:ok, applied} = applied(before, [step])
+                    applied
+                  end)
               end
 
             error ->
-              assert error === Tarnish.Transform.new(plain(node), ops)
+              assert error === Tarnish.Transform.new(plain(doc), ops)
               steps = [%{"stepType" => "replace", "from" => at(size), "to" => at(size)}]
 
-              assert written(Tarnish.Step.apply(node, steps)) ===
-                       written(Tarnish.Step.apply(plain(node), steps))
+              assert written(Tarnish.Step.apply(doc, steps)) ===
+                       written(Tarnish.Step.apply(plain(doc), steps))
 
-              apply_kept(node, steps)
+              applied(doc, steps)
 
-              node
+              doc
           end
         end)
       end
     end
   end
 
-  defp written({:ok, node}), do: {:ok, kept(node) |> elem(0)}
+  defp written({:ok, doc}), do: {:ok, json(doc)}
   defp written(error), do: error
+
+  # The steps alone, which leave the document the JSON the one given kept.
+  defp stepped(doc, steps) do
+    {:ok, ref} = @native.apply_steps_dirty(doc.ref, steps)
+    %{doc | ref: ref}
+  end
 
   defp at(size), do: :rand.uniform(size + 1) - 1
 
@@ -326,35 +313,35 @@ defmodule Tarnish.KeptTest do
   # The schema a bench document holds.
   defp own_schema(path), do: path |> ordered() |> Access.get("schema") |> schema()
 
-  describe "Step.apply_kept" do
+  describe "Step.apply" do
     # prosemirror-transform's tests, each of whose steps applies as one call to the document
-    # read, whose JSON is the map read; one at a time, each to the node the one before made and
-    # wrote; and all but the first in one call, after the first.
-    test "gives what Step.apply and Node.to_json_kept give, for every step of transform.json" do
+    # read, whose JSON is the map read; one at a time, each to the document the one before made;
+    # and all but the first in one call, after the first.
+    test "keeps the JSON a fresh write gives, for every step of transform.json" do
       fixtures = ordered(@fixtures)
       schemas = Enum.map(fixtures["schemas"], &schema/1)
       tests = Jason.decode!(File.read!(@fixtures))["tests"]
 
       kinds =
         for test <- tests,
-            {:ok, node} =
+            {:ok, read} =
               Tarnish.Node.from_json(Enum.at(schemas, test["schema"] || 0), test["start"]),
             steps = test["steps"] || [],
             reduce: %{} do
           kinds ->
-            apply_kept(node, steps)
-            {_, read} = kept(node)
+            applied(read, steps)
+            json(read)
 
             Enum.reduce(steps, read, fn step, before ->
-              case apply_kept(before, [step]) do
-                {:ok, _, written} -> written
+              case applied(before, [step]) do
+                {:ok, changed} -> changed
                 _error -> before
               end
             end)
 
             with [first | rest] when rest != [] <- steps,
-                 {:ok, _, written} <- apply_kept(read, [first]),
-                 do: apply_kept(written, rest)
+                 {:ok, changed} <- applied(read, [first]),
+                 do: applied(changed, rest)
 
             Enum.reduce(steps, kinds, &Map.update(&2, &1["stepType"], 1, fn n -> n + 1 end))
         end
@@ -363,26 +350,12 @@ defmodule Tarnish.KeptTest do
                ~w(addMark addNodeMark attr docAttr removeMark removeNodeMark replace replaceAround)
     end
 
-    test "gives the node's own JSON again for no steps", %{schema: schema} do
-      node = doc(schema, %{"type" => "doc", "content" => [paragraph([text("a")])]})
-      apply_kept(node, [])
-      {:ok, json, kept} = apply_kept(node, [insert(1, "b")])
-      assert {:ok, again, ^kept} = apply_kept(kept, [])
-      assert :erts_debug.same(again, json)
-    end
-
-    test "shares the terms the message before wrote for the nodes the steps left", %{
-      schema: schema
-    } do
-      content = for at <- 1..200, do: paragraph([text("p#{at}")])
-      node = doc(schema, %{"type" => "doc", "content" => content})
-      {:ok, %{"content" => [_ | first]}, kept} = apply_kept(node, [insert(1, "a")])
-      # The next change takes in the first's chunk: to_json_kept writes its nodes again.
-      {:ok, %{"content" => [typed, second | rest]}, _} = apply_kept(kept, [insert(6, "b")])
-      assert typed === paragraph([text("ap1")])
-      assert second === paragraph([text("bp2")])
-      [_ | first_rest] = first
-      assert Enum.all?(Enum.zip(rest, first_rest), fn {a, b} -> :erts_debug.same(a, b) end)
+    test "gives the document itself for no steps", %{schema: schema} do
+      doc = doc(schema, %{"type" => "doc", "content" => [paragraph([text("a")])]})
+      assert {:ok, ^doc} = applied(doc, [])
+      {:ok, changed} = applied(doc, [insert(1, "b")])
+      assert {:ok, ^changed} = applied(changed, [])
+      assert :erts_debug.same(Tarnish.Node.to_json(changed), changed.json)
     end
 
     # A step deep down writes only the nodes along the path to the node it changes, and shares
@@ -400,11 +373,13 @@ defmodule Tarnish.KeptTest do
             ]
           end)
 
-        {before, node} = kept(doc(schema, %{"type" => "doc", "content" => content}))
-        {:ok, json, _} = apply_kept(node, [insert(4 * depth + 5, "x")])
+        doc = doc(schema, %{"type" => "doc", "content" => content})
+        before = json(doc)
+        {:ok, changed} = applied(doc, [insert(4 * depth + 5, "x")])
 
         {changed, shared} =
-          Enum.reduce(1..depth//1, {json, before}, fn _, {%{"content" => [s, q, t]}, old} ->
+          Enum.reduce(1..depth//1, {changed.json, before}, fn _,
+                                                              {%{"content" => [s, q, t]}, old} ->
             %{"content" => [old_s, old_q, old_t]} = old
             assert :erts_debug.same(s, old_s) and :erts_debug.same(t, old_t)
             {q, old_q}
@@ -417,41 +392,38 @@ defmodule Tarnish.KeptTest do
       end
     end
 
-    test "is what Step.apply and Node.to_json_kept give on a node another process holds", %{
-      schema: schema
-    } do
+    test "keeps the same JSON on a document another process holds", %{schema: schema} do
       # A chunk's binary is bigger than 64 bytes, which the processes share rather than copy, so
       # the ref its JSON is of is still the document's own there.
       for count <- [1, 200] do
         content = for at <- 1..count, do: paragraph([text("p#{at}")])
-        node = doc(schema, %{"type" => "doc", "content" => content})
-        {:ok, _, kept} = apply_kept(node, [insert(1, "a")])
+        doc = doc(schema, %{"type" => "doc", "content" => content})
+        {:ok, kept} = applied(doc, [insert(1, "a")])
         parent = self()
 
         child =
           spawn_link(fn ->
             receive do
-              kept ->
-                send(parent, {:applied, kept, Tarnish.Step.apply_kept(kept, [insert(2, "b")])})
+              kept -> send(parent, {:applied, kept, Tarnish.Step.apply(kept, [insert(2, "b")])})
             end
           end)
 
         send(child, kept)
-        assert_receive {:applied, there, {:ok, json, _}}
-        assert {:ok, ^json, _} = apply_kept(there, [insert(2, "b")])
-        {:ok, ^json, _} = apply_kept(kept, [insert(2, "b")])
+        assert_receive {:applied, there, {:ok, %{json: json}}}
+        assert {:ok, %{json: ^json}} = applied(there, [insert(2, "b")])
+        {:ok, %{json: ^json}} = applied(kept, [insert(2, "b")])
       end
     end
 
-    test "is what Step.apply and Node.to_json_kept give with a JSON it wasn't written for", %{
+    test "keeps the JSON a fresh write gives with a JSON it wasn't written for", %{
       schema: schema
     } do
       content = for text <- ~w(one two three), do: paragraph([text(text)])
-      node = doc(schema, %{"type" => "doc", "content" => content})
-      {:ok, _, first} = apply_kept(node, [insert(4, "!")])
-      {:ok, _, second} = apply_kept(first, [insert(10, "!")])
+      doc = doc(schema, %{"type" => "doc", "content" => content})
+      {:ok, first} = applied(doc, [insert(4, "!")])
+      {:ok, second} = applied(first, [insert(10, "!")])
       other = doc(schema, %{"type" => "doc", "content" => [paragraph([text("other")])]})
-      {_, other} = kept(other)
+      {:ok, other} = applied(other, [insert(1, "o")])
 
       for {of, json} <- [
             {first.ref, first.json},
@@ -461,79 +433,78 @@ defmodule Tarnish.KeptTest do
             {second.ref, %{"content" => :not_a_list}},
             {:not, :a_ref},
             {:not_a_ref, first.json},
-            {nil, node.json}
+            {nil, doc.json}
           ],
           from <- [first, second] do
-        apply_kept(%{from | of: of, json: json}, [insert(16, "?")])
+        applied(%{from | of: of, json: json}, [insert(16, "?")])
       end
 
-      {:ok, read} = Tarnish.Step.apply(node, [insert(4, "!")])
-      apply_kept(Map.delete(read, :of), [insert(16, "?")])
+      applied(Map.delete(first, :of), [insert(16, "?")])
     end
 
-    test "fails as Step.apply does", %{schema: schema} do
-      node = doc(schema, %{"type" => "doc", "content" => [paragraph([text("a")])]})
-      {:ok, _, kept} = apply_kept(node, [insert(1, "b")])
+    test "fails as the steps fail", %{schema: schema} do
+      doc = doc(schema, %{"type" => "doc", "content" => [paragraph([text("a")])]})
+      {:ok, kept} = applied(doc, [insert(1, "b")])
 
-      for from <- [node, kept] do
-        assert {:error, _} = apply_kept(from, [insert(100, "x")])
-        assert {:error, _} = apply_kept(from, [insert(1, "x"), %{"stepType" => "nope"}])
+      for from <- [doc, kept] do
+        assert {:error, _} = applied(from, [insert(100, "x")])
+        assert {:error, _} = applied(from, [insert(1, "x"), %{"stepType" => "nope"}])
       end
 
-      assert_raise ArgumentError, fn -> Tarnish.Step.apply_kept(kept, [self()]) end
-      assert_raise ArgumentError, fn -> Tarnish.Step.apply_kept(%{kept | ref: :nope}, []) end
+      assert_raise ArgumentError, fn -> Tarnish.Step.apply(kept, [self()]) end
+
+      assert_raise ArgumentError, fn ->
+        Tarnish.Step.apply(%{kept | ref: :nope}, [insert(1, "x")])
+      end
     end
 
-    # A message that each of Step.apply and to_json_kept takes on alone, on a normal scheduler,
-    # but not both: the write has what the apply leaves of a light call.
+    # A message whose steps alone and whose write alone each a normal scheduler takes on in one
+    # call, but not both: the write has what the steps leave of a light call.
     test "goes to a dirty scheduler past what a normal one takes on in one call", %{
       schema: schema
     } do
       content = for at <- 1..1500, do: paragraph([text("p#{at}")])
-      node = doc(schema, %{"type" => "doc", "content" => content})
-      {:ok, _, kept} = apply_kept(node, [insert(1, "a")])
+      doc = doc(schema, %{"type" => "doc", "content" => content})
+      {:ok, kept} = applied(doc, [insert(1, "a")])
       steps = for _ <- 1..4, do: insert(1, "b")
       assert {:ok, changed} = @native.apply_steps(kept.ref, steps)
       assert @native.to_json_from(changed, kept.json, kept.of) !== :dirty
       assert @native.apply_write(kept.ref, steps, kept.json, kept.of) === :dirty
       {:ok, {_, json}} = @native.apply_write_dirty(kept.ref, steps, kept.json, kept.of)
-      assert {:ok, ^json, _} = apply_kept(kept, steps)
+      assert {:ok, %{json: ^json}} = applied(kept, steps)
     end
   end
 
-  describe "a node's JSON kept for another" do
+  describe "a document's JSON kept for another" do
     setup %{schema: schema} do
       content = for text <- ~w(one two three), do: paragraph([text(text)])
-      %{node: doc(schema, %{"type" => "doc", "content" => content})}
+      %{doc: doc(schema, %{"type" => "doc", "content" => content})}
     end
 
-    test "is what Node.to_json gives on a node older than the one it was written for", %{
-      node: node
+    test "is what Node.to_json gives on a document older than the one it was written for", %{
+      doc: doc
     } do
-      {:ok, first} = Tarnish.Step.apply(node, [insert(4, "!")])
-      {_, first} = kept(first)
-      {:ok, second} = Tarnish.Step.apply(first, [insert(10, "!")])
-      {_, _} = kept(second)
-      {:ok, from_first} = Tarnish.Step.apply(first, [insert(16, "?")])
-      kept(from_first)
+      {:ok, first} = applied(doc, [insert(4, "!")])
+      {:ok, _second} = applied(first, [insert(10, "!")])
+      json(stepped(first, [insert(16, "?")]))
+      applied(first, [insert(16, "?")])
     end
 
-    test "is what Node.to_json gives on a node it wasn't written for", %{
-      node: node,
+    test "is what Node.to_json gives on a document it wasn't written for", %{
+      doc: doc,
       schema: schema
     } do
-      {:ok, one_way} = Tarnish.Step.apply(node, [insert(4, "!")])
-      {:ok, other_way} = Tarnish.Step.apply(node, [insert(16, "?")])
-      {_, other_way} = kept(other_way)
+      one_way = stepped(doc, [insert(4, "!")])
+      {:ok, other_way} = applied(doc, [insert(16, "?")])
       other = doc(schema, %{"type" => "doc", "content" => [paragraph([text("other")])]})
-      {_, other} = kept(other)
+      {:ok, other} = applied(other, [insert(1, "o")])
 
       # The same spec, another schema.
       {:ok, again} =
         @fixtures |> ordered() |> Access.get("schemas") |> hd() |> Tarnish.Schema.new()
 
-      {_, elsewhere} = kept(doc(again, Tarnish.Node.to_json(node)))
-      {:ok, ancestor} = Tarnish.Step.apply(node, [insert(9, "-")])
+      {:ok, elsewhere} = applied(doc(again, Tarnish.Node.to_json(doc)), [insert(1, "e")])
+      ancestor = stepped(doc, [insert(9, "-")])
 
       for {of, json} <- [
             {other_way.ref, other_way.json},
@@ -541,57 +512,56 @@ defmodule Tarnish.KeptTest do
             {elsewhere.ref, elsewhere.json},
             {ancestor.ref, :not_a_map},
             {ancestor.ref, %{"content" => :not_a_list}},
-            {{elem(node.ref, 0), [<<1, 2, 3>>]}, %{}},
-            {{elem(node.ref, 0), [<<1, 2, 3>> | elem(node.ref, 1)]}, %{}},
+            {{elem(doc.ref, 0), [<<1, 2, 3>>]}, %{}},
+            {{elem(doc.ref, 0), [<<1, 2, 3>> | elem(doc.ref, 1)]}, %{}},
             {:not, :a_ref},
             {{1, 2, 3}, one_way.json},
             {:not_a_ref, one_way.json}
           ] do
-        node = %{one_way | of: of, json: json}
-        assert Tarnish.Node.to_json(node) === fresh(one_way)
-        {json, _} = Tarnish.Node.to_json_kept(node)
-        assert json === fresh(one_way)
+        assert Tarnish.Node.to_json(%{one_way | of: of, json: json}) === fresh(one_way)
       end
     end
 
-    test "is none on a node made before nodes kept one", %{node: node} do
-      old = Map.delete(node, :of)
-      assert Tarnish.Node.to_json(old) === fresh(node)
-      {json, kept} = Tarnish.Node.to_json_kept(old)
-      assert json === fresh(node)
-      {:ok, changed} = Tarnish.Step.apply(kept, [insert(4, "!")])
-      kept(changed)
+    test "is none on a document made before documents kept one", %{doc: doc} do
+      old = Map.delete(doc, :of)
+      assert Tarnish.Node.to_json(old) === fresh(doc)
+      assert {:ok, ^old} = Tarnish.Step.apply(old, [])
+      {:ok, changed} = applied(old, [insert(4, "!")])
+      applied(changed, [insert(5, "!")])
     end
   end
 
-  test "a kept node's JSON goes to a dirty scheduler past a normal one's limits", %{
+  test "a kept document's JSON goes to a dirty scheduler past a normal one's limits", %{
     schema: schema
   } do
     long = String.duplicate("long ", 200_000)
-    node = doc(schema, %{"type" => "doc", "content" => [paragraph([text(long)])]})
-    {:ok, changed} = Tarnish.Step.apply(node, [insert(1, "x")])
-    {_, changed} = kept(changed)
-    {:ok, again} = Tarnish.Step.apply(changed, [insert(1, "y")])
+    doc = doc(schema, %{"type" => "doc", "content" => [paragraph([text(long)])]})
+    {:ok, changed} = applied(doc, [insert(1, "x")])
+    {:ok, ref} = @native.apply_steps_dirty(changed.ref, [insert(1, "y")])
+    again = %{changed | ref: ref}
     assert @native.to_json_from(again.ref, again.json, again.of) === :dirty
     expected = fresh(again)
     assert @native.to_json_from_dirty(again.ref, again.json, again.of) === expected
-    assert kept(again) |> elem(0) === expected
+    assert json(again) === expected
+    assert {:ok, %{json: ^expected}} = applied(changed, [insert(1, "y")])
   end
 
   # The heap's size counts a chunk binary as its header only: the chunks of the ref the JSON was
   # written for are bounded apart.
-  test "a kept node's heap holds no more than its JSON written", %{schema: schema} do
+  test "a kept document's heap holds no more than its JSON written", %{schema: schema} do
     content = for index <- 1..50, do: paragraph([text("paragraph #{index}")])
     json = %{"type" => "doc", "content" => content}
-    node = json |> then(&doc(schema, &1)) |> chain()
-    written = Tarnish.Node.to_json(node)
-    assert :erts_debug.size(node) <= :erts_debug.flat_size(written) + 256
+    doc = json |> then(&doc(schema, &1)) |> chain()
+    written = Tarnish.Node.to_json(doc)
+    assert :erts_debug.size(doc) <= :erts_debug.flat_size(written) + 256
     # The document the JSON was written for shares its oldest chunk, the biggest by far.
     bytes = fn {_schema, chunks} -> chunks |> Enum.map(&byte_size/1) |> Enum.sum() end
 
     for at <- [3, 40, 200] do
-      {:ok, changed} = Tarnish.Step.apply(node, [insert(at, "y")])
-      assert bytes.(changed.of) <= 2 * bytes.(changed.ref)
+      {:ok, ref} = @native.apply_steps_dirty(doc.ref, [insert(at, "y")])
+      assert bytes.(doc.ref) <= 2 * bytes.(ref)
+      {:ok, changed} = applied(doc, [insert(at, "y")])
+      assert :erts_debug.size(changed) <= :erts_debug.flat_size(changed.json) + 256
     end
   end
 end

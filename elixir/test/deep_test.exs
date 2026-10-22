@@ -50,21 +50,11 @@ defmodule Tarnish.DeepTest do
        %{schema: schema} do
     doc = doc(schema, %{"type" => "doc", "content" => [quotes(@paragraph)]})
     text = %{"type" => "text", "text" => "x"}
-    {:ok, changed} = Tarnish.Step.apply(doc, [replace(@depth + 1, @depth + 1, [text])])
-    {_, changed} = Tarnish.Node.to_json_kept(changed)
-    {:ok, again} = Tarnish.Step.apply(changed, [replace(@depth + 1, @depth + 1, [text])])
-    {json, _} = Tarnish.Node.to_json_kept(again)
-    paragraph = %{"type" => "paragraph", "content" => [%{text | "text" => "xx"}]}
-    assert json === %{"type" => "doc", "content" => [quotes(paragraph)]}
-  end
-
-  test "a kept document changed deep down by Step.apply_kept shares the JSON written before",
-       %{schema: schema} do
-    doc = doc(schema, %{"type" => "doc", "content" => [quotes(@paragraph)]})
-    text = %{"type" => "text", "text" => "x"}
     step = [replace(@depth + 1, @depth + 1, [text])]
-    {:ok, _, changed} = Tarnish.Step.apply_kept(doc, step)
-    {:ok, json, again} = Tarnish.Step.apply_kept(changed, step)
+    {:ok, changed} = Tarnish.Step.apply(doc, step)
+    {:ok, again} = Tarnish.Step.apply(changed, step)
+    json = Tarnish.Node.to_json(again)
+    assert :erts_debug.same(json, again.json)
     paragraph = %{"type" => "paragraph", "content" => [%{text | "text" => "xx"}]}
     assert json === %{"type" => "doc", "content" => [quotes(paragraph)]}
     assert Tarnish.Node.to_json(Map.merge(again, %{json: nil, of: :none})) === json
