@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
-use super::node::{Change, Node};
+use super::node::Node;
 use super::schema::Schema;
 use super::view::{NodeRef, SetRef};
 use crate::chunk::{
@@ -194,28 +194,91 @@ impl<'k, 'a> Copier<'k, 'a> {
     }
 }
 
+/// What a replace makes of a document: `top` with the descendant `path` leads to, child index
+/// by child index, replaced by `bottom`, the nodes along the path not written yet. With no path,
+/// `top` is `bottom`, the document.
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct Change<'a> {
+    top: Node<'a>,
+    path: Vec<u32>,
+    bottom: Node<'a>,
+}
+
 impl<'a> Change<'a> {
+    /// The change that gives `doc`, written already.
+    pub fn whole(doc: Node<'a>) -> Change<'a> {
+        Change {
+            top: doc.clone(),
+            path: Vec::new(),
+            bottom: doc,
+        }
+    }
+
+    /// `top` with the descendant `path` leads to replaced by `bottom`.
+    pub(crate) fn new(top: Node<'a>, path: Vec<u32>, bottom: Node<'a>) -> Change<'a> {
+        match path.is_empty() {
+            true => Change::whole(bottom),
+            false => Change { top, path, bottom },
+        }
+    }
+
+    /// The node the path starts from: the document changed, or with no path the document.
+    pub fn top(&self) -> &Node<'a> {
+        &self.top
+    }
+
+    pub fn path(&self) -> &[u32] {
+        &self.path
+    }
+
+    pub fn bottom(&self) -> &Node<'a> {
+        &self.bottom
+    }
+
+    /// Whether the change gives `node` itself.
+    pub fn is(&self, node: &Node) -> bool {
+        self.path.is_empty() && self.bottom.ptr_eq(node)
+    }
+
+    /// The changed document, written.
+    pub fn into_node(self) -> Node<'a> {
+        self.top.with_path(&self.path, self.bottom)
+    }
+
     /// The changed document written into a new chunk, as [`Node::flatten`] writes it, the nodes
     /// along the path written there and nowhere else.
     pub fn flatten(&self, kept: &[Arc<Chunk<'a>>]) -> Node<'a> {
         if self.path.is_empty() {
             return self.bottom.flatten(kept);
         }
-        let mut copier = Copier::new(self.doc.schema(), kept);
-        let (id, _) = copier.copy_path(self.doc.view(), &self.path, self.bottom.view());
+        let mut copier = Copier::new(self.top.schema(), kept);
+        let (id, _) = copier.copy_path(self.top.view(), &self.path, self.bottom.view());
         Node::at(copier.builder.seal(), id)
     }
 
-    /// The chunks the change wrote, the document's and the bottom's, and the bytes the nodes
-    /// along the path take once written: a record and a list each.
-    pub fn written(&self) -> ([&Arc<Chunk<'a>>; 2], usize) {
+    /// The bytes of what the change wrote, which [`flatten`](Self::flatten) writes no less
+    /// than: the chunks of the top and the bottom and those they import, and theirs, each once,
+    /// up to the chunks `held`, which import only one another; and the nodes along the path once
+    /// written, a record and a list each. A chunk is known by its address.
+    pub fn written_bytes(&self, held: &[Arc<Chunk<'a>>]) -> usize {
         let mut bytes = 0;
-        let mut node = self.doc.view();
+        let mut node = self.top.view();
         for &index in &self.path {
             bytes += WIDTHS[NODES] + WIDTHS[KIDS] * node.child_count() as usize;
             node = node.child(index);
         }
-        ([self.doc.chunk(), self.bottom.chunk()], bytes)
+        let mut seen = FxHashSet::default();
+        let mut next: Vec<&Chunk> = vec![self.top.chunk(), self.bottom.chunk()];
+        while let Some(chunk) = next.pop() {
+            let held = || held.iter().any(|held| std::ptr::eq(&**held, chunk));
+            if !seen.insert(std::ptr::from_ref(chunk).addr()) || held() {
+                continue;
+            }
+            bytes += chunk.bytes().len();
+            next.extend(chunk.imports().iter().map(|import| &**import));
+        }
+        bytes
     }
 }
 

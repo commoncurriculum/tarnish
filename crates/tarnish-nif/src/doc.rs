@@ -7,7 +7,6 @@
 //! twice the size of the one after it, and there are few of them.
 
 use std::borrow::Cow;
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use rustler::{Binary, Encoder, Env, NewBinary, ResourceArc, Term};
@@ -18,10 +17,6 @@ use crate::prosemirror::SchemaResource;
 
 /// The most chunks a document is held in.
 const MOST_CHUNKS: usize = 8;
-
-/// The chunks a change wrote that are searched for one found again, past which they are kept
-/// in a set.
-const WRITTEN_SEARCHED: usize = 32;
 
 pub struct Doc<'a> {
     /// The document's ref, `{schema, chunks}`.
@@ -138,7 +133,7 @@ impl<'a> Doc<'a> {
 
     /// The ref of `doc`, which this document was changed into.
     pub fn changed(&self, env: Env<'a>, change: &Change<'a>) -> Term<'a> {
-        if change.path.is_empty() && change.bottom.ptr_eq(&self.root()) {
+        if change.is(&self.root()) {
             return self.term;
         }
         let (flat, kept) = self.flatten(change);
@@ -152,31 +147,7 @@ impl<'a> Doc<'a> {
     /// change wrote, which hold no less than the new chunk will, tell how big it is before it's
     /// written, so that it's written once.
     fn flatten(&self, change: &Change<'a>) -> (Node<'a>, usize) {
-        // The chunks the change wrote: those `doc` imports, and theirs, up to the chunks held,
-        // which import only one another. A chunk is known by its address, and the many a change
-        // deep down writes are found again in a set.
-        let held = |chunk: &Chunk| self.chunks.iter().any(|held| std::ptr::eq(&**held, chunk));
-        let (mut written, mut many) = (Vec::new(), HashSet::new());
-        let (starts, mut size) = change.written();
-        let mut next: Vec<&Chunk> = starts.into_iter().map(|chunk| &**chunk).collect();
-        while let Some(chunk) = next.pop() {
-            let address = std::ptr::from_ref(chunk).addr();
-            let seen = match written.len() < WRITTEN_SEARCHED {
-                true => written.contains(&address),
-                false => !many.insert(address),
-            };
-            if seen || held(chunk) {
-                continue;
-            }
-            if written.len() < WRITTEN_SEARCHED {
-                written.push(address);
-                if written.len() == WRITTEN_SEARCHED {
-                    many.extend(written.iter().copied());
-                }
-            }
-            size += chunk.bytes().len();
-            next.extend(chunk.imports().iter().map(|import| &**import));
-        }
+        let mut size = change.written_bytes(&self.chunks);
         let mut kept = self.chunks.len();
         while kept > 1 {
             let newest = self.chunks[kept - 1].bytes().len();

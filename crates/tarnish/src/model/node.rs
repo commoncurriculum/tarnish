@@ -4,6 +4,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use super::attrs::Attrs;
+use super::compact::Change;
 use super::content::ContentMatch;
 use super::fragment::{Fragment, LeafTextHook, NodeVisitor};
 use super::mark::{Mark, Marks};
@@ -31,33 +32,6 @@ pub struct Node<'a> {
     id: u32,
     /// The node's chunk, when its content isn't in it.
     own: Option<Arc<Chunk<'a>>>,
-}
-
-/// What a replace makes of a document: `doc` with the descendant `path` leads to, child index
-/// by child index from the top, replaced by `bottom`, the nodes along the path not written yet.
-/// With no path, `bottom` is the document.
-#[doc(hidden)]
-#[derive(Clone)]
-pub struct Change<'a> {
-    pub doc: Node<'a>,
-    pub path: Vec<u32>,
-    pub bottom: Node<'a>,
-}
-
-impl<'a> Change<'a> {
-    /// The change that gives `doc`, written already.
-    pub fn whole(doc: Node<'a>) -> Change<'a> {
-        Change {
-            doc: doc.clone(),
-            path: Vec::new(),
-            bottom: doc,
-        }
-    }
-
-    /// The changed document, written.
-    pub fn into_node(self) -> Node<'a> {
-        self.doc.with_path(&self.path, self.bottom)
-    }
 }
 
 /// A child found by [`Node::child_after`] or [`Node::child_before`]: the child, if there is one,
@@ -577,11 +551,7 @@ impl<'a> Node<'a> {
                 false => (path, bottom),
             }
         };
-        Ok(Change {
-            doc: self,
-            path,
-            bottom,
-        })
+        Ok(Change::new(self, path, bottom))
     }
 
     /// The node with the descendant `path` leads to replaced by `bottom`, each node along the

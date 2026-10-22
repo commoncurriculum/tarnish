@@ -49,7 +49,12 @@ pub fn json<'a, 'v>(
         base,
     };
     let read = read.map(|read| (read.id(), json));
-    sharer.path(change.doc.view(), &change.path, change.bottom.view(), read)
+    sharer.path(
+        change.top().view(),
+        change.path(),
+        change.bottom().view(),
+        read,
+    )
 }
 
 struct Sharer<'a, 'v> {

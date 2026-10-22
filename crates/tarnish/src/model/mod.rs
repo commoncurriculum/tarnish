@@ -19,12 +19,13 @@ mod text;
 mod view;
 
 pub use attrs::{AttributeDefault, AttributeSpec, Attrs, Validate, ValidateHook};
+pub use compact::Change;
 pub use compare_deep::{compare_deep, objects_equal};
 pub use content::{ContentExpr, ContentMatch};
 pub use fields::{Field, Fields, Json};
 pub use fragment::{Fragment, LeafTextHook, NodeVisitor};
 pub use mark::{Mark, Marks};
-pub use node::{Change, ChildAt, Node};
+pub use node::{ChildAt, Node};
 pub use replace::{REPLACE_ERROR, Slice};
 pub use resolved_pos::{NodePredicate, NodeRange, ResolvedPos};
 pub use schema::{
