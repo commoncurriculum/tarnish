@@ -545,9 +545,9 @@ rounds' means. Rounds of the same row spread by about a fifth either way on this
 | Read it from JSON text | 552 | 183 | 904 with `JSON` |
 | Check it | 141 | 17 | 19 |
 | Apply 10 steps | 13 | 10 | 29, with the write |
-| Write the changed document as a JSON value (Elixir: a map) | 50 | 192 | 0.9, done by the steps |
+| Write the changed document as a JSON value (Elixir: a map) | 50 | 192; nothing with `json()` | 0.9, done by the steps |
 | Write it as JSON text | 264 | 77 | 706 with `JSON` |
-| Read a value, apply 10 steps, write a value | 300 | 221 | 384 |
+| Read a value, apply 10 steps, write a value | 300 | 221; about 70 with `json()` | 384 |
 | Read JSON text, apply 10 steps, write JSON text | 899 | 295 | 2,450 with `JSON` |
 
 A server that keeps the document between messages, as a socket's process keeps a
@@ -576,11 +576,12 @@ as a socket does, typing into one of 10 or 100 places in turn.
   string longer than 24 bytes is an allocation, which the call frees again. Shorter strings, such
   as type names and most attribute values, are held in place. ProseMirror's `toJSON` shares the
   node's own `attrs` object and strings, and V8 frees what it made later, outside the call. Code
-  that only reads the JSON should use `json()`, which reads it in place from the document: it
-  builds nothing, reading a few keys costs next to nothing, and reading every value of the bench
-  document took 68 µs to `to_json`'s 194 in the same run. It compares equal to the `Value`,
-  writes the same text, and `to_value` copies it out for code that edits it. To send or store a
-  document, write its JSON text.
+  that only reads the JSON should use `json()`, which reads it in place from the document and
+  builds nothing. It compares equal to the `Value`, writes the same text, and `to_value` copies
+  it out for code that edits it. Measured in one session on a day this VM ran about half again
+  slower than the tables: reading a value, applying the 10 steps and taking `json()` took 92 µs,
+  against 327 with `to_json` and ProseMirror's 454; reading every value of the view as well took
+  174. To send or store a document, write its JSON text.
 - **Elixir reading.** Reading a map takes one and a half to two times as long as ProseMirror's
   `fromJSON`, and a read, the steps and a write together about a quarter longer than ProseMirror's,
   because of what it takes to get the map out of the VM. Code that forbids `unsafe` reads a term

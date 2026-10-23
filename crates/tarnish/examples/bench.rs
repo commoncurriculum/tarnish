@@ -76,6 +76,11 @@ fn main() {
         let node = Node::from_json(&schema, doc).unwrap();
         drop(api::apply_steps(&node, steps).unwrap().to_json())
     });
+    time("fromJSON, apply 10 steps, JSON view", &mut || {
+        let node = Node::from_json(&schema, doc).unwrap();
+        let changed = api::apply_steps(&node, steps).unwrap();
+        std::hint::black_box(changed.json().len());
+    });
     time("fromJSON, apply 10 steps, JSON view read", &mut || {
         let node = Node::from_json(&schema, doc).unwrap();
         std::hint::black_box(visit(api::apply_steps(&node, steps).unwrap().json()));
