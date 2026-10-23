@@ -564,7 +564,6 @@ as a socket does, typing into one of 10 or 100 places in turn.
 | One step, after 100 typed in 100 places | 47 | 12 | 69 | 8.4 |
 | One step, chained in 10 places | 44 | 14 | 71 | 9.1 |
 | One step, chained in 100 places | 49 | 17 | 68 | 11 |
-| A step alone, without the write | 0.6 | 11 | 0.8 | 9.8 |
 
 - **JSON text.** ProseMirror's reads are `JSON.parse` then `fromJSON`, and its writes
   `JSON.stringify(doc.toJSON())`. Rust reads text through simd-json's tape straight into the
@@ -587,9 +586,11 @@ as a socket does, typing into one of 10 or 100 places in turn.
   applies the steps, sharing every map of the document before it that is still what ProseMirror
   writes, so it writes only what the steps changed, and `Tarnish.Node.to_json` after it returns
   that JSON. ProseMirror's `toJSON` writes every node each time, which is most of its message.
-- **One step.** A step alone costs tarnish about 10 µs from Elixir, against ProseMirror's 1: the
-  NIF call, reading the step's term and copying the changed nodes. Each step of a message pays it,
-  and it costs far less than the `toJSON` it saves.
+- **One step.** Every row of the second table is the steps and the write together, as
+  ProseMirror's `toJSON` and `Tarnish.Step.apply` both pay it. ProseMirror applies a step alone
+  in under 1 µs and spends the rest of the message writing every node. tarnish's step, with the
+  write of what it changed, costs about 10 µs from Elixir: the NIF call, reading the step's term,
+  the apply and the copy of the changed nodes.
 
 To reproduce:
 
