@@ -10,12 +10,16 @@ defmodule Tarnish.Node do
   @native Application.compile_env(:tarnish, :native, Tarnish.Native)
   @compile {:no_warn_undefined, @native}
 
-  # The binaries of the chunks that hold the node, newest first, which Rust reads in place, as
-  # `{schema, chunks}`. And the JSON it was read from, whose parts its own JSON shares where
-  # they're what ProseMirror writes.
+  # The binaries of the chunks that hold the document, newest first, which Rust reads in place,
+  # as `{schema, chunks}`. The document keeps its JSON, and `of`, what that JSON is of: nil for
+  # the JSON it was read from, whose parts are what ProseMirror writes for the nodes read, or the
+  # ref `Tarnish.Step.apply/2` last wrote it for, whose parts are the JSON of that ref's nodes.
+  # `Tarnish.Step.apply/2` keeps it current, so `to_json/1` after it costs nothing, and a
+  # socket's process should keep the document between messages. A struct made before `of` was
+  # added has none, which reads as nil.
   @derive {Inspect, only: []}
   @enforce_keys [:ref, :json]
-  defstruct [:ref, :json]
+  defstruct [:ref, :json, of: nil]
 
   @type t :: %__MODULE__{}
 
@@ -29,10 +33,25 @@ defmodule Tarnish.Node do
     with {:ok, ref} <- read, do: {:ok, %__MODULE__{ref: ref, json: json}}
   end
 
-  @doc "The node's JSON, as `node.toJSON()` gives it."
+  @doc """
+  The document's JSON, as `node.toJSON()` gives it.
+
+  After `Tarnish.Step.apply/2` this is the JSON it wrote, and costs nothing. Otherwise it is
+  written, sharing the parts of the JSON the document keeps for the nodes it holds of it.
+  """
   @spec to_json(t()) :: Tarnish.json()
-  def to_json(%__MODULE__{ref: ref, json: json}) do
-    with :dirty <- @native.to_json(ref, json), do: @native.to_json_dirty(ref, json)
+  def to_json(%__MODULE__{ref: ref, json: json} = doc) do
+    case Map.get(doc, :of) do
+      nil ->
+        with :dirty <- @native.to_json(ref, json), do: @native.to_json_dirty(ref, json)
+
+      ^ref ->
+        json
+
+      of ->
+        with :dirty <- @native.to_json_from(ref, json, of),
+             do: @native.to_json_from_dirty(ref, json, of)
+    end
   end
 
   @doc "Checks that the node conforms to its schema, as `node.check()` does."

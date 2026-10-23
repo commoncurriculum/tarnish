@@ -4,6 +4,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use super::attrs::Attrs;
+use super::compact::Change;
 use super::content::ContentMatch;
 use super::fragment::{Fragment, LeafTextHook, NodeVisitor};
 use super::mark::{Mark, Marks};
@@ -17,6 +18,7 @@ use crate::Text;
 use crate::chunk::{
     ASCII, Builder, Chunk, EMPTY_OBJECT, EXTERN, Holder, Kid, NODES, Record, TEXT_NODE, ValueRef,
 };
+use crate::js::stack;
 use crate::json::{self, Map};
 use crate::{Error, Result};
 
@@ -478,7 +480,7 @@ impl<'a> Node<'a> {
         if from == 0 && to == self.content.size() {
             return self.clone();
         }
-        self.copy(self.content.cut(from, to))
+        self.content.cut_content(from, to).copy_into(self)
     }
 
     /// A text node with only its text from `from` to `to`, which mustn't be empty; `None` for
@@ -522,50 +524,73 @@ impl<'a> Node<'a> {
     /// one of its children, and nothing else holds the document or the list of its children,
     /// the new child takes the old one's place in the list, which isn't copied.
     pub fn into_replaced(self, from: usize, to: usize, slice: &Slice<'a>) -> Result<Node<'a>> {
+        Ok(self.replace_change(from, to, slice)?.into_node())
+    }
+
+    /// [`into_replaced`](Self::into_replaced), leaving the nodes along the path to the deepest
+    /// node the range lies inside unwritten.
+    pub(crate) fn replace_change(
+        self,
+        from: usize,
+        to: usize,
+        slice: &Slice<'a>,
+    ) -> Result<Change<'a>> {
         // The positions hold the node, which must be held by nothing else to change in place.
-        let replaced = {
+        let (path, bottom) = {
             let start = self.resolve(from)?;
             let end = if to == from {
                 None
             } else {
                 Some(self.resolve(to)?)
             };
-            replace::replace_top(&start, end.as_ref().unwrap_or(&start), slice)?
+            let (path, bottom) =
+                replace::replace_top(&start, end.as_ref().unwrap_or(&start), slice)?;
+            // A replace that changes nothing deep down gives the document itself.
+            match !path.is_empty() && bottom.ptr_eq(start.node(path.len())) {
+                true => return Ok(Change::whole(self)),
+                false => (path, bottom),
+            }
         };
-        Ok(match replaced {
-            replace::Replaced::Node(node) => node,
-            replace::Replaced::Child(index, child) => self.with_child(index as u32, child),
-        })
+        Ok(Change::new(self, path, bottom))
+    }
+
+    /// The node with the descendant `path` leads to replaced by `bottom`, each node along the
+    /// path given the child below it.
+    pub(crate) fn with_path(self, path: &[u32], bottom: Node<'a>) -> Node<'a> {
+        let [index, below @ ..] = path else {
+            return bottom;
+        };
+        let child = match below {
+            [] => bottom,
+            _ => {
+                let child = self.maybe_child(*index as usize);
+                let child = child.expect("a child on the path");
+                stack::grow(|| child.with_path(below, bottom))
+            }
+        };
+        self.with_child(*index, child)
     }
 
     /// The node with its child at `index` replaced: in place, when the node's record is in a
-    /// chunk only the node holds, and its list in one only that chunk holds.
+    /// chunk only the node holds, and its list in that chunk or in one only that chunk holds.
     fn with_child(self, index: u32, child: Node<'a>) -> Node<'a> {
         let Node {
-            content,
-            record,
-            id,
-            own,
+            content, id, own, ..
         } = self;
-        let node = match own {
-            None => Node {
-                content,
-                record,
-                id,
-                own: None,
-            },
-            Some(mut chunk) => {
-                // The content holds the list's chunk, which nothing else may hold to change it.
-                drop(content);
-                let size = child.node_size() as u32;
-                if Chunk::replace_kid_in_place(&mut chunk, id, index, child.chunk(), child.id, size)
-                {
-                    return Node::at(chunk, id);
-                }
-                Node::at(chunk, id)
-            }
+        // The content holds the list's chunk, which is the node's own when it has no other,
+        // and which nothing else may hold to change it.
+        let mut chunk = match own {
+            Some(chunk) => chunk,
+            None => content.into_chunk().expect("a node is in a chunk"),
         };
-        node.copy(node.content.replace_child(index as usize, child))
+        let size = child.node_size() as u32;
+        if Chunk::replace_kid_in_place(&mut chunk, id, index, child.chunk(), child.id, size) {
+            return Node::at(chunk, id);
+        }
+        let node = Node::at(chunk, id);
+        node.content
+            .replace_child_content(index as usize, child)
+            .copy_into(&node)
     }
 
     /// The node directly after `pos`.

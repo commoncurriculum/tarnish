@@ -9,10 +9,10 @@
 use rustler::{Encoder, Env, NifResult, Resource, ResourceArc, Term};
 use tarnish::js::stack;
 use tarnish::transform::TRANSFORM_ERROR;
-use tarnish::{Error, Node, REPLACE_ERROR, Schema, Text, Value, api};
+use tarnish::{Change, Error, Node, REPLACE_ERROR, Schema, Text, Value, api};
 
 use crate::doc::Doc;
-use crate::share;
+use crate::share::{self, Base};
 use crate::term::{Reader, Unread, Writer};
 use crate::view;
 
@@ -88,9 +88,20 @@ impl From<Unread> for Unanswered {
 
 type Answer<'a> = Result<Term<'a>, Unanswered>;
 
+/// A call, where a chunk found corrupt, which only a ref tarnish didn't write holds, is a bad
+/// argument, as a ref that doesn't load is.
+fn unless_corrupt<'a>(call: impl FnOnce() -> Answer<'a>) -> Answer<'a> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(call)).unwrap_or_else(|panic| match panic
+        .downcast_ref::<&str>(
+    ) {
+        Some(&message) if message == tarnish::chunk::CORRUPT => Err(Unanswered::BadArg),
+        _ => std::panic::resume_unwind(panic),
+    })
+}
+
 /// Makes a call on the caller's scheduler.
 fn normal<'a>(env: Env<'a>, call: impl FnOnce(&Limits) -> Answer<'a>) -> NifResult<Term<'a>> {
-    match crate::light(env, || call(&NORMAL)) {
+    match crate::light(env, || unless_corrupt(|| call(&NORMAL))) {
         Ok(term) => Ok(term),
         Err(Unanswered::Dirty) => Ok(crate::dirty(env)),
         Err(Unanswered::BadArg) => Err(rustler::Error::BadArg),
@@ -99,7 +110,7 @@ fn normal<'a>(env: Env<'a>, call: impl FnOnce(&Limits) -> Answer<'a>) -> NifResu
 
 /// Makes a call on a dirty scheduler, with no limits.
 fn dirty<'a>(call: impl FnOnce(&Limits) -> Answer<'a>) -> NifResult<Term<'a>> {
-    match call(&DIRTY) {
+    match unless_corrupt(|| call(&DIRTY)) {
         Ok(term) => Ok(term),
         Err(Unanswered::Dirty) => unreachable!("a dirty call has no limits"),
         Err(Unanswered::BadArg) => Err(rustler::Error::BadArg),
@@ -139,12 +150,21 @@ fn read(limits: &Limits, json: Term) -> Result<Value, Unanswered> {
     Ok(Reader::new(limits.read).read(json)?)
 }
 
-/// The steps, when there are few enough for the limits to apply to `doc`.
-fn steps(limits: &Limits, doc: &Node, steps: Term) -> Result<Value, Unanswered> {
+/// The steps, when there are few enough for the limits to apply to `doc`, and the work of the
+/// apply limit applying them takes.
+fn steps(limits: &Limits, doc: &Node, steps: Term) -> Result<(Value, usize), Unanswered> {
     let steps = read(limits, steps)?;
     let count = steps.as_array().map_or(0, Vec::len);
-    within(count * (doc.child_count() + 1), limits.apply)?;
-    Ok(steps)
+    let work = count * (doc.child_count() + 1);
+    within(work, limits.apply)?;
+    Ok((steps, work))
+}
+
+/// The write limit's share that `applied` of the apply limit leaves, so that a call that applies
+/// steps and writes the JSON takes on no more than one that does either.
+fn write_left(limits: &Limits, applied: usize) -> usize {
+    let left = limits.apply.saturating_sub(applied) as u128;
+    (limits.write as u128 * left / limits.apply as u128) as usize
 }
 
 /// The ops, when the positions they span are few enough for the limits to apply to `doc`: an
@@ -167,10 +187,48 @@ fn read_node<'a>(env: Env<'a>, limits: &Limits, schema: Term<'a>, json: Term<'a>
     Ok(respond(env, doc, |doc| crate::doc::read(env, schema, &doc)))
 }
 
-fn write_node<'a>(env: Env<'a>, limits: &Limits, doc: Term<'a>, json: Term<'a>) -> Answer<'a> {
+/// The document's JSON, as [`write_sharing`] writes it.
+fn write_node<'a>(
+    env: Env<'a>,
+    limits: &Limits,
+    doc: Term<'a>,
+    json: Term<'a>,
+    of: Option<Term<'a>>,
+) -> Answer<'a> {
     let doc = load(doc)?;
-    share::json(env, doc.view(), doc.read(), json, limits.write)
-        .map_err(|share::TooBig| Unanswered::Dirty)
+    write_sharing(
+        env,
+        &Change::whole(doc.root()),
+        &doc,
+        json,
+        of,
+        limits.write,
+    )
+}
+
+/// The JSON of what `change` makes of `doc`, sharing the map `json`: the map `doc` was read from
+/// when `of` is `None`, or else the map written for the document `of` names, which is `doc` or
+/// one `doc` may have been changed from. A node of that document is its map again. When `of`
+/// names no such document, every node is written anew.
+fn write_sharing<'a>(
+    env: Env<'a>,
+    change: &Change<'_>,
+    doc: &Doc<'a>,
+    json: Term<'a>,
+    of: Option<Term<'a>>,
+    limit: usize,
+) -> Answer<'a> {
+    let beside;
+    let (read, base) = match of {
+        None => (Some(doc.read()), Base::Read),
+        // Most often `doc` itself, which is loaded already.
+        Some(of) if doc.is_ref(of) => (Some(doc.view()), Base::Written),
+        Some(of) => {
+            beside = Doc::load_beside(of, doc);
+            (beside.as_ref().map(Doc::view), Base::Written)
+        }
+    };
+    share::json(env, change, read, json, base, limit).map_err(|share::TooBig| Unanswered::Dirty)
 }
 
 fn check_node<'a>(env: Env<'a>, limits: &Limits, doc: Term<'a>) -> Answer<'a> {
@@ -183,10 +241,39 @@ fn check_node<'a>(env: Env<'a>, limits: &Limits, doc: Term<'a>) -> Answer<'a> {
 }
 
 fn apply<'a>(env: Env<'a>, limits: &Limits, doc: Term<'a>, json: Term<'a>) -> Answer<'a> {
-    let doc = load(doc)?;
+    let doc = Doc::load_for_steps(doc).ok_or(Unanswered::BadArg)?;
     let root = doc.root();
-    let applied = api::apply_steps(&root, &steps(limits, &root, json)?);
-    Ok(respond(env, applied, |node| doc.changed(env, &node)))
+    let applied = api::apply_steps_change(&root, &steps(limits, &root, json)?.0);
+    Ok(respond(env, applied, |change| doc.changed(env, &change)))
+}
+
+/// The steps applied, as [`apply`] applies them, and the JSON of the document they make, as
+/// [`write_node`] writes it with `of`, `nil` for none, in one: `{:ok, {ref, json}}`, or the
+/// failure.
+///
+/// The JSON is written from the document the steps make before its chunks are flattened into
+/// one, whose nodes the steps left are still the nodes of the document they were applied to. So
+/// when `json` is the map written for this very document, those nodes are that map's again, and
+/// only the nodes the steps changed are written.
+fn apply_written<'a>(
+    env: Env<'a>,
+    limits: &Limits,
+    doc: Term<'a>,
+    steps: Term<'a>,
+    json: Term<'a>,
+    of: Term<'a>,
+) -> Answer<'a> {
+    let loaded = Doc::load_for_steps(doc).ok_or(Unanswered::BadArg)?;
+    let root = loaded.root();
+    let (steps, applying) = self::steps(limits, &root, steps)?;
+    let change = match api::apply_steps_change(&root, &steps) {
+        Ok(change) => change,
+        Err(failed) => return Ok(failure(env, failed)),
+    };
+    let limit = write_left(limits, applying);
+    let of = (of != rustler::types::atom::nil().to_term(env)).then_some(of);
+    let written = write_sharing(env, &change, &loaded, json, of, limit)?;
+    Ok((ok(), (loaded.changed(env, &change), written)).encode(env))
 }
 
 /// Steps' term, when they're small enough for the limits: a step undoing a deletion holds the
@@ -221,7 +308,7 @@ fn within_size(value: &Value, left: &mut usize) -> Result<(), Unanswered> {
 
 fn invert<'a>(env: Env<'a>, limits: &Limits, doc: Term<'a>, json: Term<'a>) -> Answer<'a> {
     let doc = load(doc)?.root();
-    match api::invert_steps(&doc, &steps(limits, &doc, json)?) {
+    match api::invert_steps(&doc, &steps(limits, &doc, json)?.0) {
         Ok(steps) => Ok((ok(), write_steps(env, limits, &steps)?).encode(env)),
         Err(failed) => Ok(failure(env, failed)),
     }
@@ -233,7 +320,7 @@ fn transformed<'a>(env: Env<'a>, limits: &Limits, doc: Term<'a>, json: Term<'a>)
     match api::transform(&root, &ops(limits, &root, json)?) {
         Ok((node, steps)) => {
             let steps = write_steps(env, limits, &steps)?;
-            Ok((ok(), doc.changed(env, &node), steps).encode(env))
+            Ok((ok(), doc.changed(env, &Change::whole(node)), steps).encode(env))
         }
         Err(failed) => Ok(failure(env, failed)),
     }
@@ -302,12 +389,32 @@ fn node_from_json_dirty<'a>(env: Env<'a>, schema: Term<'a>, json: Term<'a>) -> N
 
 #[rustler::nif]
 fn to_json<'a>(env: Env<'a>, doc: Term<'a>, json: Term<'a>) -> NifResult<Term<'a>> {
-    normal(env, |limits| write_node(env, limits, doc, json))
+    normal(env, |limits| write_node(env, limits, doc, json, None))
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
 fn to_json_dirty<'a>(env: Env<'a>, doc: Term<'a>, json: Term<'a>) -> NifResult<Term<'a>> {
-    dirty(|limits| write_node(env, limits, doc, json))
+    dirty(|limits| write_node(env, limits, doc, json, None))
+}
+
+#[rustler::nif]
+fn to_json_from<'a>(
+    env: Env<'a>,
+    doc: Term<'a>,
+    json: Term<'a>,
+    of: Term<'a>,
+) -> NifResult<Term<'a>> {
+    normal(env, |limits| write_node(env, limits, doc, json, Some(of)))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn to_json_from_dirty<'a>(
+    env: Env<'a>,
+    doc: Term<'a>,
+    json: Term<'a>,
+    of: Term<'a>,
+) -> NifResult<Term<'a>> {
+    dirty(|limits| write_node(env, limits, doc, json, Some(of)))
 }
 
 #[rustler::nif]
@@ -328,6 +435,30 @@ fn apply_steps<'a>(env: Env<'a>, doc: Term<'a>, steps: Term<'a>) -> NifResult<Te
 #[rustler::nif(schedule = "DirtyCpu")]
 fn apply_steps_dirty<'a>(env: Env<'a>, doc: Term<'a>, steps: Term<'a>) -> NifResult<Term<'a>> {
     dirty(|limits| apply(env, limits, doc, steps))
+}
+
+#[rustler::nif]
+fn apply_write<'a>(
+    env: Env<'a>,
+    doc: Term<'a>,
+    steps: Term<'a>,
+    json: Term<'a>,
+    of: Term<'a>,
+) -> NifResult<Term<'a>> {
+    normal(env, |limits| {
+        apply_written(env, limits, doc, steps, json, of)
+    })
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn apply_write_dirty<'a>(
+    env: Env<'a>,
+    doc: Term<'a>,
+    steps: Term<'a>,
+    json: Term<'a>,
+    of: Term<'a>,
+) -> NifResult<Term<'a>> {
+    dirty(|limits| apply_written(env, limits, doc, steps, json, of))
 }
 
 #[rustler::nif]

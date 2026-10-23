@@ -19,6 +19,7 @@ mod text;
 mod view;
 
 pub use attrs::{AttributeDefault, AttributeSpec, Attrs, Validate, ValidateHook};
+pub use compact::Change;
 pub use compare_deep::{compare_deep, objects_equal};
 pub use content::{ContentExpr, ContentMatch};
 pub use fields::{Field, Fields, Json};

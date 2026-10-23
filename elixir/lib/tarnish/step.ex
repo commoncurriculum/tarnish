@@ -6,13 +6,27 @@ defmodule Tarnish.Step do
   @native Application.compile_env(:tarnish, :native, Tarnish.Native)
   @compile {:no_warn_undefined, @native}
 
-  @doc "Applies the steps to the document in order, as `step.apply(doc)` does each."
-  @spec apply(Tarnish.Node.t(), [Tarnish.json()]) :: {:ok, Tarnish.Node.t()} | Tarnish.error()
-  def apply(%Tarnish.Node{ref: ref} = doc, steps) do
-    applied =
-      with :dirty <- @native.apply_steps(ref, steps), do: @native.apply_steps_dirty(ref, steps)
+  @doc """
+  Applies the steps to the document in order, as `step.apply(doc)` does each, and writes the
+  document they make, which keeps that JSON: `{:ok, doc}`, or the error the first step that
+  fails gives.
 
-    with {:ok, ref} <- applied, do: {:ok, %{doc | ref: ref}}
+  The document keeps its JSON, and this keeps it current, so `Tarnish.Node.to_json/1` after it
+  costs nothing. A socket's process should keep the document between messages: the JSON written
+  for each message shares what the one before wrote for every node the steps left.
+  """
+  @spec apply(Tarnish.Node.t(), [Tarnish.json()]) :: {:ok, Tarnish.Node.t()} | Tarnish.error()
+  def apply(%Tarnish.Node{} = doc, []), do: {:ok, doc}
+
+  def apply(%Tarnish.Node{ref: ref, json: json} = doc, steps) do
+    of = Map.get(doc, :of)
+
+    applied =
+      with :dirty <- @native.apply_write(ref, steps, json, of),
+           do: @native.apply_write_dirty(ref, steps, json, of)
+
+    with {:ok, {ref, written}} <- applied,
+         do: {:ok, Map.merge(doc, %{ref: ref, json: written, of: ref})}
   end
 
   @doc """

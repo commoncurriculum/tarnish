@@ -39,7 +39,7 @@ pub struct Fragment<'a> {
 
 /// A fragment's list being written into a chunk of its own: nodes, and runs of other
 /// fragments' kids, copied as refs.
-struct List<'a> {
+pub(crate) struct List<'a> {
     builder: Builder<'a>,
     start: u32,
     count: u32,
@@ -164,39 +164,45 @@ impl<'a> List<'a> {
         Fragment::of(self.builder.seal(), self.start, self.count, size, u32::MAX)
     }
 
-    /// A node with `node`'s markup holding the list, written with it.
+    /// A node with `node`'s markup holding the list, written with it: `node.copy` of the
+    /// fragment [`finish`](Self::finish) gives, which for none is the node itself when it has
+    /// no children.
     fn finish_copy(mut self, node: &Node<'a>) -> Node<'a> {
         self.flush();
-        let first = if self.count == 0 { 0 } else { self.start };
+        if self.count == 0 {
+            return node.copy(Fragment::empty());
+        }
+        let first = self.start;
         let (count, size) = (self.count, self.size());
         let id = node.write_copy(&mut self.builder, first, count, size);
         Node::at(self.builder.seal(), id)
     }
 }
 
-/// `content.cut(0, from).append(insert).append(content.cut(to))`: one of the three when the
-/// others are empty, as `append` gives back what's appended to nothing, or a list of all three.
-enum Splice<'a> {
-    Piece(Fragment<'a>),
+/// A fragment's children being made: a fragment there already, or a list being written, which
+/// can be finished as a fragment or written with the node it is the content of.
+pub(crate) enum Content<'a> {
+    Same(Fragment<'a>),
     List(List<'a>),
 }
 
-fn splice<'a>(content: &Fragment<'a>, from: usize, to: usize, insert: &Fragment<'a>) -> Splice<'a> {
-    let end = content.size();
-    Splice::Piece(match (from > 0, insert.size() > 0, to < end) {
-        (true, false, false) => content.cut(0, from),
-        (false, true, false) => insert.clone(),
-        (false, false, true) => content.cut(to, end),
-        (false, false, false) => Fragment::empty(),
-        _ => {
-            let schema = content.schema().expect("a fragment with children");
-            let mut list = List::new(schema);
-            list.add_cut(content, 0, from);
-            list.add_cut(insert, 0, insert.size());
-            list.add_cut(content, to, end);
-            return Splice::List(list);
+impl<'a> Content<'a> {
+    #[inline]
+    pub(crate) fn into_fragment(self) -> Fragment<'a> {
+        match self {
+            Content::Same(fragment) => fragment,
+            Content::List(list) => list.finish(),
         }
-    })
+    }
+
+    /// `node.copy(self.into_fragment())`, a list written with the node.
+    #[inline]
+    pub(crate) fn copy_into(self, node: &Node<'a>) -> Node<'a> {
+        match self {
+            Content::Same(fragment) => node.copy(fragment),
+            Content::List(list) => list.finish_copy(node),
+        }
+    }
 }
 
 impl<'a> Fragment<'a> {
@@ -226,23 +232,38 @@ impl<'a> Fragment<'a> {
         self.chunk.as_ref()
     }
 
+    /// The chunk the list is in, given up by the fragment.
+    pub(crate) fn into_chunk(self) -> Option<Arc<Chunk<'a>>> {
+        self.chunk
+    }
+
     /// A fragment of these nodes, joining adjacent text nodes with the same marks.
     pub fn from_array(nodes: Vec<Node<'a>>) -> Fragment<'a> {
+        Fragment::array_content(nodes).into_fragment()
+    }
+
+    /// [`from_array`](Self::from_array)'s content.
+    pub(crate) fn array_content(nodes: Vec<Node<'a>>) -> Content<'a> {
         let Some(first) = nodes.first() else {
-            return Fragment::empty();
+            return Content::Same(Fragment::empty());
         };
         let mut list = List::new(first.schema());
         for node in nodes {
             let size = node.node_size();
             list.add_child(node, 0, size);
         }
-        list.finish()
+        Content::List(list)
     }
 
     pub fn from_node(node: Node<'a>) -> Fragment<'a> {
+        Fragment::node_content(&node).into_fragment()
+    }
+
+    /// [`from_node`](Self::from_node)'s content.
+    pub(crate) fn node_content(node: &Node<'a>) -> Content<'a> {
         let mut list = List::new(node.schema());
-        list.push(&node);
-        list.finish()
+        list.push(node);
+        Content::List(list)
     }
 
     /// The schema of the chunk the fragment's list is in; `None` for a fragment made empty.
@@ -465,15 +486,20 @@ impl<'a> Fragment<'a> {
 
     /// The part of the fragment between `from` and `to`.
     pub fn cut(&self, from: usize, to: usize) -> Fragment<'a> {
+        self.cut_content(from, to).into_fragment()
+    }
+
+    /// [`cut`](Self::cut)'s content.
+    pub(crate) fn cut_content(&self, from: usize, to: usize) -> Content<'a> {
         if from == 0 && to == self.size() {
-            return self.clone();
+            return Content::Same(self.clone());
         }
         let Some(schema) = self.schema().filter(|_| to > from) else {
-            return Fragment::empty();
+            return Content::Same(Fragment::empty());
         };
         let mut list = List::new(schema);
         list.add_cut(self, from, to.min(self.size()));
-        list.finish()
+        Content::List(list)
     }
 
     /// The children from index `from` to `to`: a part of the same list.
@@ -496,46 +522,49 @@ impl<'a> Fragment<'a> {
         }
     }
 
-    /// `this.cut(0, from).append(insert).append(this.cut(to))`, written as one list.
-    pub(crate) fn replace_range(
+    /// `this.cut(0, from).append(insert).append(this.cut(to))`: one of the three parts when the
+    /// others are empty, as `append` gives back what's appended to nothing, or a list of all
+    /// three.
+    pub(crate) fn replace_range_content(
         &self,
         from: usize,
         to: usize,
         insert: &Fragment<'a>,
-    ) -> Fragment<'a> {
-        match splice(self, from, to, insert) {
-            Splice::Piece(piece) => piece,
-            Splice::List(list) => list.finish(),
-        }
-    }
-
-    /// `node.copy(this.cut(0, from).append(insert).append(this.cut(to)))`, this being the
-    /// node's content, written with its list.
-    pub(crate) fn copy_replaced(
-        &self,
-        node: &Node<'a>,
-        from: usize,
-        to: usize,
-        insert: &Fragment<'a>,
-    ) -> Node<'a> {
-        match splice(self, from, to, insert) {
-            Splice::Piece(piece) => node.copy(piece),
-            Splice::List(list) => list.finish_copy(node),
-        }
+    ) -> Content<'a> {
+        let end = self.size();
+        Content::Same(match (from > 0, insert.size() > 0, to < end) {
+            (true, false, false) => self.cut(0, from),
+            (false, true, false) => insert.clone(),
+            (false, false, true) => self.cut(to, end),
+            (false, false, false) => Fragment::empty(),
+            _ => {
+                let schema = self.schema().expect("a fragment with children");
+                let mut list = List::new(schema);
+                list.add_cut(self, 0, from);
+                list.add_cut(insert, 0, insert.size());
+                list.add_cut(self, to, end);
+                return Content::List(list);
+            }
+        })
     }
 
     /// The fragment with the child at `index` replaced by `node`.
     pub fn replace_child(&self, index: usize, node: Node<'a>) -> Fragment<'a> {
+        self.replace_child_content(index, node).into_fragment()
+    }
+
+    /// [`replace_child`](Self::replace_child)'s content.
+    pub(crate) fn replace_child_content(&self, index: usize, node: Node<'a>) -> Content<'a> {
         let current = self.node(index as u32);
         if current.ptr_eq(&node) {
-            return self.clone();
+            return Content::Same(self.clone());
         }
         let index = index as u32;
         let mut list = List::new(node.schema());
         list.extend(self, 0, index);
         list.push(&node);
         list.extend(self, index + 1, self.count);
-        list.finish()
+        Content::List(list)
     }
 
     pub fn add_to_start(&self, node: Node<'a>) -> Fragment<'a> {

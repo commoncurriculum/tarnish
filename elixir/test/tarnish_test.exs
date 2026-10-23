@@ -1,5 +1,6 @@
 defmodule TarnishTest do
   use ExUnit.Case, async: true
+  import Tarnish.TestDocs
 
   @native Application.compile_env(:tarnish, :native, Tarnish.Native)
 
@@ -88,6 +89,51 @@ defmodule TarnishTest do
     end
   end
 
+  defp apply_one_at_a_time(doc, steps) do
+    Enum.reduce_while(steps, {:ok, doc}, fn step, {:ok, doc} ->
+      case Tarnish.Step.apply(doc, [step]) do
+        {:ok, changed} -> {:cont, {:ok, changed}}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp assert_same_as_one_at_a_time(doc, steps) do
+    case {Tarnish.Step.apply(doc, steps), apply_one_at_a_time(doc, steps)} do
+      {{:ok, whole}, {:ok, stepped}} ->
+        assert Tarnish.Node.to_json(whole) === Tarnish.Node.to_json(stepped)
+
+      {whole, stepped} ->
+        assert whole === stepped
+    end
+  end
+
+  # A message's steps after its first change, in place, the nodes the steps before them wrote,
+  # which one step a message never does: the document must be the one the steps give one
+  # message at a time.
+  test "fixture messages of several steps give what one message a step gives", %{
+    schemas: schemas
+  } do
+    %{"tests" => tests} = @fixtures |> File.read!() |> Jason.decode!()
+
+    for %{"schema" => schema, "start" => start, "steps" => [_, _ | _] = steps} <- tests do
+      {:ok, doc} = Tarnish.Node.from_json(Enum.at(schemas, schema), start)
+      assert_same_as_one_at_a_time(doc, steps)
+    end
+  end
+
+  # The card stack TARNISH_BENCH_DOC names has a change of two steps.
+  @tag :bench_doc
+  test "TARNISH_BENCH_DOC messages of several steps give what one message a step gives" do
+    with %{doc: doc, changes: changes} <- bench_doc() do
+      steps = Enum.flat_map(changes, & &1["steps"])
+      assert Enum.any?(changes, &match?([_, _ | _], &1["steps"]))
+      for %{"steps" => steps} <- changes, do: assert_same_as_one_at_a_time(doc, steps)
+      # Every change's steps as one message, failing where a change applies only to the doc.
+      assert_same_as_one_at_a_time(doc, steps)
+    end
+  end
+
   for {fixture, index} <- Enum.with_index(from_json) do
     @fixture fixture
     test "node #{index} from JSON is the one ProseMirror reads", %{model_schemas: schemas} do
@@ -173,11 +219,6 @@ defmodule TarnishTest do
     end
   end
 
-  defp doc(schema, json) do
-    {:ok, doc} = Tarnish.Node.from_json(schema, json)
-    doc
-  end
-
   describe "schemas" do
     test "take their types as {name, spec} pairs, in order", _ do
       spec = %{nodes: [doc: %{content: "text*"}, text: %{}], marks: [strong: %{}, em: %{}]}
@@ -214,14 +255,25 @@ defmodule TarnishTest do
     assert_raise ArgumentError, fn -> Tarnish.Node.from_json(schema, json) end
   end
 
-  defp text(text, marks \\ []) do
-    case marks do
-      [] -> %{"type" => "text", "text" => text}
-      marks -> %{"type" => "text", "text" => text, "marks" => marks}
-    end
-  end
+  # A ref holds a document's bytes, so a forged one can hold text that isn't UTF-8. A call that
+  # comes across it raises, as it does for a ref that doesn't load: one that checks the text as
+  # it loads, and one applying steps, which checks only the text it reads.
+  test "a ref whose text isn't UTF-8 is refused", %{schemas: [schema | _]} do
+    # Long enough that a step checks only the text it reads.
+    read = doc(schema, paragraphs(1, "aéb" <> String.duplicate("c", 5000)))
+    {schema_ref, [bytes]} = read.ref
+    forged = %{read | ref: {schema_ref, [:binary.replace(bytes, "aéb", <<?a, 0xFF, 0xA9, ?b>>)]}}
 
-  defp paragraph(content), do: %{"type" => "paragraph", "content" => content}
+    step = %{
+      "stepType" => "replace",
+      "from" => 3,
+      "to" => 3,
+      "slice" => %{"content" => [text("x")]}
+    }
+
+    assert_raise ArgumentError, fn -> Tarnish.Node.text_content(forged) end
+    assert_raise ArgumentError, fn -> Tarnish.Step.apply(forged, [step]) end
+  end
 
   defp paragraphs(count, text),
     do: %{"type" => "doc", "content" => List.duplicate(paragraph([text(text)]), count)}
@@ -349,6 +401,92 @@ defmodule TarnishTest do
         assert :erts_debug.same(one, first) and :erts_debug.same(three, third)
         assert changed_two === two
         refute :erts_debug.same(changed_two, second)
+      end
+    end
+
+    test "shares the map of every node steps leave, at every depth", %{schema: schema} do
+      item = &item([paragraph([text(&1)])])
+      [b1, b2, b3] = for name <- ~w(b1 b2 b3), do: item.(name)
+      inner = list([b1, b2, b3])
+      a2_text = paragraph([text("a2")])
+      [a1, a3] = for name <- ~w(a1 a3), do: item.(name)
+      a2 = item([a2_text, inner])
+      [c1, c2, c3] = for name <- ~w(c1 c2 c3), do: item.(name)
+      last = paragraph([text("end")])
+      json = %{"type" => "doc", "content" => [list([a1, a2, a3]), list([c1, c2, c3]), last]}
+      doc = doc(schema, json)
+
+      # "!" after "c2", then after "b2": two lists side by side change, one of them two levels
+      # down.
+      {:ok, changed} = Tarnish.Step.apply(doc, [insert(51, "!"), insert(23, "!")])
+
+      %{"content" => [%{"content" => [one, two, three]}, %{"content" => [four, five, six]}, end_]} =
+        written = Tarnish.Node.to_json(changed)
+
+      assert written ===
+               %{
+                 "type" => "doc",
+                 "content" => [
+                   list([a1, item([a2_text, list([b1, item.("b2!"), b3])]), a3]),
+                   list([c1, item.("c2!"), c3]),
+                   last
+                 ]
+               }
+
+      %{"content" => [two_text, %{"content" => [seven, _, eight]}]} = two
+
+      for {written, read} <- [
+            {end_, last},
+            {one, a1},
+            {three, a3},
+            {four, c1},
+            {six, c3},
+            {two_text, a2_text},
+            {seven, b1},
+            {eight, b3}
+          ] do
+        assert :erts_debug.same(written, read)
+      end
+
+      refute :erts_debug.same(five, c2)
+
+      # Splitting the item after "a2" leaves its list in the second half.
+      split = %{
+        "stepType" => "replace",
+        "from" => 11,
+        "to" => 11,
+        "slice" => %{
+          "content" => [item([paragraph([])]), item([paragraph([])])],
+          "openStart" => 2,
+          "openEnd" => 2
+        },
+        "structure" => true
+      }
+
+      {:ok, changed} = Tarnish.Step.apply(doc, [split])
+
+      %{
+        "content" => [%{"content" => [one, _, %{"content" => [_, two_inner]}, three]}, four, end_]
+      } =
+        written = Tarnish.Node.to_json(changed)
+
+      assert written ===
+               put_in(
+                 json,
+                 ["content", Access.at(0)],
+                 list([a1, item([a2_text]), item([%{"type" => "paragraph"}, inner]), a3])
+               )
+
+      %{"content" => [_, c_list, _]} = json
+
+      for {written, read} <- [
+            {one, a1},
+            {three, a3},
+            {two_inner, inner},
+            {four, c_list},
+            {end_, last}
+          ] do
+        assert :erts_debug.same(written, read)
       end
     end
   end

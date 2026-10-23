@@ -2,12 +2,15 @@
 
 use std::sync::Arc;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::node::Node;
 use super::schema::Schema;
 use super::view::{NodeRef, SetRef};
-use crate::chunk::{Builder, Chunk, EMPTY_OBJECT, EMPTY_SET, Holder, Kid, Record, ValueRef};
+use crate::chunk::{
+    Builder, Chunk, EMPTY_OBJECT, EMPTY_SET, Holder, KIDS, Kid, KidSlots, LOCAL, NODES, Record,
+    ValueRef, WIDTHS, corrupt,
+};
 use crate::js::stack;
 
 /// What a copy has written of what it copies: each value and set it copied, by where it was,
@@ -104,34 +107,167 @@ impl<'k, 'a> Copier<'k, 'a> {
                 None => self.builder.text_of(record.ty, marks, &text.to_text()),
             };
         }
+        self.element(node, marks, None, record.size)
+    }
+
+    /// Writes the record of `node`, `size` positions long, and its list of kids, each kid's node
+    /// copied unless a chunk kept holds it, and kid `at` replaced by `kid` when `substitute` is
+    /// `(at, kid)`: its index.
+    fn element(
+        &mut self,
+        node: NodeRef,
+        marks: u32,
+        substitute: Option<(u32, Kid)>,
+        size: u32,
+    ) -> u32 {
+        let record = node.record;
         let (list, start, bound) = node.kids();
         let count = node.child_count();
-        let mut kids = Vec::with_capacity(count as usize);
-        // Kids come in runs from one slot, whose slot here, if its chunk is kept, is found once
-        // a run.
-        let mut run: Option<(u32, Option<u32>)> = None;
-        for kid in list.kid_list(start, count) {
-            let chunk = list.holder(kid, bound);
-            let slot = match run {
-                Some((last, slot)) if last == kid.slot => slot,
-                _ => {
-                    let slot = self.kept_chunk(chunk).map(|kept| self.builder.import(kept));
-                    run = Some((kid.slot, slot));
-                    slot
-                }
-            };
-            kids.push(match slot {
-                Some(slot) => Kid { slot, ..kid },
-                None => {
-                    let node = NodeRef::at(chunk, kid.index);
-                    Kid::local(stack::grow(|| self.copy(node)), kid.size)
+        // Each slot `slots` covers names a chunk kept, whose slot here is found once, or one not
+        // kept, whose kids' nodes are copied first. The list is then copied as it is, with those
+        // slots rewritten, and the other kids written over it.
+        let mut slots = KidSlots::new();
+        let mut written = Vec::new();
+        for (position, kid) in (0..count).zip(list.kid_list(start, count)) {
+            if let Some((at, kid)) = substitute
+                && at == position
+            {
+                written.push((position, kid));
+                continue;
+            }
+            if kid.slot == LOCAL && kid.index >= bound {
+                corrupt();
+            }
+            let (slot, covered) = slots.get_or_find(kid.slot, || {
+                match self.kept_chunk(list.holder(kid, bound)) {
+                    Some(kept) => self.builder.import(kept),
+                    None => LOCAL,
                 }
             });
+            if slot == LOCAL {
+                let node = NodeRef::at(list.holder(kid, bound), kid.index);
+                let index = stack::grow(|| self.copy(node));
+                written.push((position, Kid::local(index, kid.size)));
+            } else if !covered {
+                written.push((position, Kid { slot, ..kid }));
+            }
         }
         let attrs = self.value(node.attrs());
-        let first = self.builder.push_kids(kids.into_iter());
+        let first = self
+            .builder
+            .copy_kid_list(list, start, count, &slots, &written);
         self.builder
-            .element(record.ty, marks, attrs, first, count, record.size)
+            .element(record.ty, marks, attrs, first, count, size)
+    }
+
+    /// [`copy`](Self::copy) of `node` with the descendant `path` leads to replaced by `bottom`:
+    /// its index, and its size.
+    fn copy_path(&mut self, node: NodeRef, path: &[u32], bottom: NodeRef) -> (u32, u32) {
+        let marks = self.set(node.marks());
+        let (list, start, bound) = node.kids();
+        let old = list
+            .kid_list(start, node.child_count())
+            .nth(path[0] as usize)
+            .unwrap_or_else(|| corrupt());
+        let (id, size) = match path {
+            [_] => (stack::grow(|| self.copy(bottom)), bottom.node_size() as u32),
+            [_, below @ ..] => {
+                let child = NodeRef::at(list.holder(old, bound), old.index);
+                stack::grow(|| self.copy_path(child, below, bottom))
+            }
+            [] => unreachable!("a path"),
+        };
+        let content = node.record.size - old.size + size;
+        let substitute = Some((path[0], Kid::local(id, size)));
+        (self.element(node, marks, substitute, content), content + 2)
+    }
+}
+
+/// What a replace makes of a document: `top` with the descendant `path` leads to, child index
+/// by child index, replaced by `bottom`, the nodes along the path not written yet. With no path,
+/// `top` is `bottom`, the document.
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct Change<'a> {
+    top: Node<'a>,
+    path: Vec<u32>,
+    bottom: Node<'a>,
+}
+
+impl<'a> Change<'a> {
+    /// The change that gives `doc`, written already.
+    pub fn whole(doc: Node<'a>) -> Change<'a> {
+        Change {
+            top: doc.clone(),
+            path: Vec::new(),
+            bottom: doc,
+        }
+    }
+
+    /// `top` with the descendant `path` leads to replaced by `bottom`.
+    pub(crate) fn new(top: Node<'a>, path: Vec<u32>, bottom: Node<'a>) -> Change<'a> {
+        match path.is_empty() {
+            true => Change::whole(bottom),
+            false => Change { top, path, bottom },
+        }
+    }
+
+    /// The node the path starts from: the document changed, or with no path the document.
+    pub fn top(&self) -> &Node<'a> {
+        &self.top
+    }
+
+    pub fn path(&self) -> &[u32] {
+        &self.path
+    }
+
+    pub fn bottom(&self) -> &Node<'a> {
+        &self.bottom
+    }
+
+    /// Whether the change gives `node` itself.
+    pub fn is(&self, node: &Node) -> bool {
+        self.path.is_empty() && self.bottom.ptr_eq(node)
+    }
+
+    /// The changed document, written.
+    pub fn into_node(self) -> Node<'a> {
+        self.top.with_path(&self.path, self.bottom)
+    }
+
+    /// The changed document written into a new chunk, as [`Node::flatten`] writes it, the nodes
+    /// along the path written there and nowhere else.
+    pub fn flatten(&self, kept: &[Arc<Chunk<'a>>]) -> Node<'a> {
+        if self.path.is_empty() {
+            return self.bottom.flatten(kept);
+        }
+        let mut copier = Copier::new(self.top.schema(), kept);
+        let (id, _) = copier.copy_path(self.top.view(), &self.path, self.bottom.view());
+        Node::at(copier.builder.seal(), id)
+    }
+
+    /// The bytes of what the change wrote, which [`flatten`](Self::flatten) writes no less
+    /// than: the chunks of the top and the bottom and those they import, and theirs, each once,
+    /// up to the chunks `held`, which import only one another; and the nodes along the path once
+    /// written, a record and a list each. A chunk is known by its address.
+    pub fn written_bytes(&self, held: &[Arc<Chunk<'a>>]) -> usize {
+        let mut bytes = 0;
+        let mut node = self.top.view();
+        for &index in &self.path {
+            bytes += WIDTHS[NODES] + WIDTHS[KIDS] * node.child_count() as usize;
+            node = node.child(index);
+        }
+        let mut seen = FxHashSet::default();
+        let mut next: Vec<&Chunk> = vec![self.top.chunk(), self.bottom.chunk()];
+        while let Some(chunk) = next.pop() {
+            let held = || held.iter().any(|held| std::ptr::eq(&**held, chunk));
+            if !seen.insert(std::ptr::from_ref(chunk).addr()) || held() {
+                continue;
+            }
+            bytes += chunk.bytes().len();
+            next.extend(chunk.imports().iter().map(|import| &**import));
+        }
+        bytes
     }
 }
 

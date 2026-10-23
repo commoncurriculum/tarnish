@@ -10,8 +10,8 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use rustler::{Binary, Encoder, Env, NewBinary, ResourceArc, Term};
-use tarnish::chunk::{Chunk, Header};
-use tarnish::{Node, NodeRef};
+use tarnish::chunk::{Check, Chunk, Header};
+use tarnish::{Change, Node, NodeRef};
 
 use crate::prosemirror::SchemaResource;
 
@@ -26,6 +26,7 @@ pub struct Doc<'a> {
     binaries: Vec<Term<'a>>,
     /// The chunks, oldest first.
     chunks: Vec<Arc<Chunk<'a>>>,
+    check: Check,
 }
 
 /// A chunk's bytes as a binary.
@@ -43,18 +44,38 @@ pub fn read<'a>(env: Env<'a>, schema: Term<'a>, doc: &Node) -> Term<'a> {
 impl<'a> Doc<'a> {
     /// The document a ref names; `None` for a term that isn't one.
     pub fn load(term: Term<'a>) -> Option<Doc<'a>> {
+        Doc::load_with(term, &[], Check::Whole)
+    }
+
+    /// [`load`](Self::load) for a call that reads little of the document, as one applying
+    /// steps does: its text is checked as UTF-8 where it is read, rather than all of it here.
+    pub fn load_for_steps(term: Term<'a>) -> Option<Doc<'a>> {
+        Doc::load_with(term, &[], Check::OnRead)
+    }
+
+    /// [`load`](Self::load), taking the chunks of `reuse` for the binaries they were loaded
+    /// from rather than loading them again.
+    fn load_with(term: Term<'a>, reuse: &[Arc<Chunk<'a>>], check: Check) -> Option<Doc<'a>> {
         let (schema, binaries): (Term<'a>, Vec<Term<'a>>) = term.decode().ok()?;
         let resource: ResourceArc<SchemaResource> = schema.decode().ok()?;
         let mut chunks: Vec<Arc<Chunk<'a>>> = Vec::with_capacity(binaries.len());
         for binary in binaries.iter().rev() {
             let bytes = Binary::from_term(*binary).ok()?.as_slice();
+            if let Some(held) = reuse
+                .iter()
+                .find(|chunk| std::ptr::eq(chunk.bytes(), bytes))
+            {
+                chunks.push(held.clone());
+                continue;
+            }
             let imports = Header::read(bytes)
                 .ok()?
                 .imports
                 .iter()
                 .map(|id| chunks.iter().find(|chunk| chunk.id() == *id).cloned())
                 .collect::<Option<Vec<_>>>()?;
-            let chunk = Chunk::load(Cow::Borrowed(bytes), &resource.0, imports).ok()?;
+            let chunk =
+                Chunk::load_checking(Cow::Borrowed(bytes), &resource.0, imports, check).ok()?;
             chunks.push(Arc::new(chunk));
         }
         NodeRef::root(chunks.last()?)?;
@@ -63,7 +84,37 @@ impl<'a> Doc<'a> {
             schema,
             binaries,
             chunks,
+            check,
         })
+    }
+
+    /// The document a ref names that `doc` may have been changed from, which a JSON was written
+    /// for: `None` for a term that isn't a ref, or one in another schema or whose oldest chunk
+    /// isn't `doc`'s, which shares no node with `doc`.
+    pub fn load_beside(term: Term<'a>, doc: &Doc<'a>) -> Option<Doc<'a>> {
+        let (schema, binaries): (Term<'a>, Vec<Term<'a>>) = term.decode().ok()?;
+        let oldest = Binary::from_term(*binaries.last()?).ok()?.as_slice();
+        if schema != doc.schema || !std::ptr::eq(oldest, doc.chunks[0].bytes()) {
+            return None;
+        }
+        Doc::load_with(term, &doc.chunks, doc.check)
+    }
+
+    /// Whether `term` is this document's ref: the same schema, and the very binaries this
+    /// document was loaded from, by address, in the same order. A ref sent to another process
+    /// keeps the addresses of binaries bigger than 64 bytes, which it shares, and copies only the
+    /// smaller ones, which then aren't this document's, though they hold the same bytes.
+    pub fn is_ref(&self, term: Term<'a>) -> bool {
+        let Ok((schema, binaries)) = term.decode::<(Term<'a>, Vec<Term<'a>>)>() else {
+            return false;
+        };
+        let bytes = |binary: &Term<'a>| Binary::from_term(*binary).map(|binary| binary.as_slice());
+        schema == self.schema
+            && binaries.len() == self.binaries.len()
+            && binaries
+                .iter()
+                .zip(&self.binaries)
+                .all(|(a, b)| matches!((bytes(a), bytes(b)), (Ok(a), Ok(b)) if std::ptr::eq(a, b)))
     }
 
     pub fn root(&self) -> Node<'a> {
@@ -81,11 +132,11 @@ impl<'a> Doc<'a> {
     }
 
     /// The ref of `doc`, which this document was changed into.
-    pub fn changed(&self, env: Env<'a>, doc: &Node<'a>) -> Term<'a> {
-        if doc.ptr_eq(&self.root()) {
+    pub fn changed(&self, env: Env<'a>, change: &Change<'a>) -> Term<'a> {
+        if change.is(&self.root()) {
             return self.term;
         }
-        let (flat, kept) = self.flatten(doc);
+        let (flat, kept) = self.flatten(change);
         let mut binaries = Vec::with_capacity(kept + 1);
         binaries.push(binary(env, flat.chunk().bytes()));
         binaries.extend_from_slice(&self.binaries[self.binaries.len() - kept..]);
@@ -95,13 +146,8 @@ impl<'a> Doc<'a> {
     /// `doc` in a new chunk, and how many of the oldest chunks it refers into. The chunks the
     /// change wrote, which hold no less than the new chunk will, tell how big it is before it's
     /// written, so that it's written once.
-    fn flatten(&self, doc: &Node<'a>) -> (Node<'a>, usize) {
-        let held = |chunk: &Arc<Chunk>| self.chunks.iter().any(|held| held.ptr_eq(chunk));
-        let mut size: usize = Chunk::closure(doc.chunk())
-            .iter()
-            .filter(|chunk| !held(chunk))
-            .map(|chunk| chunk.bytes().len())
-            .sum();
+    fn flatten(&self, change: &Change<'a>) -> (Node<'a>, usize) {
+        let mut size = change.written_bytes(&self.chunks);
         let mut kept = self.chunks.len();
         while kept > 1 {
             let newest = self.chunks[kept - 1].bytes().len();
@@ -111,6 +157,6 @@ impl<'a> Doc<'a> {
             kept -= 1;
             size += newest;
         }
-        (doc.flatten(&self.chunks[..kept]), kept)
+        (change.flatten(&self.chunks[..kept]), kept)
     }
 }

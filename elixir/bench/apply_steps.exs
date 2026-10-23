@@ -1,30 +1,108 @@
-# Times Tarnish on target/bench/document.json, which `npm run bench` writes. Each call runs back
-# to back for two seconds, as a server's would, and the mean is what a call costs: a median hides
-# the collections that free what earlier calls left, and the pages the allocator faults back in.
-# Faults are minor page faults per call, and RSS is where the process ends up.
+# Times Tarnish on the documents `npm run bench` writes to target/bench/: document.json, read in
+# prosemirror-schema-basic with prosemirror-schema-list, and nested.json and cards.json, each in
+# the schema it holds, and given.json too, the card stack TARNISH_BENCH_DOC names, when
+# `npm run bench` has written it with TARNISH_BENCH_DOC set.
+#
+# Each call runs back to back, as a server's would, and the mean is what a call costs: a median
+# hides the collections that free what earlier calls left, and the pages the allocator faults
+# back in. Every case of every document runs in each of TARNISH_BENCH_ROUNDS rounds (7 unless
+# given), in turn, so that the machine's drift lands on all of them alike; a round warms a case
+# for 100 ms, then takes the mean of TARNISH_BENCH_MS milliseconds (300 unless given) of calls.
+# A row gives the median of its rounds' means and the range they span, and the median of its
+# minor page faults per call. RSS is where the process ends up.
+#
+# The "kept node" rows are a socket process's message: the %Tarnish.Node{} it read earlier,
+# kept between messages, takes one change's steps with Step.apply, which writes the document they
+# make, and Node.to_json then gives that JSON for nothing. Each call takes the next change in turn,
+# so a row's mean is one message's; the Step.apply row for one step takes each step in turn,
+# applied alone to the document the steps before it made, which shows what a call costs before
+# any step's work.
+#
+# Those rows apply every message to the document as read. A socket's document is what its earlier
+# messages made of it, so the "typed" rows keep a document that 100 messages each typed "x" into,
+# in one place or in a place of its own, or that 10 did in 10 places, and time one message more,
+# typing in the first place. The "chained" rows are the 100 messages a socket takes after those
+# 100: each types "x" in one of 10 or 100 places spread evenly, in turn, into the document the
+# message before it made, so that what each shares is the map the message before it wrote; each
+# call takes the next message. Their messages are the scenarios bench/document.mjs writes.
 #
 #     MIX_ENV=test mix run bench/apply_steps.exs
 
+rounds = String.to_integer(System.get_env("TARNISH_BENCH_ROUNDS", "7"))
+milliseconds = String.to_integer(System.get_env("TARNISH_BENCH_MS", "300"))
 fixtures = Path.expand("../../fixtures/transform.json", __DIR__)
-document = Path.expand("../../target/bench/document.json", __DIR__)
+bench = &Path.expand("../../target/bench/#{&1}", __DIR__)
+
+# A schema's spec, ordered, since the order of the node and mark types matters.
+schema = fn spec ->
+  {:ok, schema} = Tarnish.Schema.new(spec)
+  schema
+end
 
 # prosemirror-schema-basic with prosemirror-schema-list, as prosemirror-transform's tests
 # record it.
-{:ok, schema} =
+basic =
   fixtures
   |> File.read!()
   |> Jason.decode!(objects: :ordered_objects)
   |> Access.get("schemas")
   |> hd()
-  |> Tarnish.Schema.new()
+  |> schema.()
 
-%{"doc" => json, "steps" => steps} = document |> File.read!() |> Jason.decode!()
-{:ok, doc} = Tarnish.Node.from_json(schema, json)
-{:ok, changed} = Tarnish.Step.apply(doc, steps)
+# A file's JSON as plain maps, but for its schema's spec, whose order matters.
+plain = fn value ->
+  walk = fn walk, value ->
+    case value do
+      %Jason.OrderedObject{values: values} ->
+        Map.new(values, fn {key, value} -> {key, walk.(walk, value)} end)
+
+      list when is_list(list) ->
+        Enum.map(list, &walk.(walk, &1))
+
+      value ->
+        value
+    end
+  end
+
+  walk.(walk, value)
+end
+
+# Each document: a name, its schema, its JSON, the step lists that each apply to it, and its
+# scenarios.
+documents =
+  for {file, name} <- [
+        {"document.json", "document.json: 200 paragraphs"},
+        {"nested.json", "nested.json: a long list and a table"},
+        {"cards.json", "cards.json: a 50-card stack"},
+        {"given.json", "TARNISH_BENCH_DOC: #{System.get_env("TARNISH_BENCH_DOC")}"}
+      ],
+      path = bench.(file),
+      file != "given.json" or (System.get_env("TARNISH_BENCH_DOC") && File.exists?(path)) do
+    file = path |> File.read!() |> Jason.decode!(objects: :ordered_objects)
+
+    %{
+      name: name,
+      schema: if(spec = file["schema"], do: schema.(spec), else: basic),
+      json: plain.(file["doc"]),
+      changes: Enum.map(file["changes"], &plain.(&1["steps"])),
+      scenarios: plain.(file["scenarios"])
+    }
+  end
 
 stat = fn ->
   fields = "/proc/self/stat" |> File.read!() |> String.split()
   {String.to_integer(Enum.at(fields, 9)), String.to_integer(Enum.at(fields, 23)) * 4096}
+end
+
+# A call that returns the next of `items` each time, round and round.
+cycle = fn items ->
+  items = List.to_tuple(items)
+  counter = :counters.new(1, [])
+
+  fn ->
+    :counters.add(counter, 1, 1)
+    elem(items, rem(:counters.get(counter, 1), tuple_size(items)))
+  end
 end
 
 run_for = fn call, milliseconds ->
@@ -35,46 +113,175 @@ run_for = fn call, milliseconds ->
   |> Enum.count()
 end
 
-sustained = fn name, call ->
-  run_for.(call, 500)
+cases =
+  Enum.flat_map(documents, fn %{
+                                name: name,
+                                schema: schema,
+                                json: json,
+                                changes: changes,
+                                scenarios: scenarios
+                              } ->
+    {:ok, doc} = Tarnish.Node.from_json(schema, json)
+
+    # Each change applies to the document as read, and the last one's result is what's written.
+    apply_all = fn doc, changes ->
+      Enum.reduce(changes, nil, fn steps, _ ->
+        {:ok, changed} = Tarnish.Step.apply(doc, steps)
+        changed
+      end)
+    end
+
+    changed = apply_all.(doc, changes)
+    count = changes |> Enum.map(&length/1) |> Enum.sum()
+
+    applied =
+      case changes do
+        [_] -> "Step.apply, #{count} steps"
+        _ -> "Step.apply, #{length(changes)} changes (#{count} steps)"
+      end
+
+    # Tarnish has no JSON text path in Elixir, so the text rows time Jason around it, as a caller
+    # holding text would.
+    text = Jason.encode!(json)
+    changes_text = Enum.map(changes, &Jason.encode!/1)
+
+    # Each change, and each step with the document the steps before it in its change made.
+    message = cycle.(changes)
+
+    one_step =
+      Enum.flat_map(changes, fn steps ->
+        steps
+        |> Enum.map_reduce(doc, fn step, before ->
+          {:ok, after_step} = Tarnish.Step.apply(before, [step])
+          {{before, [step]}, after_step}
+        end)
+        |> elem(0)
+      end)
+      |> cycle.()
+
+    # The document each message of `messages` makes of the one the message before it made, from
+    # `start`, each with the document it was applied to and its steps.
+    fold = fn start, messages ->
+      messages
+      |> Enum.map_reduce(start, fn steps, before ->
+        {:ok, changed} = Tarnish.Step.apply(before, steps)
+        {{before, steps, changed}, changed}
+      end)
+      |> elem(0)
+    end
+
+    last = fn folded -> folded |> List.last() |> elem(2) end
+
+    # The first message of typed_once_100 types in the first place.
+    first = hd(scenarios["typed_once_100"])
+
+    message_after = fn kept ->
+      fn ->
+        {:ok, changed} = Tarnish.Step.apply(kept, first)
+        Tarnish.Node.to_json(changed)
+      end
+    end
+
+    in_one_place = last.(fold.(doc, scenarios["typed_once_100"]))
+    in_10_places = last.(fold.(doc, scenarios["typed_10"]))
+    in_100_places = last.(fold.(doc, scenarios["typed_100"]))
+
+    # The 100 messages after in_100_places, each with the document the message before it made.
+    chained = fn count -> cycle.(fold.(in_100_places, scenarios["chained_#{count}"])) end
+
+    chained_message = fn chain ->
+      fn ->
+        {before, steps, _} = chain.()
+        {:ok, changed} = Tarnish.Step.apply(before, steps)
+        Tarnish.Node.to_json(changed)
+      end
+    end
+
+    [
+      {"Node.from_json", fn -> Tarnish.Node.from_json(schema, json) end},
+      {"Jason, then Node.from_json",
+       fn -> Tarnish.Node.from_json(schema, Jason.decode!(text)) end},
+      {"Node.to_json, unchanged", fn -> Tarnish.Node.to_json(doc) end},
+      {"JSON text after the steps", fn -> Jason.encode!(Tarnish.Node.to_json(changed)) end},
+      {"Node.check", fn -> Tarnish.Node.check(doc) end},
+      {applied, fn -> apply_all.(doc, changes) end},
+      {"from JSON, apply, to JSON",
+       fn ->
+         {:ok, doc} = Tarnish.Node.from_json(schema, json)
+         Tarnish.Node.to_json(apply_all.(doc, changes))
+       end},
+      {"JSON text in and out, Jason",
+       fn ->
+         {:ok, doc} = Tarnish.Node.from_json(schema, Jason.decode!(text))
+
+         Jason.encode!(
+           Tarnish.Node.to_json(apply_all.(doc, Enum.map(changes_text, &Jason.decode!/1)))
+         )
+       end},
+      {"kept node: one message",
+       fn ->
+         {:ok, changed} = Tarnish.Step.apply(doc, message.())
+         Tarnish.Node.to_json(changed)
+       end},
+      {"kept node: Step.apply, one step",
+       fn ->
+         {before, step} = one_step.()
+         Tarnish.Step.apply(before, step)
+       end},
+      {"kept node, typed in 1 place 100 times: a message", message_after.(in_one_place)},
+      {"kept node, typed in 10 places: a message", message_after.(in_10_places)},
+      {"kept node, typed in 100 places: a message", message_after.(in_100_places)},
+      {"kept node, chained in 10 places: a message", chained_message.(chained.(10))},
+      {"kept node, chained in 100 places: a message", chained_message.(chained.(100))}
+    ]
+    |> Enum.map(fn {row, call} -> {name, row, call} end)
+  end)
+
+# One round's mean µs per call of a case, and its faults per call.
+slot = fn call ->
+  run_for.(call, 100)
   {faults, _} = stat.()
   started = System.monotonic_time(:nanosecond)
-  calls = run_for.(call, 2000)
+  calls = run_for.(call, milliseconds)
   mean = (System.monotonic_time(:nanosecond) - started) / calls / 1000
-  {faulted, rss} = stat.()
-
-  IO.puts(
-    String.pad_trailing(name, 30) <>
-      "#{:erlang.float_to_binary(mean, decimals: 1)} µs, " <>
-      "#{:erlang.float_to_binary((faulted - faults) / calls, decimals: 2)} faults, " <>
-      "RSS #{div(rss, 1024 * 1024)} MiB"
-  )
+  {faulted, _} = stat.()
+  {mean, (faulted - faults) / calls}
 end
 
-sustained.("Node.from_json", fn -> Tarnish.Node.from_json(schema, json) end)
-# Tarnish has no JSON text path in Elixir, so these rows time Jason around it, as a caller
-# holding text would.
-text = Jason.encode!(json)
-steps_text = Jason.encode!(steps)
+measured =
+  Enum.reduce(1..rounds, Map.new(cases, fn {name, row, _} -> {{name, row}, []} end), fn _, acc ->
+    Enum.reduce(cases, acc, fn {name, row, call}, acc ->
+      Map.update!(acc, {name, row}, &[slot.(call) | &1])
+    end)
+  end)
 
-sustained.("Jason, then Node.from_json", fn ->
-  Tarnish.Node.from_json(schema, Jason.decode!(text))
+median = fn list -> list |> Enum.sort() |> Enum.at(div(length(list), 2)) end
+
+format = fn
+  value when value < 10 -> :erlang.float_to_binary(value, decimals: 1)
+  value -> :erlang.float_to_binary(value, decimals: 0)
+end
+
+IO.puts("µs per call: the median of #{rounds} rounds' means, and the range of the rounds")
+
+cases
+|> Enum.chunk_by(fn {name, _, _} -> name end)
+|> Enum.each(fn [{name, _, _} | _] = rows ->
+  IO.puts("\n" <> name)
+
+  Enum.each(rows, fn {_, row, _} ->
+    {means, faults} = Enum.unzip(measured[{name, row}])
+
+    IO.puts(
+      "  " <>
+        String.pad_trailing(row, 52) <>
+        String.pad_leading(format.(median.(means)), 7) <>
+        "   " <>
+        String.pad_trailing("#{format.(Enum.min(means))}..#{format.(Enum.max(means))}", 14) <>
+        "#{:erlang.float_to_binary(median.(faults), decimals: 2)} faults"
+    )
+  end)
 end)
 
-sustained.("Node.to_json, unchanged", fn -> Tarnish.Node.to_json(doc) end)
-sustained.("Node.to_json after the steps", fn -> Tarnish.Node.to_json(changed) end)
-sustained.("JSON text after the steps", fn -> Jason.encode!(Tarnish.Node.to_json(changed)) end)
-sustained.("Node.check", fn -> Tarnish.Node.check(doc) end)
-sustained.("Step.apply, 10 steps", fn -> Tarnish.Step.apply(doc, steps) end)
-
-sustained.("from JSON, apply, to JSON", fn ->
-  {:ok, doc} = Tarnish.Node.from_json(schema, json)
-  {:ok, doc} = Tarnish.Step.apply(doc, steps)
-  Tarnish.Node.to_json(doc)
-end)
-
-sustained.("JSON text in and out, Jason", fn ->
-  {:ok, doc} = Tarnish.Node.from_json(schema, Jason.decode!(text))
-  {:ok, doc} = Tarnish.Step.apply(doc, Jason.decode!(steps_text))
-  Jason.encode!(Tarnish.Node.to_json(doc))
-end)
+{_, rss} = stat.()
+IO.puts("\nRSS #{div(rss, 1024 * 1024)} MiB")

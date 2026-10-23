@@ -6,8 +6,8 @@ mod ops;
 use crate::Text;
 use crate::js;
 use crate::json::Value;
-use crate::model::{Node, Schema, SchemaSpec};
-use crate::transform::{Mappable, Mapping, Step, StepResult, TRANSFORM_ERROR, Transform};
+use crate::model::{Change, Node, Schema, SchemaSpec};
+use crate::transform::{Mappable, Mapping, Step, TRANSFORM_ERROR, Transform};
 use crate::{Error, Result};
 
 /// A schema from its spec: `nodes` and `marks`, each an object of the types' specs in order or
@@ -18,14 +18,20 @@ pub fn schema(spec: &Value) -> Result<Schema> {
 
 /// The document with the steps applied in order.
 pub fn apply_steps<'a>(doc: &Node<'a>, steps: &Value) -> Result<Node<'a>> {
-    let mut doc = doc.clone();
+    apply_steps_change(doc, steps).map(Change::into_node)
+}
+
+/// [`apply_steps`], leaving the nodes along the path to the deepest node the last step's replace
+/// changes unwritten, for a caller that writes the document again anyway.
+#[doc(hidden)]
+pub fn apply_steps_change<'a>(doc: &Node<'a>, steps: &Value) -> Result<Change<'a>> {
+    let mut change = Change::whole(doc.clone());
     for step in step_list(doc.schema(), steps)? {
-        doc = match step.apply(doc)? {
-            StepResult::Ok(doc) => doc,
-            StepResult::Failed(message) => return Err(Error::Of(&TRANSFORM_ERROR, message)),
-        };
+        change = step
+            .apply_change(change.into_node())?
+            .map_err(|message| Error::Of(&TRANSFORM_ERROR, message))?;
     }
-    Ok(doc)
+    Ok(change)
 }
 
 /// The steps that undo the steps applied to the document, last first.

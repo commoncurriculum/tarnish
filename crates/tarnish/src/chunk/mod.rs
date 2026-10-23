@@ -31,12 +31,16 @@
 //! another chunk by adding to the end.
 
 mod build;
+mod in_place;
+mod utf8;
 mod value;
 
 use std::borrow::Cow;
 use std::sync::Arc;
 
-pub(crate) use build::Builder;
+pub(crate) use build::{Builder, KidSlots};
+pub use utf8::Check;
+use utf8::{CHECKED_WHOLE, Utf8, str_span, utf8, utf8_sections};
 pub(crate) use value::JsonView;
 pub use value::{Kind, ValueRef};
 
@@ -69,9 +73,6 @@ pub(crate) const HEADER: usize = 4 + 4 + 8 + 8 + 4 * SECTIONS;
 
 /// A reference to something another chunk holds: the rest is an index into `externs`.
 pub(crate) const EXTERN: u32 = 1 << 31;
-
-/// The most imports a change in place gives a chunk, past which the change copies instead.
-const IMPORTS_IN_PLACE: usize = 16;
 
 /// A kid's slot for a node in the kid's own chunk. A kid names its node's chunk itself, rather
 /// than through `externs`, so that a list copies from one chunk to another kid by kid, as
@@ -278,31 +279,8 @@ pub struct Chunk<'a> {
     /// Where each section starts in `bytes`.
     starts: [u32; SECTIONS],
     counts: [u32; SECTIONS],
-    /// The strings and text sections, checked as UTF-8 once so that a read only slices them.
-    strings: Box<str>,
-    text: Box<str>,
-}
-
-/// A section of UTF-8, or `None` when it isn't.
-fn utf8_section(
-    bytes: &[u8],
-    (starts, counts): (&[u32; SECTIONS], &[u32; SECTIONS]),
-    section: usize,
-) -> Option<Box<str>> {
-    let start = starts[section] as usize;
-    let end = start + counts[section] as usize * WIDTHS[section];
-    std::str::from_utf8(bytes.get(start..end)?)
-        .ok()
-        .map(Box::from)
-}
-
-/// `len` bytes of a section of UTF-8 from `start`.
-#[inline]
-fn str_span(section: &str, start: u32, len: u32) -> &str {
-    let start = start as usize;
-    section
-        .get(start..start + len as usize)
-        .unwrap_or_else(|| corrupt())
+    strings: Utf8<'a>,
+    text: Utf8<'a>,
 }
 
 /// What a chunk's header says: its id and the ids of the chunks it imports, which a binding
@@ -315,8 +293,11 @@ pub struct Header {
 #[cold]
 #[track_caller]
 pub(crate) fn corrupt() -> ! {
-    panic!("a corrupt chunk")
+    std::panic::panic_any(CORRUPT)
 }
+
+/// What a read of a corrupt chunk panics with.
+pub const CORRUPT: &str = "a corrupt chunk";
 
 #[inline]
 fn word(bytes: &[u8], at: usize) -> u32 {
@@ -377,6 +358,16 @@ impl<'a> Chunk<'a> {
         schema: &Schema,
         imports: Vec<Arc<Chunk<'a>>>,
     ) -> Result<Chunk<'a>> {
+        Chunk::load_checking(bytes, schema, imports, Check::Whole)
+    }
+
+    /// [`load`](Self::load), checking its strings and text are UTF-8 as `check` says.
+    pub fn load_checking(
+        bytes: Cow<'a, [u8]>,
+        schema: &Schema,
+        imports: Vec<Arc<Chunk<'a>>>,
+        check: Check,
+    ) -> Result<Chunk<'a>> {
         let (starts, counts) = layout(&bytes)?;
         if double_word(&bytes, 8) != schema.fingerprint() {
             return Err(Error::Range(
@@ -390,12 +381,14 @@ impl<'a> Chunk<'a> {
         {
             return Err(invalid());
         }
-        let sections = (&starts, &counts);
-        let (Some(strings), Some(text)) = (
-            utf8_section(&bytes, sections, STRINGS),
-            utf8_section(&bytes, sections, TEXT),
-        ) else {
-            return Err(invalid());
+        // A small chunk's text is checked whole, which costs less than a check of each span read.
+        let small = counts[STRINGS].saturating_add(counts[TEXT]) <= CHECKED_WHOLE;
+        let (strings, text) = match check {
+            Check::OnRead if !small => (Utf8::OnRead, Utf8::OnRead),
+            _ => match utf8_sections(&bytes, (&starts, &counts)) {
+                Some(sections) => sections,
+                None => return Err(invalid()),
+            },
         };
         Ok(Chunk {
             id: double_word(&bytes, 16),
@@ -409,20 +402,24 @@ impl<'a> Chunk<'a> {
         })
     }
 
-    /// A chunk a builder packed, with where it put each section and how many of each there are.
+    /// A chunk a builder packed, with where it put each section and how many of each there are,
+    /// and its strings and text sections as it wrote them, which are UTF-8 already.
     pub(crate) fn from_parts(
         bytes: Vec<u8>,
         schema: Schema,
         imports: Vec<Arc<Chunk<'a>>>,
-        starts: [u32; SECTIONS],
-        counts: [u32; SECTIONS],
+        (starts, counts): ([u32; SECTIONS], [u32; SECTIONS]),
+        strings: String,
+        text: String,
     ) -> Chunk<'a> {
-        let sections = (&starts, &counts);
-        let utf8 = |section| utf8_section(&bytes, sections, section).unwrap_or_else(|| corrupt());
-        let (strings, text) = (utf8(STRINGS), utf8(TEXT));
+        let bytes = Cow::Owned(bytes);
+        let (strings, text) = (
+            Utf8::Checked(Cow::Owned(strings)),
+            Utf8::Checked(Cow::Owned(text)),
+        );
         Chunk {
             id: double_word(&bytes, 16),
-            bytes: Cow::Owned(bytes),
+            bytes,
             schema,
             imports,
             starts,
@@ -640,12 +637,18 @@ impl<'a> Chunk<'a> {
 
     #[inline]
     pub(crate) fn string(&self, start: u32, len: u32) -> &str {
-        str_span(&self.strings, start, len)
+        match &self.strings {
+            Utf8::Checked(strings) => str_span(strings, start, len),
+            Utf8::OnRead => utf8(self.span(STRINGS, start, len)),
+        }
     }
 
     #[inline]
     pub(crate) fn text(&self, start: u32, len: u32) -> &str {
-        str_span(&self.text, start, len)
+        match &self.text {
+            Utf8::Checked(text) => str_span(text, start, len),
+            Utf8::OnRead => utf8(self.span(TEXT, start, len)),
+        }
     }
 
     /// The UTF-16 units from `start`, `len` of them, as little-endian bytes.
@@ -657,89 +660,6 @@ impl<'a> Chunk<'a> {
     #[inline]
     pub fn ptr_eq(&self, other: &Chunk) -> bool {
         std::ptr::eq(self.bytes.as_ptr(), other.bytes.as_ptr())
-    }
-
-    /// Puts node `index` of `holder`, `size` positions long, in place of kid `position` of node
-    /// `id`'s list of kids, and changes the node's size to match: `false`, having changed
-    /// nothing, unless the list is in an import, and this chunk and that one are held by
-    /// nothing else and own their bytes.
-    pub(crate) fn replace_kid_in_place(
-        this: &mut Arc<Chunk<'a>>,
-        id: u32,
-        position: u32,
-        holder: &Arc<Chunk<'a>>,
-        index: u32,
-        size: u32,
-    ) -> bool {
-        let Some(chunk) = Arc::get_mut(this).filter(|chunk| chunk.is_owned()) else {
-            return false;
-        };
-        let record = chunk.record(id);
-        if record.a & EXTERN == 0 {
-            return false;
-        }
-        let (slot, start) = chunk.external(record.a);
-        let at = start.checked_add(position).unwrap_or_else(|| corrupt());
-        let Some(list) = (chunk.imports.get_mut(slot as usize))
-            .and_then(Arc::get_mut)
-            .filter(|list| list.is_owned())
-        else {
-            return false;
-        };
-        let content = u64::from(record.size) - u64::from(list.kid(at).size) + u64::from(size);
-        let Ok(content) = u32::try_from(content) else {
-            return false;
-        };
-        let Some(slot) = list.import_in_place(holder) else {
-            return false;
-        };
-        let kid = list.at(KIDS, at);
-        list.write_words(kid, &[slot, index, size]);
-        let node = chunk.at(NODES, id);
-        chunk.write_words(node + 20, &[content]);
-        true
-    }
-
-    fn is_owned(&self) -> bool {
-        matches!(self.bytes, Cow::Owned(_))
-    }
-
-    fn owned_bytes(&mut self) -> &mut Vec<u8> {
-        match &mut self.bytes {
-            Cow::Owned(bytes) => bytes,
-            Cow::Borrowed(_) => panic!("a chunk changed in place owns its bytes"),
-        }
-    }
-
-    /// Words of the chunk's own bytes written over, at byte `at`.
-    fn write_words(&mut self, at: usize, words: &[u32]) {
-        let bytes = &mut self.owned_bytes()[at..];
-        for (word, bytes) in words.iter().zip(bytes.as_chunks_mut::<4>().0) {
-            *bytes = word.to_le_bytes();
-        }
-    }
-
-    /// The slot of `chunk`, importing it, at the end, when it isn't an import yet: `None` once
-    /// the chunk has as many imports as changes in place may give it, which would otherwise
-    /// keep every chunk they made alive.
-    fn import_in_place(&mut self, chunk: &Arc<Chunk<'a>>) -> Option<u32> {
-        if let Some(slot) = self
-            .imports
-            .iter()
-            .position(|import| Arc::ptr_eq(import, chunk))
-        {
-            return Some(slot as u32);
-        }
-        if self.imports.len() >= IMPORTS_IN_PLACE {
-            return None;
-        }
-        self.owned_bytes()
-            .extend_from_slice(&chunk.id.to_le_bytes());
-        let slot = self.imports.len() as u32;
-        self.counts[IMPORTS] = slot + 1;
-        self.write_words(24 + IMPORTS * 4, &[slot + 1]);
-        self.imports.push(chunk.clone());
-        Some(slot)
     }
 
     /// The chunks this one imports, and theirs, each once, this one's last.
@@ -779,31 +699,5 @@ impl Drop for Chunk<'_> {
 impl std::fmt::Debug for Chunk<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "Chunk({:016x}, {} nodes)", self.id, self.counts[NODES])
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::borrow::Cow;
-
-    use super::{Chunk, STRINGS, layout};
-    use crate::{Error, Node, api, json};
-
-    /// A chunk's strings are checked as it loads, so one whose strings aren't UTF-8 is refused
-    /// then rather than on the read that would come across them.
-    #[test]
-    fn refuses_a_chunk_whose_strings_are_not_utf8() {
-        let spec = r#"{"nodes": {"doc": {"content": "text*", "attrs": {"a": {"default": "x"}}},
-                                 "text": {}}}"#;
-        let schema = api::schema(&json::from_str(spec).expect("JSON")).expect("a schema");
-        let doc = json::from_str(r#"{"type": "doc", "attrs": {"a": "é"}}"#).expect("JSON");
-        let doc = Node::from_json(&schema, &doc).expect("a document");
-        let mut bytes = doc.chunk().bytes().to_vec();
-        let (starts, counts) = layout(&bytes).expect("a layout");
-        assert!(counts[STRINGS] > 0);
-        assert!(Chunk::load(Cow::Borrowed(&bytes), &schema, Vec::new()).is_ok());
-        bytes[starts[STRINGS] as usize] = 0xff;
-        let refused = Chunk::load(Cow::Owned(bytes), &schema, Vec::new()).err();
-        assert!(refused == Some(Error::Range("Invalid document chunk".into())));
     }
 }

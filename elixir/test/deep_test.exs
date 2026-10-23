@@ -1,5 +1,6 @@
 defmodule Tarnish.DeepTest do
   use ExUnit.Case, async: true
+  import Tarnish.TestDocs
 
   # Far deeper than a dirty scheduler's stack, or a thread of the NIF's batch pool, could recurse
   # through. Each deep part starts near the top of what holds it, where an unguarded level would
@@ -33,15 +34,6 @@ defmodule Tarnish.DeepTest do
     end)
   end
 
-  defp doc(schema, json) do
-    {:ok, doc} = Tarnish.Node.from_json(schema, json)
-    doc
-  end
-
-  defp replace(from, to, content) do
-    %{"stepType" => "replace", "from" => from, "to" => to, "slice" => %{"content" => content}}
-  end
-
   test "a document changed deep down has its JSON made anew down to the change", %{
     schema: schema
   } do
@@ -52,6 +44,20 @@ defmodule Tarnish.DeepTest do
     assert Tarnish.Node.check(changed) === :ok
     paragraph = %{"type" => "paragraph", "content" => [text]}
     assert Tarnish.Node.to_json(changed) === %{"type" => "doc", "content" => [quotes(paragraph)]}
+  end
+
+  test "a kept document changed deep down shares the JSON written before, down to the change",
+       %{schema: schema} do
+    doc = doc(schema, %{"type" => "doc", "content" => [quotes(@paragraph)]})
+    text = %{"type" => "text", "text" => "x"}
+    step = [replace(@depth + 1, @depth + 1, [text])]
+    {:ok, changed} = Tarnish.Step.apply(doc, step)
+    {:ok, again} = Tarnish.Step.apply(changed, step)
+    json = Tarnish.Node.to_json(again)
+    assert :erts_debug.same(json, again.json)
+    paragraph = %{"type" => "paragraph", "content" => [%{text | "text" => "xx"}]}
+    assert json === %{"type" => "doc", "content" => [quotes(paragraph)]}
+    assert Tarnish.Node.to_json(Map.merge(again, %{json: nil, of: :none})) === json
   end
 
   test "a document holds attributes that nest deep, read, checked and written whole", %{

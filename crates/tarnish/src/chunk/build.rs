@@ -19,6 +19,49 @@ use crate::json::Map;
 use crate::model::compare_deep::deep_equal;
 use crate::model::{Schema, TextRef};
 
+/// The slots in a chunk built of the kids of a list it copies from another, found once for each
+/// slot these cover: the other chunk's own, and each of its first [`KidSlots::COVERED`] imports.
+/// A kid in another import has its slot found each time.
+pub(crate) struct KidSlots([u32; KidSlots::COVERED + 1]);
+
+impl KidSlots {
+    const COVERED: usize = 16;
+    const UNSEEN: u32 = u32::MAX - 1;
+
+    pub fn new() -> KidSlots {
+        KidSlots([KidSlots::UNSEEN; KidSlots::COVERED + 1])
+    }
+
+    /// The entry for a kid's slot, when these cover it.
+    #[inline]
+    fn entry(slot: u32) -> Option<usize> {
+        match slot {
+            LOCAL => Some(KidSlots::COVERED),
+            slot => Some(slot as usize).filter(|&slot| slot < KidSlots::COVERED),
+        }
+    }
+
+    /// The slot found for a kid's slot, when these cover it and it has been found.
+    #[inline]
+    pub fn get(&self, slot: u32) -> Option<u32> {
+        let found = self.0[KidSlots::entry(slot)?];
+        (found != KidSlots::UNSEEN).then_some(found)
+    }
+
+    /// The slot for a kid's slot, which `find` finds unless these hold it already, and whether
+    /// these cover it, keeping what `find` found when they do.
+    #[inline]
+    pub fn get_or_find(&mut self, slot: u32, find: impl FnOnce() -> u32) -> (u32, bool) {
+        let Some(entry) = KidSlots::entry(slot) else {
+            return (find(), false);
+        };
+        if self.0[entry] == KidSlots::UNSEEN {
+            self.0[entry] = find();
+        }
+        (self.0[entry], true)
+    }
+}
+
 pub(crate) struct Builder<'a> {
     schema: Schema,
     imports: Vec<Arc<Chunk<'a>>>,
@@ -30,7 +73,11 @@ pub(crate) struct Builder<'a> {
 /// reuses rather than allocating and growing its own.
 #[derive(Default)]
 struct Scratch {
+    /// Every section but the strings and the text, which are UTF-8 as written, so that sealing
+    /// the chunk need not check them again.
     sections: [Vec<u8>; SECTIONS],
+    strings: String,
+    text: String,
     /// Each import's slot, by the address of its chunk, once there are too many to search.
     import_slots: FxHashMap<usize, u32>,
     /// Keys written to `strings`, to write each once.
@@ -79,6 +126,12 @@ fn recycle(mut scratch: Box<Scratch>) {
             *section = Vec::new();
         }
     }
+    for section in [&mut scratch.strings, &mut scratch.text] {
+        section.clear();
+        if section.capacity() > SPARE_BYTES {
+            *section = String::new();
+        }
+    }
     scratch.import_slots.clear();
     scratch.keys.clear();
     scratch.defaults.clear();
@@ -120,6 +173,22 @@ impl<'a> Builder<'a> {
         let added = (bytes.len() / super::WIDTHS[section]) as u32;
         self.counts[section] = index
             .checked_add(added)
+            .filter(|&count| count < EXTERN)
+            .expect("a chunk holds fewer than 2^31 of anything");
+        index
+    }
+
+    /// [`push`](Self::push) for the strings or the text section.
+    fn push_str(&mut self, section: usize, string: &str) -> u32 {
+        let index = self.counts[section];
+        match section {
+            STRINGS => self.scratch.strings.push_str(string),
+            TEXT => self.scratch.text.push_str(string),
+            _ => unreachable!("a section of UTF-8"),
+        }
+        self.counts[section] = u32::try_from(string.len())
+            .ok()
+            .and_then(|added| index.checked_add(added))
             .filter(|&count| count < EXTERN)
             .expect("a chunk holds fewer than 2^31 of anything");
         index
@@ -219,9 +288,7 @@ impl<'a> Builder<'a> {
         let written = list.len();
         list.resize(written + kids.len(), 0);
         let copies = list[written..].as_chunks_mut::<12>().0;
-        // `chunk`'s own slot here, and its first import slots, once used.
-        let mut own = LOCAL;
-        let mut slots = [LOCAL; 8];
+        let mut slots = KidSlots::new();
         let mut size = 0;
         for (kid, copy) in kids
             .as_chunks::<12>()
@@ -231,29 +298,48 @@ impl<'a> Builder<'a> {
             .zip(copies)
         {
             size += u64::from(kid.size);
-            let slot = match kid.slot {
-                LOCAL if kid.index >= bound => corrupt(),
-                LOCAL if own != LOCAL => own,
-                LOCAL => {
-                    own = self.import(chunk);
-                    own
-                }
-                theirs => {
-                    let import = chunk.import(theirs);
-                    match slots.get_mut(theirs as usize) {
-                        Some(slot) if *slot != LOCAL => *slot,
-                        Some(slot) => {
-                            *slot = self.import(import);
-                            *slot
-                        }
-                        None => self.import(import),
-                    }
-                }
-            };
+            if kid.slot == LOCAL && kid.index >= bound {
+                corrupt();
+            }
+            let (slot, _) = slots.get_or_find(kid.slot, || match kid.slot {
+                LOCAL => self.import(chunk),
+                theirs => self.import(chunk.import(theirs)),
+            });
             *copy = Kid { slot, ..kid }.to_bytes();
         }
         self.scratch.sections[KIDS] = list;
         size
+    }
+
+    /// Adds the `count` kids listed from `start` in `chunk`, the slot of each that `slots` maps
+    /// rewritten as it maps it, and then the kids `written` gives, by their position, in their
+    /// place: where they start.
+    pub fn copy_kid_list(
+        &mut self,
+        chunk: &Chunk<'_>,
+        start: u32,
+        count: u32,
+        slots: &KidSlots,
+        written: &[(u32, Kid)],
+    ) -> u32 {
+        let first = self.counts[KIDS];
+        self.counts[KIDS] = first
+            .checked_add(count)
+            .filter(|&total| total < EXTERN)
+            .expect("a chunk holds fewer than 2^31 of anything");
+        let list = &mut self.scratch.sections[KIDS];
+        let at = list.len();
+        list.extend_from_slice(chunk.span(KIDS, start, count));
+        let kids = list[at..].as_chunks_mut::<12>().0;
+        for kid in kids.iter_mut() {
+            if let Some(slot) = slots.get(u32::from_le_bytes([kid[0], kid[1], kid[2], kid[3]])) {
+                kid[..4].copy_from_slice(&slot.to_le_bytes());
+            }
+        }
+        for &(position, kid) in written {
+            kids[position as usize] = kid.to_bytes();
+        }
+        first
     }
 
     /// A kid for node `index` of `chunk`, which is `size` positions long.
@@ -283,11 +369,11 @@ impl<'a> Builder<'a> {
     /// Where a string is in `strings`.
     pub fn string(&mut self, string: &str) -> (u32, u32) {
         let len = u32::try_from(string.len()).expect("a string shorter than 4 GiB");
-        (self.push(STRINGS, string.as_bytes()), len)
+        (self.push_str(STRINGS, string), len)
     }
 
     fn key(&mut self, key: &str) -> (u32, u32) {
-        let strings = &self.scratch.sections[STRINGS];
+        let strings = self.scratch.strings.as_bytes();
         let found = self.scratch.keys.iter().find(|&&(start, len)| {
             len as usize == key.len()
                 && &strings[start as usize..start as usize + len as usize] == key.as_bytes()
@@ -436,8 +522,9 @@ impl<'a> Builder<'a> {
     }
 
     fn written_str(&self, start: u32, len: u32) -> &str {
-        let bytes = &self.scratch.sections[STRINGS][start as usize..(start + len) as usize];
-        std::str::from_utf8(bytes).unwrap_or_else(|_| corrupt())
+        (self.scratch.strings)
+            .get(start as usize..(start + len) as usize)
+            .unwrap_or_else(|| corrupt())
     }
 
     /// Whether two sets written here hold equal marks, as `Mark.sameSet` compares them. Their
@@ -477,8 +564,7 @@ impl<'a> Builder<'a> {
                 .collect();
             return Text::from_units(&units);
         }
-        let bytes = &self.scratch.sections[TEXT][record.a as usize..(record.a + record.b) as usize];
-        Text::from(std::str::from_utf8(bytes).expect("text the builder wrote"))
+        Text::from(&self.scratch.text[record.a as usize..(record.a + record.b) as usize])
     }
 
     /// A mark type's instance and the set of just it, when written.
@@ -554,7 +640,7 @@ impl<'a> Builder<'a> {
         } else {
             (TEXT_NODE, text.chars().map(char::len_utf16).sum())
         };
-        let a = self.push(TEXT, text.as_bytes());
+        let a = self.push_str(TEXT, text);
         self.push_record(Record {
             ty,
             flags,
@@ -603,7 +689,7 @@ impl<'a> Builder<'a> {
                 ..
             } = *part
             {
-                self.push(TEXT, text.as_bytes());
+                self.push_str(TEXT, text);
                 bytes += text.len();
                 ascii &= part_ascii;
             }
@@ -663,14 +749,23 @@ impl<'a> Builder<'a> {
         for (at, count) in counts.iter().enumerate() {
             header[24 + at * 4..28 + at * 4].copy_from_slice(&count.to_le_bytes());
         }
-        let sections = &self.scratch.sections[..IMPORTS];
-        let total = HEADER + sections.iter().map(Vec::len).sum::<usize>() + self.imports.len() * 8;
+        let scratch = &self.scratch;
+        let written = |section: usize| match section {
+            STRINGS => scratch.strings.as_bytes(),
+            TEXT => scratch.text.as_bytes(),
+            _ => &scratch.sections[section],
+        };
+        let total = HEADER
+            + (0..IMPORTS)
+                .map(|section| written(section).len())
+                .sum::<usize>()
+            + self.imports.len() * 8;
         let mut bytes = Vec::with_capacity(total);
         bytes.extend_from_slice(&header);
         let mut starts = [0; SECTIONS];
-        for (section, written) in sections.iter().enumerate() {
-            starts[section] = u32::try_from(bytes.len()).expect("a chunk smaller than 4 GiB");
-            bytes.extend_from_slice(written);
+        for (section, start) in starts.iter_mut().enumerate().take(IMPORTS) {
+            *start = u32::try_from(bytes.len()).expect("a chunk smaller than 4 GiB");
+            bytes.extend_from_slice(written(section));
         }
         starts[IMPORTS] = u32::try_from(bytes.len()).expect("a chunk smaller than 4 GiB");
         for import in &self.imports {
@@ -687,8 +782,16 @@ impl<'a> Builder<'a> {
             scratch,
             ..
         } = self;
+        let (strings, text) = (scratch.strings.clone(), scratch.text.clone());
         recycle(scratch);
-        Arc::new(Chunk::from_parts(bytes, schema, imports, starts, counts))
+        Arc::new(Chunk::from_parts(
+            bytes,
+            schema,
+            imports,
+            (starts, counts),
+            strings,
+            text,
+        ))
     }
 }
 

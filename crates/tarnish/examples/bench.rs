@@ -31,7 +31,7 @@ fn main() {
     let fixtures = read("fixtures/transform.json");
     let schema = api::schema(&fixtures["schemas"][0]).unwrap();
     let document = read("target/bench/document.json");
-    let (doc, steps) = (&document["doc"], &document["steps"]);
+    let (doc, steps) = (&document["doc"], &document["changes"][0]["steps"]);
     let node = Node::from_json(&schema, doc).unwrap();
     let changed = api::apply_steps(&node, steps).unwrap();
     let time = |name: &str, run: &mut dyn FnMut()| println!("{name:36} {:.0} µs", median(run));
