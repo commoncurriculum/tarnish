@@ -85,7 +85,7 @@ impl SliceHandle {
 
     #[napi]
     pub fn to_json<'env>(&self, env: &'env Env) -> Result<Unknown<'env>> {
-        js::value_to_js(env, &self.slice.to_json())
+        js::json_to_js(env, self.slice.to_json())
     }
 }
 

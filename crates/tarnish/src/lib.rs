@@ -30,7 +30,8 @@
 //!     tr.doc().to_json_string(),
 //!     r#"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","marks":[{"type":"em"}],"text":"Hello"},{"type":"text","text":", world"}]}]}"#
 //! );
-//! assert_eq!(tr.steps()[0].to_json()["stepType"], "addMark");
+//! let step = tr.steps()[0].to_json();
+//! assert_eq!(step.get("stepType").and_then(|kind| kind.as_str()).as_deref(), Some("addMark"));
 //! # Ok::<(), tarnish::Error>(())
 //! ```
 

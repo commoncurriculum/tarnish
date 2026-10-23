@@ -1,13 +1,14 @@
 //! Slices, and replacing a range of a document with one.
 
 use super::fragment::{Content, Fragment};
+use super::json_ref::JsonRef;
 use super::node::Node;
 use super::resolved_pos::ResolvedPos;
 use super::schema::Schema;
 use crate::js;
 use crate::js::Class;
 use crate::js::stack;
-use crate::json::{Map, NULL, Value};
+use crate::json::{NULL, Value};
 use crate::{Error, Result};
 
 /// What a slice that doesn't fit where it is put throws.
@@ -90,20 +91,9 @@ impl<'a> Slice<'a> {
         ))
     }
 
-    /// The slice as JSON, `null` when it is empty.
-    pub fn to_json(&self) -> Value {
-        if self.content.size() == 0 {
-            return Value::Null;
-        }
-        let mut json = Map::with_capacity(3);
-        json.push("content".into(), self.content.to_json());
-        if self.open_start > 0 {
-            json.push("openStart".into(), self.open_start.into());
-        }
-        if self.open_end > 0 {
-            json.push("openEnd".into(), self.open_end.into());
-        }
-        Value::Object(json)
+    /// The slice as JSON, `null` when it is empty, read in place.
+    pub fn to_json(&self) -> JsonRef<'_> {
+        JsonRef::slice(self)
     }
 
     pub fn from_json(schema: &Schema, json: &Value) -> Result<Slice<'static>> {

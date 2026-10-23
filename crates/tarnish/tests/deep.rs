@@ -124,7 +124,7 @@ fn documents_nest_as_deeply_as_memory_allows() {
         );
 
         let slice = doc.slice(TEXT + 2, TEXT + 6, false).expect("a slice");
-        let slice_json = slice.to_json();
+        let slice_json = slice.to_json().to_value();
         assert!(
             Slice::from_json(&schema, &slice_json)
                 .expect("the slice again")
@@ -213,7 +213,11 @@ fn documents_nest_as_deeply_as_memory_allows() {
         .expect("replace range");
         tr.doc().check().expect("a valid document");
 
-        let steps: Vec<Value> = tr.steps().iter().map(Step::to_json).collect();
+        let steps: Vec<Value> = tr
+            .steps()
+            .iter()
+            .map(|step| step.to_json().to_value())
+            .collect();
         let steps = Value::Array(steps);
         let applied = api::apply_steps(&doc, &steps).expect("the steps");
         assert!(applied == *tr.doc());
@@ -222,7 +226,8 @@ fn documents_nest_as_deeply_as_memory_allows() {
         let mut undone = tr.doc().clone();
         for (step, before) in tr.steps().iter().zip(tr.docs()).rev() {
             let inverted = step.invert(before).expect("an inverted step");
-            let inverted = Step::from_json(&schema, &inverted.to_json()).expect("the step again");
+            let inverted =
+                Step::from_json(&schema, &inverted.to_json().to_value()).expect("the step again");
             undone = inverted
                 .apply(undone)
                 .expect("applies")
@@ -483,7 +488,7 @@ fn wrappers_nest_as_deeply_as_memory_allows() {
         let redone = redone.apply(doc.clone()).expect("applies");
         assert!(*redone.doc().expect("a document") == wrapped);
 
-        let steps = Value::Array(vec![step.to_json()]);
+        let steps = Value::Array(vec![step.to_json().to_value()]);
         assert!(api::apply_steps(&doc, &steps).expect("the step") == wrapped);
         let inverted = api::invert_steps(&doc, &steps).expect("its inverse");
         assert!(api::apply_steps(&wrapped, &inverted).expect("the inverse") == doc);

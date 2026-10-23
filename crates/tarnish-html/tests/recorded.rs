@@ -177,7 +177,8 @@ fn parsed(parser: &DomParser<HtmlNode>, html: &str, record: &Value) -> Value {
     let template_tree = HtmlDom::new().parse_fragment(html).inner_html();
     let template_doc =
         parse_html(parser, html, options(record)).map(|doc| doc.to_json().to_value());
-    let slice = parse_html_slice(parser, html, options(record)).map(|slice| slice.to_json());
+    let slice =
+        parse_html_slice(parser, html, options(record)).map(|slice| slice.to_json().to_value());
     let dom = HtmlDom::parse_document(html);
     let body = dom.body().expect("a body");
     let document_tree = body.inner_html();

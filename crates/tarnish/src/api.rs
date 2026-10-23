@@ -42,7 +42,7 @@ pub fn invert_steps(doc: &Node, steps: &Value) -> Result<Value> {
         .iter()
         .zip(tr.docs())
         .rev()
-        .map(|(step, before)| Ok(step.invert(before)?.to_json()))
+        .map(|(step, before)| Ok(step.invert(before)?.to_json().to_value()))
         .collect::<Result<Vec<_>>>()?;
     Ok(Value::Array(inverted))
 }
@@ -73,7 +73,11 @@ pub fn transform<'a>(doc: &Node<'a>, ops: &Value) -> Result<(Node<'a>, Value)> {
     for op in ops {
         ops::apply(&mut tr, doc.schema(), op)?;
     }
-    let steps = tr.steps().iter().map(Step::to_json).collect();
+    let steps = tr
+        .steps()
+        .iter()
+        .map(|step| step.to_json().to_value())
+        .collect();
     Ok((tr.doc().clone(), Value::Array(steps)))
 }
 

@@ -266,7 +266,7 @@ fn a_replace_that_changes_nothing_gives_the_document_itself() {
         // A slice that ends inside the empty paragraph holds it as it is.
         let sliced = doc.slice(empty - 2, empty, false).expect("a slice");
         let both = json!([{ "type": "paragraph" }, { "type": "paragraph" }]);
-        assert_same(&both, &sliced.content().to_json());
+        assert_same(&both, &sliced.content().to_json().to_value());
         let paragraph = doc.node_at(empty - 1).expect("a position").expect("a node");
         let last = sliced.content().last_child().expect("a child");
         assert!(last.ptr_eq(&paragraph), "at depth {depth}");
