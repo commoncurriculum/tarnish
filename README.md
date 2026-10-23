@@ -456,7 +456,7 @@ Names are Rust's: `nodeSize` is `node_size`, `Transform.addMark` is `Transform::
 | --- | --- |
 | `Schema`, `NodeType`, `MarkType`, `NodeSpec`, `MarkSpec`, `AttributeSpec` | `Schema`, `NodeType`, `MarkType`, `SchemaSpec`, `NodeSpec`, `MarkSpec`, `AttributeSpec`; `SchemaSpec::from_json` reads a spec from JSON |
 | `Node`, `Fragment`, `Mark`, `Slice`, `ResolvedPos`, `NodeRange`, `ContentMatch` | The same names, in `tarnish` |
-| `Node.fromJSON`, `node.toJSON()` | `Node::from_json`, `Node::to_json`; `Node::from_json_text` and `Node::to_json_string` for JSON text |
+| `Node.fromJSON`, `node.toJSON()` | `Node::from_json`, `Node::to_json`; `Node::from_json_text` and `Node::to_json_string` for JSON text; `Node::json` to read the JSON without copying it |
 | `node.textBetween`, `node.textContent` | `Node::text_between`, `Node::text_content`; `api::text_between`, `api::text_content` for the bindings |
 | `Transform` and every operation on it | `transform::Transform`; `api::transform` applies ops, from JSON, for the bindings |
 | `ReplaceStep`, `ReplaceAroundStep`, `AddMarkStep`, `RemoveMarkStep`, `AddNodeMarkStep`, `RemoveNodeMarkStep`, `AttrStep`, `DocAttrStep` | `transform::Step`, one variant each |
@@ -575,8 +575,12 @@ as a socket does, typing into one of 10 or 100 places in turn.
 - **Rust's JSON value.** `to_json` gives a `Value` the caller owns, so every object, array and
   string longer than 24 bytes is an allocation, which the call frees again. Shorter strings, such
   as type names and most attribute values, are held in place. ProseMirror's `toJSON` shares the
-  node's own `attrs` object and strings, and V8 frees what it made later, outside the call. To
-  send or store a document, write its JSON text.
+  node's own `attrs` object and strings, and V8 frees what it made later, outside the call. Code
+  that only reads the JSON should use `json()`, which reads it in place from the document: it
+  builds nothing, reading a few keys costs next to nothing, and reading every value of the bench
+  document took 68 µs to `to_json`'s 194 in the same run. It compares equal to the `Value`,
+  writes the same text, and `to_value` copies it out for code that edits it. To send or store a
+  document, write its JSON text.
 - **Elixir reading.** Reading a map takes one and a half to two times as long as ProseMirror's
   `fromJSON`, and a read, the steps and a write together about a quarter longer than ProseMirror's,
   because of what it takes to get the map out of the VM. Code that forbids `unsafe` reads a term

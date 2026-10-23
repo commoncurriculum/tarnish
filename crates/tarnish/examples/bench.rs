@@ -3,7 +3,7 @@
 
 use std::time::Instant;
 
-use tarnish::{Node, api, json};
+use tarnish::{JsonKind, JsonRef, Node, api, json};
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -21,6 +21,20 @@ fn median(run: &mut dyn FnMut()) -> f64 {
         .collect();
     times.sort_by(f64::total_cmp);
     times[500]
+}
+
+/// Reads every value in `json`, as a caller of the view that wants all of it would.
+// bounded: as deep as the bench document
+fn visit(json: JsonRef) -> usize {
+    match json.kind() {
+        JsonKind::Array(_) => json.items().map(visit).sum(),
+        JsonKind::Object(_) => json
+            .entries()
+            .map(|(key, value)| key.len() + visit(value))
+            .sum(),
+        JsonKind::String(string) => string.len(),
+        _ => 1,
+    }
 }
 
 fn read(path: &str) -> json::Value {
@@ -52,12 +66,19 @@ fn main() {
     time("toJSON of the changed document", &mut || {
         drop(changed.to_json())
     });
+    time("JSON view of the changed document, read", &mut || {
+        std::hint::black_box(visit(changed.json()));
+    });
     time("JSON text of the changed document", &mut || {
         drop(changed.to_json_string())
     });
     time("fromJSON, apply 10 steps, toJSON", &mut || {
         let node = Node::from_json(&schema, doc).unwrap();
         drop(api::apply_steps(&node, steps).unwrap().to_json())
+    });
+    time("fromJSON, apply 10 steps, JSON view read", &mut || {
+        let node = Node::from_json(&schema, doc).unwrap();
+        std::hint::black_box(visit(api::apply_steps(&node, steps).unwrap().json()));
     });
     let steps_text = steps.to_string();
     time("JSON text in, apply 10 steps, JSON text out", &mut || {
