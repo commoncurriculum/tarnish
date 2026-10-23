@@ -229,7 +229,7 @@ impl StepHandle {
 
     #[napi]
     pub fn to_json<'env>(&self, env: &'env Env) -> Result<Unknown<'env>> {
-        js::value_to_js(env, &self.step.to_json())
+        js::json_to_js(env, self.step.to_json())
     }
 }
 

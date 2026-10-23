@@ -1,6 +1,7 @@
 //! The fields of a node's or mark's JSON, as `toJSON` makes them, read from the chunk for each
 //! form the JSON is written in.
 
+use super::json_ref::JsonRef;
 use super::mark::Mark;
 use super::node::Node;
 use super::view::{MarkRef, NodeRef, SetRef, TextRef};
@@ -44,17 +45,10 @@ pub trait Fields<'c>: Copy {
 impl<'c> Fields<'c> for NodeRef<'c> {
     #[inline]
     fn fields(self) -> impl Iterator<Item = Field<'c>> {
-        let node_type = self.node_type();
-        let marks = self.marks();
-        [
-            Some(Field::Type(node_type.name())),
-            (!node_type.data().attrs.is_empty()).then(|| Field::Attrs(self.attrs())),
-            (self.content_size() > 0).then_some(Field::Content(self)),
-            (!marks.is_empty()).then_some(Field::Marks(marks)),
-            self.text().map(Field::Text),
-        ]
-        .into_iter()
-        .flatten()
+        NodeFields {
+            node: self,
+            next: 0,
+        }
     }
 
     fn field_count(self) -> usize {
@@ -64,6 +58,40 @@ impl<'c> Fields<'c> for NodeRef<'c> {
             !self.marks().is_empty(),
             self.is_text(),
         )
+    }
+}
+
+/// A node's fields, each read as it is asked for, which keeps the iterator as small as the node.
+struct NodeFields<'c> {
+    node: NodeRef<'c>,
+    /// The field to look at next, in `toJSON`'s order.
+    next: u8,
+}
+
+impl<'c> Iterator for NodeFields<'c> {
+    type Item = Field<'c>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Field<'c>> {
+        let node = self.node;
+        loop {
+            self.next += 1;
+            let field = match self.next {
+                1 => Some(Field::Type(node.node_type().name())),
+                2 => {
+                    (!node.node_type().data().attrs.is_empty()).then(|| Field::Attrs(node.attrs()))
+                }
+                3 => (node.content_size() > 0).then_some(Field::Content(node)),
+                4 => Some(node.marks())
+                    .filter(|marks| !marks.is_empty())
+                    .map(Field::Marks),
+                5 => node.text().map(Field::Text),
+                _ => return None,
+            };
+            if field.is_some() {
+                return field;
+            }
+        }
     }
 }
 
@@ -93,8 +121,10 @@ pub(crate) fn field_count(attrs: bool, content: bool, marks: bool, text: bool) -
 }
 
 impl Node<'_> {
-    pub fn to_json(&self) -> Value {
-        to_value(self.view())
+    /// `node.toJSON()`, read in place from the document: nothing is built or copied until
+    /// [`JsonRef::to_value`] copies it out for code that edits it.
+    pub fn to_json(&self) -> JsonRef<'_> {
+        JsonRef::node(self.view())
     }
 
     /// `JSON.stringify(node.toJSON())`. Text keeps a lone surrogate, which a JSON value can't.
@@ -107,8 +137,9 @@ impl Node<'_> {
 }
 
 impl Mark<'_> {
-    pub fn to_json(&self) -> Value {
-        to_value(self.view())
+    /// `mark.toJSON()`, read in place: nothing is built or copied.
+    pub fn to_json(&self) -> JsonRef<'_> {
+        JsonRef::mark(self.view())
     }
 }
 

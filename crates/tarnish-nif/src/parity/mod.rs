@@ -89,7 +89,7 @@ pub fn answer(conversions: &dyn Conversions, request: Request) -> Result<Value, 
     answer_json(conversions, request).map(|answer| match answer {
         Answer::Text(text) => Value::String(text.into()),
         Answer::Json(json) => json,
-        Answer::Document(document) => document.to_json(),
+        Answer::Document(document) => document.to_json().to_value(),
     })
 }
 

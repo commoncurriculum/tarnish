@@ -115,7 +115,7 @@ pub fn generate_unique_ids(
             .collect(),
     };
     let content = Node::from_json(&schema.schema, doc)?;
-    let mut json = content.to_json();
+    let mut json = content.to_json().to_value();
     set_ids(&content, &mut json, 0, &types, options)?;
     Ok(json)
 }

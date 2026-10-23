@@ -7,26 +7,30 @@ use tarnish::json::{Value, json};
 use tarnish::transform::{
     CustomStep, Mappable, Mapping, Step, StepMap, StepResult, Transform, register_step,
 };
-use tarnish::{Error, Fragment, Node, Result, Schema, Slice, Text, api};
+use tarnish::{Error, Fragment, JsonRef, Node, Result, Schema, Slice, Text, api};
 use tarnish_fixtures::{assert_same, expect, outcome, read, records};
 
 #[derive(Debug)]
 struct InsertText {
     pos: usize,
     text: String,
+    /// Its JSON, which `to_json` reads.
+    json: Value,
 }
 
 impl InsertText {
+    fn step(pos: usize, text: String) -> Arc<dyn CustomStep> {
+        let json = json!({ "stepType": "insertText", "pos": pos, "text": text.as_str() });
+        Arc::new(InsertText { pos, text, json })
+    }
+
     fn len(&self) -> usize {
         Text::from(self.text.as_str()).len()
     }
 
     fn from_json(_: &Schema, json: &Value) -> Result<Arc<dyn CustomStep>> {
         match (json["pos"].as_f64(), json["text"].as_str()) {
-            (Some(pos), Some(text)) => Ok(Arc::new(InsertText {
-                pos: pos as usize,
-                text: text.to_owned(),
-            })),
+            (Some(pos), Some(text)) => Ok(InsertText::step(pos as usize, text.to_owned())),
             _ => Err(Error::Range(
                 "Invalid input for InsertTextStep.fromJSON".into(),
             )),
@@ -60,26 +64,18 @@ impl CustomStep for InsertText {
 
     fn map<'a>(&self, mapping: &dyn Mappable) -> Option<Step<'a>> {
         let result = mapping.map_result(self.pos, 1);
-        (!result.deleted_across()).then(|| {
-            Step::Custom(Arc::new(InsertText {
-                pos: result.pos,
-                text: self.text.clone(),
-            }))
-        })
+        (!result.deleted_across())
+            .then(|| Step::Custom(InsertText::step(result.pos, self.text.clone())))
     }
 
     fn merge<'a>(&self, other: &Step<'a>) -> Option<Step<'a>> {
         let other = other.custom::<InsertText>()?;
-        (other.pos == self.pos + self.len()).then(|| {
-            Step::Custom(Arc::new(InsertText {
-                pos: self.pos,
-                text: self.text.clone() + &other.text,
-            }))
-        })
+        (other.pos == self.pos + self.len())
+            .then(|| Step::Custom(InsertText::step(self.pos, self.text.clone() + &other.text)))
     }
 
-    fn to_json(&self) -> Value {
-        json!({ "stepType": "insertText", "pos": self.pos, "text": self.text.as_str() })
+    fn to_json(&self) -> JsonRef<'_> {
+        JsonRef::value(&self.json)
     }
 }
 
@@ -136,7 +132,11 @@ fn transforms_apply_invert_and_map_as_prosemirrors() {
                 StepResult::Ok(_) => {
                     let ranges: Vec<Value> =
                         step.get_map().ranges().iter().map(|&n| n.into()).collect();
-                    let inverted = step.invert(&before).expect("an inverse").to_json();
+                    let inverted = step
+                        .invert(&before)
+                        .expect("an inverse")
+                        .to_json()
+                        .to_value();
                     json!({ "map": ranges, "inverted": inverted })
                 }
             });
@@ -186,7 +186,7 @@ fn steps_map_as_prosemirrors() {
             mapping.append_map(step(&schema, json).get_map(), None);
         }
         let mapped = step(&schema, &case["step"]).map(&mapping);
-        let mapped = mapped.map_or(Value::Null, |step| step.to_json());
+        let mapped = mapped.map_or(Value::Null, |step| step.to_json().to_value());
         expect(case, &["step", "over"], json!({ "result": mapped }));
     }
 }
@@ -196,7 +196,7 @@ fn steps_merge_as_prosemirrors() {
     let (schema, fixtures) = fixtures();
     for case in records(&fixtures, "merged") {
         let merged = step(&schema, &case["a"]).merge(&step(&schema, &case["b"]));
-        let merged = merged.map_or(Value::Null, |step| step.to_json());
+        let merged = merged.map_or(Value::Null, |step| step.to_json().to_value());
         expect(case, &["a", "b"], json!({ "result": merged }));
     }
 }

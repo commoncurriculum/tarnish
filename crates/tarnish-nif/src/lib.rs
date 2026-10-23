@@ -78,12 +78,21 @@ pub(crate) fn dirty(env: Env) -> Term {
     atoms::dirty().encode(env)
 }
 
-/// A NIF's `load`: `use Tarnish.NIF` gives the count of threads a batch of conversions runs on as
-/// the load info, and an application's NIF serves its conversions, which `convert/1` and
-/// `convert_light/1` answer with.
-pub fn load(_env: Env, threads: Term, conversions: Option<&'static dyn Conversions>) -> bool {
-    let Ok(threads) = threads.decode::<usize>() else {
-        return false;
+/// A NIF's `load`: `use Tarnish.NIF` gives as the load info the count of threads a batch of
+/// conversions runs on, a hashmap and the key of the first entry `Map.to_list` gives of it, and
+/// an application's NIF serves its conversions, which `convert/1` and `convert_light/1` answer
+/// with.
+///
+/// Load info of the count alone, as `use Tarnish.NIF` gave it before, leaves a large map read in
+/// OTP 25's order.
+pub fn load(_env: Env, info: Term, conversions: Option<&'static dyn Conversions>) -> bool {
+    let threads = match info.decode::<(usize, Term, Term)>() {
+        Ok((threads, probe, first)) if term::learn_map_order(probe, first) => threads,
+        Ok(_) => return false,
+        Err(_) => match info.decode::<usize>() {
+            Ok(threads) => threads,
+            Err(_) => return false,
+        },
     };
     if let Some(conversions) = conversions {
         convert::serve(conversions, threads);

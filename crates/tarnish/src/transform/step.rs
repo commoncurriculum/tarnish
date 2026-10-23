@@ -9,7 +9,7 @@ use super::map::{Mappable, StepMap};
 use crate::js;
 use crate::js::stack;
 use crate::json::{Map, NULL, Value};
-use crate::model::{Change, Fragment, Mark, Node, REPLACE_ERROR, Schema, Slice};
+use crate::model::{Change, Fragment, JsonRef, Mark, Node, REPLACE_ERROR, Schema, Slice};
 use crate::{Error, Result};
 
 /// A step type of an application's own, as a subclass of ProseMirror's `Step` is. Register it
@@ -33,8 +33,8 @@ pub trait CustomStep: Any + fmt::Debug + Send + Sync {
         None
     }
 
-    /// Its JSON, with its `stepType`.
-    fn to_json(&self) -> Value;
+    /// Its JSON, with its `stepType`: a value it holds, as [`JsonRef::value`] reads it.
+    fn to_json(&self) -> JsonRef<'_>;
 }
 
 /// A registered step type's `fromJSON`.
@@ -725,70 +725,9 @@ impl<'a> Step<'a> {
         }
     }
 
-    pub fn to_json(&self) -> Value {
-        fn push(json: &mut Map, key: &str, value: impl Into<Value>) {
-            json.push(key.into(), value.into());
-        }
-        fn push_slice(json: &mut Map, slice: &Slice, structure: bool) {
-            if slice.size() > 0 {
-                push(json, "slice", slice.to_json());
-            }
-            if structure {
-                push(json, "structure", true);
-            }
-        }
-        fn push_attr(json: &mut Map, attr: &str, value: &Option<Value>) {
-            push(json, "attr", attr);
-            if let Some(value) = value {
-                push(json, "value", value.clone());
-            }
-        }
-        let mut json = Map::new();
-        push(&mut json, "stepType", self.json_id());
-        match self {
-            Step::Replace {
-                from,
-                to,
-                slice,
-                structure,
-            } => {
-                push(&mut json, "from", *from);
-                push(&mut json, "to", *to);
-                push_slice(&mut json, slice, *structure);
-            }
-            Step::ReplaceAround {
-                from,
-                to,
-                gap_from,
-                gap_to,
-                slice,
-                insert,
-                structure,
-            } => {
-                push(&mut json, "from", *from);
-                push(&mut json, "to", *to);
-                push(&mut json, "gapFrom", *gap_from);
-                push(&mut json, "gapTo", *gap_to);
-                push(&mut json, "insert", *insert);
-                push_slice(&mut json, slice, *structure);
-            }
-            Step::Mark { from, to, mark, .. } => {
-                push(&mut json, "mark", mark.to_json());
-                push(&mut json, "from", *from);
-                push(&mut json, "to", *to);
-            }
-            Step::NodeMark { pos, mark, .. } => {
-                push(&mut json, "pos", *pos);
-                push(&mut json, "mark", mark.to_json());
-            }
-            Step::Attr { pos, attr, value } => {
-                push(&mut json, "pos", *pos);
-                push_attr(&mut json, attr, value);
-            }
-            Step::DocAttr { attr, value } => push_attr(&mut json, attr, value),
-            Step::Custom(step) => return step.to_json(),
-        }
-        Value::Object(json)
+    /// `step.toJSON()`, read in place from the step.
+    pub fn to_json(&self) -> JsonRef<'_> {
+        JsonRef::step(self)
     }
 
     pub fn from_json(schema: &Schema, json: &Value) -> Result<Step<'static>> {

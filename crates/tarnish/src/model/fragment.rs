@@ -3,6 +3,7 @@
 use std::fmt;
 use std::sync::Arc;
 
+use super::json_ref::JsonRef;
 use super::node::Node;
 use super::read::Json;
 use super::read::Reader;
@@ -11,7 +12,7 @@ use super::view::NodeRef;
 use crate::Text;
 use crate::chunk::{Builder, Chunk, Holder, Kid};
 use crate::js::stack;
-use crate::json::Value;
+
 use crate::{Error, Result};
 
 /// What [`Fragment::nodes_between`] calls for each node: the node, its position, its parent,
@@ -639,12 +640,9 @@ impl<'a> Fragment<'a> {
         Ok(())
     }
 
-    /// The children as JSON, or `null` when there are none.
-    pub fn to_json(&self) -> Value {
-        if self.count == 0 {
-            return Value::Null;
-        }
-        Value::Array(self.refs().map(super::fields::to_value).collect())
+    /// The children as JSON, or `null` when there are none, read in place.
+    pub fn to_json(&self) -> JsonRef<'_> {
+        JsonRef::fragment(self)
     }
 
     pub fn from_json<'j>(schema: &Schema, json: impl Json<'j>) -> Result<Fragment<'static>> {

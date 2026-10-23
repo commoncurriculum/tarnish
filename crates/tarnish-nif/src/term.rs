@@ -4,6 +4,8 @@
 //! makes the same term as it would: structs, integer keys, atoms that aren't Latin-1, integers
 //! past 64 bits and numbers that aren't safe integers.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use rustler::types::atom;
 use rustler::types::map::MapIterator;
 use rustler::{Binary, Encoder, Env, NewBinary, Term, TermType};
@@ -126,13 +128,18 @@ impl Reader {
         for (key, value) in MapEntries::new(map).ok_or(NotJson)? {
             let key = match key.get_type() {
                 TermType::Binary => self::key(self.bytes(key)?)?,
-                TermType::Atom if atom::__struct__() != key => match key.atom_to_string() {
-                    Ok(name) => {
-                        unique = false;
-                        Key::from(name)
+                // A struct, such as a `Jason.OrderedObject`, is read from its external format.
+                // Its keys are atoms, one of them `__struct__`, which needn't come first: from
+                // OTP 26 a map's atom keys come in the order the VM made the atoms.
+                TermType::Atom if map.map_get(atom::__struct__()).is_err() => {
+                    match key.atom_to_string() {
+                        Ok(name) => {
+                            unique = false;
+                            Key::from(name)
+                        }
+                        Err(_) => return self.external(map, slot),
                     }
-                    Err(_) => return self.external(map, slot),
-                },
+                }
                 _ => return self.external(map, slot),
             };
             if unique {
@@ -166,7 +173,7 @@ fn text(bytes: &[u8]) -> Result<&str, NotJson> {
 }
 
 /// A map of at most this many keys is a flatmap, which keeps its keys in term order.
-const FLATMAP_KEYS: usize = 32;
+pub(crate) const FLATMAP_KEYS: usize = 32;
 
 /// A map's entries in the order Jason writes them, `maps:to_list`'s. A flatmap's iterator gives
 /// them in that order; a hashmap's walks them in the reverse of it.
@@ -175,10 +182,35 @@ pub(crate) struct MapEntries<'a> {
     reverse: bool,
 }
 
+/// Whether `Map.to_list` gives a hashmap's entries in the order the NIF API's iterator gives
+/// them backwards, as OTP 25's does, rather than in that order, as OTP 29's does. The load hook
+/// sets it from a map the VM lists.
+static HASHMAP_BACKWARDS: AtomicBool = AtomicBool::new(true);
+
+/// Sets which way a hashmap's entries are read from `probe`, a hashmap whose first entry
+/// `Map.to_list` gives with the key `first`.
+pub(crate) fn learn_map_order<'a>(probe: Term<'a>, first: Term<'a>) -> bool {
+    let Some(mut entries) = MapIterator::new(probe) else {
+        return false;
+    };
+    let backwards = match (entries.next(), entries.next_back()) {
+        (Some((key, _)), _) if key == first => false,
+        (_, Some((key, _))) if key == first => true,
+        _ => return false,
+    };
+    HASHMAP_BACKWARDS.store(backwards, Ordering::Relaxed);
+    true
+}
+
+/// Whether a hashmap's entries are read with the NIF API's iterator backwards.
+pub(crate) fn hashmap_lists_backwards() -> bool {
+    HASHMAP_BACKWARDS.load(Ordering::Relaxed)
+}
+
 impl<'a> MapEntries<'a> {
     pub(crate) fn new(map: Term<'a>) -> Option<Self> {
         Some(MapEntries {
-            reverse: map.map_size().ok()? > FLATMAP_KEYS,
+            reverse: map.map_size().ok()? > FLATMAP_KEYS && hashmap_lists_backwards(),
             iterator: MapIterator::new(map)?,
         })
     }

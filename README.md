@@ -200,7 +200,7 @@ let doc = html::parse(&schema, "<p>Hello <b>world</b></p>")?;
 assert_eq!(html::serialize(&schema, &doc)?, "<p>Hello <strong>world</strong></p>");
 
 let markdown = MarkdownManager::new(&extensions, Marked::new(more_lists()));
-assert_eq!(markdown.serialize(&doc.to_json())?, "Hello **world**");
+assert_eq!(markdown.serialize(&doc.to_json().to_value())?, "Hello **world**");
 assert_eq!(markdown.parse("Hello **world**")?, doc.to_json());
 ```
 
@@ -315,8 +315,8 @@ text = Tarnish.Node.text_content(doc)
   call reads and writes terms the same way. Its `rustler::init!` registers tarnish's functions
   with its own, and its load hook calls `tarnish_nif::load` with the load info and its
   conversions. The module that loads it does so with `use Tarnish.NIF`, which takes Rustler's
-  options, passes the count of dirty CPU schedulers as the load info, and declares tarnish's
-  functions. `config :tarnish, native: MyApp.Native` has `Tarnish` call it. `Tarnish.Native` is
+  options, passes `Tarnish.NIF.load_data/0` as the load info (the count of dirty CPU
+  schedulers, and the order the VM lists a large map in), and declares tarnish's functions. `config :tarnish, native: MyApp.Native` has `Tarnish` call it. `Tarnish.Native` is
   then neither built nor loaded.
 
   Its `convert/1` and `convert_light/1` are `Tarnish.Bridge`'s `:nif` backend. They answer each
@@ -330,8 +330,8 @@ text = Tarnish.Node.text_content(doc)
   ```
 
   ```rust
-  fn load(env: rustler::Env, threads: rustler::Term) -> bool {
-      tarnish_nif::load(env, threads, Some(&*MY_CONVERSIONS))
+  fn load(env: rustler::Env, info: rustler::Term) -> bool {
+      tarnish_nif::load(env, info, Some(&*MY_CONVERSIONS))
   }
 
   rustler::init!("Elixir.MyApp.Native", load = load);
@@ -534,42 +534,68 @@ The proof doesn't depend on anyone reading the Rust. CI checks it:
 
 The bench document has 200 paragraphs with bold text and links: 1,201 nodes, 78 KB of JSON.
 `npm run bench` writes it, together with ten steps that each type one character, and times
-ProseMirror on it. The table shows µs per call on one 4-core VM: ProseMirror in Node 22 after its
-JIT warms up and tarnish from Rust, each the median of a run's calls, and tarnish from Elixir, the
-mean of two seconds of calls. Each range spans the runs of each, taken in turn: two of Node and
-Rust, four of Elixir.
+ProseMirror on it. The tables show µs per call on one 4-core VM, from one run of each bench:
+ProseMirror in Node 22 after its JIT warms up, the median of seven rounds' medians; tarnish from
+Rust, the median of a run's calls; and tarnish from Elixir 1.20 on OTP 29, the median of seven
+rounds' means. Rounds of the same row spread by about a fifth either way on this VM.
 
 | | ProseMirror (Node) | tarnish (Rust) | tarnish (Elixir) |
 | --- | --- | --- | --- |
-| Read a document from a JSON value (Elixir: a map) | 288–289 | 80–81 | 418–490 |
-| Read it from JSON text | 778–798 | 202–209 | 1,342–1,396 with Jason |
-| Check it | 198–206 | 23–25 | 25–31 |
-| Apply 10 steps | 17–18 | 12 | 26–30 |
-| Write the changed document as a JSON value (Elixir: a map) | 71–73 | 194–196 | 8–10 |
-| Write it as JSON text | 326–328 | 107–108 | 1,332–1,517 with Jason |
-| Read a value, apply 10 steps, write a value | 403–419 | 306–311 | 442–492 |
-| Read JSON text, apply 10 steps, write JSON text | 1,202–1,224 | 335–350 | 2,969–3,339 with Jason |
+| Read a document from a JSON value (Elixir: a map) | 189 | 59 | 357 |
+| Read it from JSON text | 552 | 183 | 904 with `JSON` |
+| Check it | 141 | 17 | 19 |
+| Apply 10 steps | 13 | 10 | 29, with the write |
+| Write the changed document as a JSON value (Elixir: a map) | 50 | 0, read in place | 0.9, done by the steps |
+| Write it as JSON text | 264 | 77 | 706 with `JSON` |
+| Read a value, apply 10 steps, write a value | 300 | 69 | 384 |
+| Read JSON text, apply 10 steps, write JSON text | 899 | 295 | 2,450 with `JSON` |
+
+A server that keeps the document between messages, as a socket's process keeps a
+`%Tarnish.Node{}`, never reads it again: each message is its steps and the JSON they make. The
+second table times that message, on the 200 paragraphs and on a stack of 50 cards (137 KB), the
+flat shapes documents mostly have. The rows after the first keep a document that 100 earlier
+messages typed into; the "chained" rows give each message the document the one before it made,
+as a socket does, typing into one of 10 or 100 places in turn.
+
+| A message on a kept document | ProseMirror, 200 paragraphs | tarnish (Elixir), 200 paragraphs | ProseMirror, 50 cards | tarnish (Elixir), 50 cards |
+| --- | --- | --- | --- | --- |
+| 10 steps, on the document as read | 77 | 30 | 103 | 43 |
+| One step, after 100 typed in one place | 52 | 11 | 76 | 9.9 |
+| One step, after 100 typed in 100 places | 49 | 12 | 74 | 10 |
+| One step, chained in 10 places | 51 | 14 | 75 | 13 |
+| One step, chained in 100 places | 50 | 16 | 76 | 13 |
 
 - **JSON text.** ProseMirror's reads are `JSON.parse` then `fromJSON`, and its writes
   `JSON.stringify(doc.toJSON())`. Rust reads text through simd-json's tape straight into the
   document, with no JSON value of the whole of it, and writes it with serde_json, ryu-js writing
   numbers as JavaScript does. Elixir works with maps and has no text path of its own, so its text
-  rows are Jason's `decode!` and `encode!` around the map calls, nearly all of it Jason's time.
-- **Rust's JSON value.** `to_json` gives a `Value` the caller owns, so every object, array and
-  string longer than 24 bytes is an allocation, which the call frees again. Shorter strings, such
-  as type names and most attribute values, are held in place. ProseMirror's `toJSON` shares the
-  node's own `attrs` object and strings, and V8 frees what it made later, outside the call. To
-  send or store a document, write its JSON text.
-- **Elixir reading.** Reading a map takes about one and a half times as long as ProseMirror's
-  `fromJSON`, and a read, the steps and a write together 10–20% longer than ProseMirror's,
+  rows are Elixir's `JSON.decode!` and `JSON.encode!` around the map calls, nearly all of it their
+  time. `JSON` is OTP's `:json`, which decodes these documents 10–20% faster than Jason and
+  encodes them about 30% faster, to the same text.
+- **Rust's JSON value.** `to_json` reads the JSON in place from the document, so it builds
+  nothing, and reading a few keys of it costs next to nothing. It compares equal to a `Value` and
+  writes the same text; `to_value` copies it into a `Value` for code that edits it, every object,
+  array and longer string an allocation. In one session, on a day this VM ran about half again
+  slower than the tables: reading every value of the changed document through `to_json` took 77
+  µs and copying it 195; reading a value, applying the 10 steps and taking `to_json` took 92 µs
+  against ProseMirror's 454, and reading every value as well 182. To send or store a document,
+  write its JSON text.
+- **Elixir reading.** Reading a map takes one and a half to two times as long as ProseMirror's
+  `fromJSON`, and a read, the steps and a write together about a quarter longer than ProseMirror's,
   because of what it takes to get the map out of the VM. Code that forbids `unsafe` reads a term
   only through the NIF API, a call for each of the bench document's 9,205 terms, and a walk that
   only looks at them takes about 215 µs. Having the VM write the term out with `term_to_binary`
   and reading its bytes takes as long in all, and structs with atom keys don't help: they walk in
-  about 190 µs and write out at twice the size. Keeping the document between calls, as
-  `%Tarnish.Node{}` does, skips the read.
-- **Elixir writing.** `Tarnish.Node.to_json` shares the maps it read, so it writes only what the
-  steps changed.
+  about 190 µs and write out at twice the size. A kept document skips the read.
+- **Elixir writing.** `Tarnish.Step.apply` writes the JSON of the document it makes as it
+  applies the steps, sharing every map of the document before it that is still what ProseMirror
+  writes, so it writes only what the steps changed, and `Tarnish.Node.to_json` after it returns
+  that JSON. ProseMirror's `toJSON` writes every node each time, which is most of its message.
+- **One step.** Every row of the second table is the steps and the write together, as
+  ProseMirror's `toJSON` and `Tarnish.Step.apply` both pay it. ProseMirror applies a step alone
+  in under 1 µs and spends the rest of the message writing every node. tarnish's step, with the
+  write of what it changed, costs about 10 µs from Elixir: the NIF call, reading the step's term,
+  the apply and the copy of the changed nodes.
 
 To reproduce:
 

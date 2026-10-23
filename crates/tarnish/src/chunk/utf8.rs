@@ -133,8 +133,9 @@ mod tests {
                 }
                 let node =
                     Node::root(std::sync::Arc::new(chunk.expect("a chunk"))).expect("a node");
-                let read =
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| node.to_json()));
+                let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    node.to_json().to_value()
+                }));
                 assert!(read.is_err());
             }
         }
