@@ -144,7 +144,7 @@ jobs:
   # the NIF and the C library are loaded that way on Alpine, as the Elixir image loads the NIF.
   musl:
     runs-on: ubuntu-latest
-    container: hexpm/elixir:1.20.4-erlang-29.1.2-alpine-3.24.3
+    container: hexpm/elixir:1.20.4-erlang-29.1.2-alpine-3.22.7
     env:
       MIX_ENV: test
       # Rust links a program statically on musl, which a library can't be.
