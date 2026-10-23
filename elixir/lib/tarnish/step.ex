@@ -7,13 +7,13 @@ defmodule Tarnish.Step do
   @compile {:no_warn_undefined, @native}
 
   @doc """
-  Applies the steps to the document in order, as `step.apply(doc)` does each, and writes the
-  document they make, which keeps that JSON: `{:ok, doc}`, or the error the first step that
-  fails gives.
+  Applies the steps to the document in order, as `step.apply(doc)` does each: `{:ok, doc}`, or
+  the error the first step that fails gives.
 
-  The document keeps its JSON, and this keeps it current, so `Tarnish.Node.to_json/1` after it
-  costs nothing. A socket's process should keep the document between messages: the JSON written
-  for each message shares what the one before wrote for every node the steps left.
+  In the same call it also turns the new document into JSON and saves that JSON in `doc`, so
+  `Tarnish.Node.to_json/1` afterwards just returns it and costs nothing. A socket's process
+  should keep the document between messages: each message's JSON reuses the previous message's
+  JSON for every node the steps didn't change.
   """
   @spec apply(Tarnish.Node.t(), [Tarnish.json()]) :: {:ok, Tarnish.Node.t()} | Tarnish.error()
   def apply(%Tarnish.Node{} = doc, []), do: {:ok, doc}
