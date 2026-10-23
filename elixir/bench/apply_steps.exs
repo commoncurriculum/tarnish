@@ -140,10 +140,10 @@ cases =
         _ -> "Step.apply, #{length(changes)} changes (#{count} steps)"
       end
 
-    # Tarnish has no JSON text path in Elixir, so the text rows time Jason around it, as a caller
-    # holding text would.
-    text = Jason.encode!(json)
-    changes_text = Enum.map(changes, &Jason.encode!/1)
+    # Tarnish has no JSON text path in Elixir, so the text rows time Elixir's JSON, which is OTP's
+    # :json, around it, as a caller holding text would.
+    text = JSON.encode!(json)
+    changes_text = Enum.map(changes, &JSON.encode!/1)
 
     # Each change, and each step with the document the steps before it in its change made.
     message = cycle.(changes)
@@ -199,10 +199,9 @@ cases =
 
     [
       {"Node.from_json", fn -> Tarnish.Node.from_json(schema, json) end},
-      {"Jason, then Node.from_json",
-       fn -> Tarnish.Node.from_json(schema, Jason.decode!(text)) end},
+      {"JSON, then Node.from_json", fn -> Tarnish.Node.from_json(schema, JSON.decode!(text)) end},
       {"Node.to_json, unchanged", fn -> Tarnish.Node.to_json(doc) end},
-      {"JSON text after the steps", fn -> Jason.encode!(Tarnish.Node.to_json(changed)) end},
+      {"JSON text after the steps", fn -> JSON.encode!(Tarnish.Node.to_json(changed)) end},
       {"Node.check", fn -> Tarnish.Node.check(doc) end},
       {applied, fn -> apply_all.(doc, changes) end},
       {"from JSON, apply, to JSON",
@@ -210,12 +209,12 @@ cases =
          {:ok, doc} = Tarnish.Node.from_json(schema, json)
          Tarnish.Node.to_json(apply_all.(doc, changes))
        end},
-      {"JSON text in and out, Jason",
+      {"JSON text in and out, JSON",
        fn ->
-         {:ok, doc} = Tarnish.Node.from_json(schema, Jason.decode!(text))
+         {:ok, doc} = Tarnish.Node.from_json(schema, JSON.decode!(text))
 
-         Jason.encode!(
-           Tarnish.Node.to_json(apply_all.(doc, Enum.map(changes_text, &Jason.decode!/1)))
+         JSON.encode!(
+           Tarnish.Node.to_json(apply_all.(doc, Enum.map(changes_text, &JSON.decode!/1)))
          )
        end},
       {"kept node: one message",

@@ -135,7 +135,7 @@ defmodule Tarnish.Bridge.Pool do
 
     receive do
       {^port, {:data, {:eol, line}}} ->
-        if Jason.decode(line) != {:ok, %{"ready" => true}} do
+        if JSON.decode(line) != {:ok, %{"ready" => true}} do
           Port.close(port)
           raise "bridge worker's first line was #{inspect(line)}, not {\"ready\":true}"
         end

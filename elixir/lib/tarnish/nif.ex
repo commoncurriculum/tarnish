@@ -17,8 +17,10 @@ defmodule Tarnish.NIF do
 
   Then `Tarnish.Native` isn't built or loaded.
 
-  The load info is the count of the VM's dirty CPU schedulers: `tarnish-nif` runs a batch of
-  conversions on that many threads of its own.
+  The load info is the count of the VM's dirty CPU schedulers, as `tarnish-nif` runs a batch of
+  conversions on that many threads of its own, and a map of 33 keys with the key of the first
+  entry `Map.to_list` gives of it, from which the NIF learns the order this VM lists a large
+  map's entries in, as Jason writes them.
 
   The library also holds `Tarnish.Bridge`'s `:nif` backend: `convert/1`, which takes a list of
   requests on a dirty scheduler, and `convert_light/1`, which takes one on the caller's and gives
@@ -28,8 +30,12 @@ defmodule Tarnish.NIF do
   value}`, `{:error, message}`, or `:not_json` for a request holding a term the NIF doesn't read.
   """
 
-  @doc false
-  def load_data, do: :erlang.system_info(:dirty_cpu_schedulers_online)
+  @doc "The load info a library on `tarnish-nif` takes."
+  def load_data do
+    probe = Map.new(1..33, &{&1, &1})
+    [{first, _} | _] = Map.to_list(probe)
+    {:erlang.system_info(:dirty_cpu_schedulers_online), probe, first}
+  end
 
   defmacro __using__(opts) do
     quote do
@@ -41,7 +47,8 @@ defmodule Tarnish.NIF do
   @doc """
   Declares the functions a library on `tarnish-nif` registers, each raising until it loads.
   `use Tarnish.NIF` declares them. A module that loads the library with `:erlang.load_nif/2`
-  itself, where Rustler isn't installed, requires `Tarnish.NIF` and declares them with this.
+  itself, where Rustler isn't installed, requires `Tarnish.NIF`, declares them with this, and
+  passes `Tarnish.NIF.load_data/0` as the load info.
   """
   defmacro declare_functions do
     quote do

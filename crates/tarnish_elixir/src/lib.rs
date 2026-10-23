@@ -3,8 +3,8 @@
 
 #![forbid(unsafe_code)]
 
-fn load(env: rustler::Env, threads: rustler::Term) -> bool {
-    tarnish_nif::load(env, threads, None)
+fn load(env: rustler::Env, info: rustler::Term) -> bool {
+    tarnish_nif::load(env, info, None)
 }
 
 rustler::init!("Elixir.Tarnish.Native", load = load);

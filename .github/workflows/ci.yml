@@ -83,8 +83,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: erlef/setup-beam@v1
         with:
-          otp-version: "25.3.2.21"
-          elixir-version: "1.17.3"
+          otp-version: "29.1.2"
+          elixir-version: "1.20.4"
       # The tests' application converts on the harness's ProseMirror and linkedom in its workers.
       - uses: actions/setup-node@v4
         with:
@@ -144,7 +144,7 @@ jobs:
   # the NIF and the C library are loaded that way on Alpine, as the Elixir image loads the NIF.
   musl:
     runs-on: ubuntu-latest
-    container: hexpm/elixir:1.17.3-erlang-25.3.2.21-alpine-3.22.5
+    container: hexpm/elixir:1.20.4-erlang-29.1.2-alpine-3.24.3
     env:
       MIX_ENV: test
       # Rust links a program statically on musl, which a library can't be.

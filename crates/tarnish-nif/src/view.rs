@@ -550,7 +550,9 @@ impl<'a, 'r> Entries<'a, 'r> {
     }
 
     /// Turns to the pairs of the `Jason.OrderedObject` the map is, whose `__struct__` names
-    /// `name`. A struct's map is small, so its keys come in term order, `__struct__` first.
+    /// `name`. A struct's keys are atoms, which come before any string key, so one is the
+    /// first key read: OTP 25 gives `__struct__` first, and from OTP 26 a map's atom keys come
+    /// in the order the VM made the atoms, so `values` can come first.
     fn open_ordered(&mut self, first: bool, name: Term<'a>) -> Option<()> {
         let term = self.json.term;
         self.map = None;
@@ -600,16 +602,30 @@ impl<'a, 'r> Iterator for Entries<'a, 'r> {
                 self.open_ordered(first, value)?;
                 return self.next();
             }
-            Err(_) => match self.json.key_name(key) {
-                Some(name) => {
-                    self.unique = false;
-                    self.json.reading.irregular();
-                    EntryKey::Name(name)
+            Err(_) if first && values() == key => match self.json.term.map_get(__struct__()) {
+                Ok(name) => {
+                    self.open_ordered(first, name)?;
+                    return self.next();
                 }
-                None => return self.refuse(),
+                Err(_) => self.name_key(key)?,
             },
+            Err(_) => self.name_key(key)?,
         };
         Some((key, self.json.at(value)))
+    }
+}
+
+impl<'a> Entries<'a, '_> {
+    /// A key that isn't a string, by the name Jason writes for it.
+    fn name_key(&mut self, key: Term<'a>) -> Option<EntryKey<'a>> {
+        match self.json.key_name(key) {
+            Some(name) => {
+                self.unique = false;
+                self.json.reading.irregular();
+                Some(EntryKey::Name(name))
+            }
+            None => self.refuse(),
+        }
     }
 }
 

@@ -9,6 +9,8 @@ use tarnish::{Field, Fields};
 
 use tarnish::js::{MAX_SAFE_INTEGER, WrittenNumber, written_number};
 
+use crate::term::{self, FLATMAP_KEYS};
+
 const VERSION: u8 = 131;
 const NEW_FLOAT: u8 = 70;
 const SMALL_INTEGER: u8 = 97;
@@ -169,22 +171,38 @@ impl<'a> Reader<'a> {
     }
 
     fn object(&mut self, arity: usize, depth: usize, slot: &mut Value) -> Result<(), NotJson> {
+        if arity > FLATMAP_KEYS && !term::hashmap_lists_backwards() {
+            return self.hashmap_backwards(arity, depth, slot);
+        }
         let object = new_object(slot, arity.min(self.bytes.len() - self.at));
         let mut unique = true;
         for index in 0..arity {
             let key = match self.key()? {
                 ReadKey::String(text) => Key::from(text),
+                // A struct's keys are atoms, which come before any string key. OTP 25 writes
+                // `__struct__` first; from OTP 26 a map's atom keys come in the order the VM
+                // made the atoms, so `values` can come first.
+                ReadKey::Struct if arity == 2 && index == 0 => {
+                    self.atom_named("Elixir.Jason.OrderedObject")?;
+                    self.atom_named("values")?;
+                    *slot = Value::Object(self.ordered_pairs(depth)?);
+                    return Ok(());
+                }
+                ReadKey::Struct => return Err(NotJson),
+                ReadKey::Other(key) if arity == 2 && index == 0 && key == "values" => {
+                    let at = self.at;
+                    if let Some(pairs) = self.values_first(depth) {
+                        *slot = Value::Object(pairs);
+                        return Ok(());
+                    }
+                    self.at = at;
+                    unique = false;
+                    key
+                }
                 ReadKey::Other(key) => {
                     unique = false;
                     key
                 }
-                // A struct's map is small, so its keys come in term order, the atom
-                // `__struct__` before `values`, and before any key of its own that is a string.
-                ReadKey::Struct if arity == 2 && index == 0 => {
-                    *slot = Value::Object(self.ordered_object(depth)?);
-                    return Ok(());
-                }
-                ReadKey::Struct => return Err(NotJson),
             };
             if unique {
                 self.value_into(depth, new_entry(object, key))?;
@@ -199,16 +217,58 @@ impl<'a> Reader<'a> {
         Ok(())
     }
 
-    /// The rest of a `Jason.OrderedObject`: its entries, in order.
-    fn ordered_object(&mut self, depth: usize) -> Result<Map, NotJson> {
-        for expected in ["Elixir.Jason.OrderedObject", "values"] {
-            let tag = self.byte()?;
-            if !matches!(tag, ATOM | SMALL_ATOM | ATOM_UTF8 | SMALL_ATOM_UTF8)
-                || self.atom(tag)? != expected
-            {
-                return Err(NotJson);
-            }
+    /// A hashmap, whose entries the VM writes in the order `Map.to_list` gives them backwards
+    /// where it lists them in the NIF API iterator's order, as OTP 29 does. Read in the order
+    /// Jason writes them.
+    fn hashmap_backwards(
+        &mut self,
+        arity: usize,
+        depth: usize,
+        slot: &mut Value,
+    ) -> Result<(), NotJson> {
+        let mut entries = Vec::with_capacity(arity.min(self.bytes.len() - self.at));
+        for _ in 0..arity {
+            let key = match self.key()? {
+                ReadKey::String(text) => Key::from(text),
+                ReadKey::Other(key) => key,
+                ReadKey::Struct => return Err(NotJson),
+            };
+            entries.push((key, self.value(depth)?));
         }
+        let object = new_object(slot, arity);
+        // A key written twice keeps its first place and its last value, as parsing the JSON
+        // Jason writes for it does.
+        for (key, value) in entries.into_iter().rev() {
+            object.insert(key, value);
+        }
+        in_js_order(slot);
+        Ok(())
+    }
+
+    /// The rest of a `Jason.OrderedObject` whose `values` came before its `__struct__`: its
+    /// entries, when the struct is one.
+    fn values_first(&mut self, depth: usize) -> Option<Map> {
+        let pairs = self.ordered_pairs(depth).ok()?;
+        match self.key().ok()? {
+            ReadKey::Struct => self.atom_named("Elixir.Jason.OrderedObject").ok()?,
+            _ => return None,
+        }
+        Some(pairs)
+    }
+
+    /// An atom, which must be `expected`.
+    fn atom_named(&mut self, expected: &str) -> Result<(), NotJson> {
+        let tag = self.byte()?;
+        if !matches!(tag, ATOM | SMALL_ATOM | ATOM_UTF8 | SMALL_ATOM_UTF8)
+            || self.atom(tag)? != expected
+        {
+            return Err(NotJson);
+        }
+        Ok(())
+    }
+
+    /// A `Jason.OrderedObject`'s `values`: its entries, in order.
+    fn ordered_pairs(&mut self, depth: usize) -> Result<Map, NotJson> {
         let length = match self.byte()? {
             NIL => return Ok(Map::new()),
             LIST => self.u32()?,

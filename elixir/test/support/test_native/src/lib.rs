@@ -110,8 +110,8 @@ pub fn conversions() -> &'static dyn Conversions {
     &*HTML
 }
 
-fn load(env: rustler::Env, threads: rustler::Term) -> bool {
-    tarnish_nif::load(env, threads, Some(conversions()))
+fn load(env: rustler::Env, info: rustler::Term) -> bool {
+    tarnish_nif::load(env, info, Some(conversions()))
 }
 
 rustler::init!("Elixir.Tarnish.TestNative", load = load);
