@@ -36,8 +36,9 @@ defmodule Tarnish.Node do
   @doc """
   The document's JSON, as `node.toJSON()` gives it.
 
-  After `Tarnish.Step.apply/2` this is the JSON it wrote, and costs nothing. Otherwise it is
-  written, sharing the parts of the JSON the document keeps for the nodes it holds of it.
+  After `Tarnish.Step.apply/2` this returns the JSON that call already made and saved in the
+  document, so it costs nothing. Otherwise it converts the document, reusing the JSON the
+  document holds for every node that hasn't changed.
   """
   @spec to_json(t()) :: Tarnish.json()
   def to_json(%__MODULE__{ref: ref, json: json} = doc) do
