@@ -64,26 +64,25 @@ fn main() {
         drop(api::apply_steps(&node, steps).unwrap())
     });
     time("toJSON of the changed document", &mut || {
-        drop(changed.to_json())
+        std::hint::black_box(changed.to_json().len());
     });
-    time("JSON view of the changed document, read", &mut || {
-        std::hint::black_box(visit(changed.json()));
+    time("toJSON, every value read", &mut || {
+        std::hint::black_box(visit(changed.to_json()));
+    });
+    time("toJSON, copied to a value", &mut || {
+        drop(changed.to_json().to_value())
     });
     time("JSON text of the changed document", &mut || {
         drop(changed.to_json_string())
     });
     time("fromJSON, apply 10 steps, toJSON", &mut || {
         let node = Node::from_json(&schema, doc).unwrap();
-        drop(api::apply_steps(&node, steps).unwrap().to_json())
-    });
-    time("fromJSON, apply 10 steps, JSON view", &mut || {
-        let node = Node::from_json(&schema, doc).unwrap();
         let changed = api::apply_steps(&node, steps).unwrap();
-        std::hint::black_box(changed.json().len());
+        std::hint::black_box(changed.to_json().len());
     });
-    time("fromJSON, apply 10 steps, JSON view read", &mut || {
+    time("fromJSON, apply 10 steps, toJSON read", &mut || {
         let node = Node::from_json(&schema, doc).unwrap();
-        std::hint::black_box(visit(api::apply_steps(&node, steps).unwrap().json()));
+        std::hint::black_box(visit(api::apply_steps(&node, steps).unwrap().to_json()));
     });
     let steps_text = steps.to_string();
     time("JSON text in, apply 10 steps, JSON text out", &mut || {

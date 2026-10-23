@@ -94,7 +94,7 @@ fn documents_nest_as_deeply_as_memory_allows() {
         let json = deep_json();
         let doc = Node::from_json(&schema, &json).expect("the document");
         doc.check().expect("a valid document");
-        let written = doc.to_json();
+        let written = doc.to_json().to_value();
         let again = Node::from_json(&schema, &written).expect("the document again");
         assert!(doc == again);
         let text = doc.to_json_string();

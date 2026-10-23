@@ -545,7 +545,10 @@ mod tests {
         )?;
         let written = r#"{"type": "doc", "content": [{"type": "item", "attrs": {}, "content": [
             {"type": "text", "marks": [{"type": "m", "attrs": {}}], "text": "x"}]}]}"#;
-        assert_same(&json::from_str(written).expect("JSON"), &doc.to_json());
+        assert_same(
+            &json::from_str(written).expect("JSON"),
+            &doc.to_json().to_value(),
+        );
         assert_eq!(*counts.borrow(), [2, 3, 3, 2]);
         Ok(())
     }

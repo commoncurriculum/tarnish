@@ -200,7 +200,7 @@ let doc = html::parse(&schema, "<p>Hello <b>world</b></p>")?;
 assert_eq!(html::serialize(&schema, &doc)?, "<p>Hello <strong>world</strong></p>");
 
 let markdown = MarkdownManager::new(&extensions, Marked::new(more_lists()));
-assert_eq!(markdown.serialize(&doc.to_json())?, "Hello **world**");
+assert_eq!(markdown.serialize(&doc.to_json().to_value())?, "Hello **world**");
 assert_eq!(markdown.parse("Hello **world**")?, doc.to_json());
 ```
 
@@ -456,7 +456,7 @@ Names are Rust's: `nodeSize` is `node_size`, `Transform.addMark` is `Transform::
 | --- | --- |
 | `Schema`, `NodeType`, `MarkType`, `NodeSpec`, `MarkSpec`, `AttributeSpec` | `Schema`, `NodeType`, `MarkType`, `SchemaSpec`, `NodeSpec`, `MarkSpec`, `AttributeSpec`; `SchemaSpec::from_json` reads a spec from JSON |
 | `Node`, `Fragment`, `Mark`, `Slice`, `ResolvedPos`, `NodeRange`, `ContentMatch` | The same names, in `tarnish` |
-| `Node.fromJSON`, `node.toJSON()` | `Node::from_json`, `Node::to_json`; `Node::from_json_text` and `Node::to_json_string` for JSON text; `Node::json` to read the JSON without copying it |
+| `Node.fromJSON`, `node.toJSON()` | `Node::from_json`, `Node::to_json`; `Node::from_json_text` and `Node::to_json_string` for JSON text |
 | `node.textBetween`, `node.textContent` | `Node::text_between`, `Node::text_content`; `api::text_between`, `api::text_content` for the bindings |
 | `Transform` and every operation on it | `transform::Transform`; `api::transform` applies ops, from JSON, for the bindings |
 | `ReplaceStep`, `ReplaceAroundStep`, `AddMarkStep`, `RemoveMarkStep`, `AddNodeMarkStep`, `RemoveNodeMarkStep`, `AttrStep`, `DocAttrStep` | `transform::Step`, one variant each |
@@ -545,9 +545,9 @@ rounds' means. Rounds of the same row spread by about a fifth either way on this
 | Read it from JSON text | 552 | 183 | 904 with `JSON` |
 | Check it | 141 | 17 | 19 |
 | Apply 10 steps | 13 | 10 | 29, with the write |
-| Write the changed document as a JSON value (Elixir: a map) | 50 | 192; nothing with `json()` | 0.9, done by the steps |
+| Write the changed document as a JSON value (Elixir: a map) | 50 | 0, read in place | 0.9, done by the steps |
 | Write it as JSON text | 264 | 77 | 706 with `JSON` |
-| Read a value, apply 10 steps, write a value | 300 | 221; about 70 with `json()` | 384 |
+| Read a value, apply 10 steps, write a value | 300 | 69 | 384 |
 | Read JSON text, apply 10 steps, write JSON text | 899 | 295 | 2,450 with `JSON` |
 
 A server that keeps the document between messages, as a socket's process keeps a
@@ -572,16 +572,14 @@ as a socket does, typing into one of 10 or 100 places in turn.
   rows are Elixir's `JSON.decode!` and `JSON.encode!` around the map calls, nearly all of it their
   time. `JSON` is OTP's `:json`, which decodes these documents 10–20% faster than Jason and
   encodes them about 30% faster, to the same text.
-- **Rust's JSON value.** `to_json` gives a `Value` the caller owns, so every object, array and
-  string longer than 24 bytes is an allocation, which the call frees again. Shorter strings, such
-  as type names and most attribute values, are held in place. ProseMirror's `toJSON` shares the
-  node's own `attrs` object and strings, and V8 frees what it made later, outside the call. Code
-  that only reads the JSON should use `json()`, which reads it in place from the document and
-  builds nothing. It compares equal to the `Value`, writes the same text, and `to_value` copies
-  it out for code that edits it. Measured in one session on a day this VM ran about half again
-  slower than the tables: reading a value, applying the 10 steps and taking `json()` took 92 µs,
-  against 327 with `to_json` and ProseMirror's 454; reading every value of the view as well took
-  174. To send or store a document, write its JSON text.
+- **Rust's JSON value.** `to_json` reads the JSON in place from the document, so it builds
+  nothing, and reading a few keys of it costs next to nothing. It compares equal to a `Value` and
+  writes the same text; `to_value` copies it into a `Value` for code that edits it, every object,
+  array and longer string an allocation. In one session, on a day this VM ran about half again
+  slower than the tables: reading every value of the changed document through `to_json` took 77
+  µs and copying it 195; reading a value, applying the 10 steps and taking `to_json` took 92 µs
+  against ProseMirror's 454, and reading every value as well 182. To send or store a document,
+  write its JSON text.
 - **Elixir reading.** Reading a map takes one and a half to two times as long as ProseMirror's
   `fromJSON`, and a read, the steps and a write together about a quarter longer than ProseMirror's,
   because of what it takes to get the map out of the VM. Code that forbids `unsafe` reads a term

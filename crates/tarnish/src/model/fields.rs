@@ -121,14 +121,9 @@ pub(crate) fn field_count(attrs: bool, content: bool, marks: bool, text: bool) -
 }
 
 impl Node<'_> {
-    /// `node.toJSON()` as an owned value, to edit or keep apart from the document. To read,
-    /// compare or write it, [`json`](Self::json) does without the copy.
-    pub fn to_json(&self) -> Value {
-        to_value(self.view())
-    }
-
-    /// `node.toJSON()` read in place from the document: nothing is built or copied.
-    pub fn json(&self) -> JsonRef<'_> {
+    /// `node.toJSON()`, read in place from the document: nothing is built or copied until
+    /// [`JsonRef::to_value`] copies it out for code that edits it.
+    pub fn to_json(&self) -> JsonRef<'_> {
         JsonRef::node(self.view())
     }
 
@@ -142,12 +137,8 @@ impl Node<'_> {
 }
 
 impl Mark<'_> {
-    pub fn to_json(&self) -> Value {
-        to_value(self.view())
-    }
-
-    /// `mark.toJSON()` read in place: nothing is built or copied.
-    pub fn json(&self) -> JsonRef<'_> {
+    /// `mark.toJSON()`, read in place: nothing is built or copied.
+    pub fn to_json(&self) -> JsonRef<'_> {
         JsonRef::mark(self.view())
     }
 }

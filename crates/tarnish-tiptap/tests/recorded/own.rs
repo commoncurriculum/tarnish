@@ -122,7 +122,8 @@ impl Converter {
             "serializesMarkdown" => record("markdown", self.markdown.serialize(doc())),
             "parsesHTML" => record(
                 "doc",
-                html::parse(&self.schema, string(&inputs["html"])).map(|doc| doc.to_json()),
+                html::parse(&self.schema, string(&inputs["html"]))
+                    .map(|doc| doc.to_json().to_value()),
             ),
             "serializesHTML" => record(
                 "html",

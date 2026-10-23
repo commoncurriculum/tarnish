@@ -27,7 +27,7 @@
 //! assert_eq!(html::serialize(&schema, &doc)?, "<p>Hello <strong>world</strong></p>");
 //!
 //! let markdown = MarkdownManager::new(&extensions, Marked::new(more_lists()));
-//! assert_eq!(markdown.serialize(&doc.to_json())?, "Hello **world**");
+//! assert_eq!(markdown.serialize(&doc.to_json().to_value())?, "Hello **world**");
 //! assert_eq!(markdown.parse("Hello **world**")?, doc.to_json());
 //! # Ok::<(), tarnish::Error>(())
 //! ```

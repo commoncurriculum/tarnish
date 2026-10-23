@@ -749,7 +749,7 @@ fn colors_nest_as_deeply_as_memory_allows() {
         ], "text": "x"});
         let paragraph = json!({"type": "paragraph", "content": [text]});
         let expected = json!({"type": "doc", "content": [paragraph]});
-        assert!(same(&expected, &doc.to_json()));
+        assert!(same(&expected, &doc.to_json().to_value()));
         assert!(html::serialize(&schema, &doc).expect("HTML") == html);
     });
 }

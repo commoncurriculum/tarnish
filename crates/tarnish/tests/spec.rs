@@ -20,8 +20,10 @@ fn item_read_back(attrs: &str) -> String {
     ));
     let doc = json::from_str(r#"{"type": "doc", "content": [{"type": "item", "attrs": {}}]}"#)
         .expect("JSON");
-    Node::from_json(&schema, &doc)
-        .map_or_else(|error| error.to_string(), |doc| stringify(&doc.to_json()))
+    Node::from_json(&schema, &doc).map_or_else(
+        |error| error.to_string(),
+        |doc| stringify(&doc.to_json().to_value()),
+    )
 }
 
 #[test]

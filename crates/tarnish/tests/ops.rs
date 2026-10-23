@@ -48,7 +48,7 @@ fn ops_give_prosemirrors_document_steps_mapping_and_errors() {
     let (schemas, fixtures) = fixtures();
     for case in records(&fixtures, "transforms") {
         let doc = doc(&schemas, case);
-        let before = doc.to_json();
+        let before = doc.to_json().to_value();
         let schema = schema(&schemas, case);
         let transformed = api::transform(&doc, &case["ops"]).map(|(changed, steps)| {
             // `==` is `node.eq`, which ProseMirror's own suites hold the port's documents to.

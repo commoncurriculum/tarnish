@@ -175,7 +175,8 @@ fn report(failures: Vec<String>) {
 /// item before it.
 fn parsed(parser: &DomParser<HtmlNode>, html: &str, record: &Value) -> Value {
     let template_tree = HtmlDom::new().parse_fragment(html).inner_html();
-    let template_doc = parse_html(parser, html, options(record)).map(|doc| doc.to_json());
+    let template_doc =
+        parse_html(parser, html, options(record)).map(|doc| doc.to_json().to_value());
     let slice = parse_html_slice(parser, html, options(record)).map(|slice| slice.to_json());
     let dom = HtmlDom::parse_document(html);
     let body = dom.body().expect("a body");
@@ -189,7 +190,7 @@ fn parsed(parser: &DomParser<HtmlNode>, html: &str, record: &Value) -> Value {
         },
         "document": {
             "tree": document_tree,
-            "doc": outcome(document_doc.map(|doc| doc.to_json())),
+            "doc": outcome(document_doc.map(|doc| doc.to_json().to_value())),
         },
     });
     json::from_str(&json::stringify(&parsed)).expect("JSON")

@@ -11,7 +11,7 @@ use napi::bindgen_prelude::{
 use napi::{Env, Error, JsString, JsValue, Result, Status, ValueType};
 use tarnish::chunk::ValueRef;
 use tarnish::js::stack;
-use tarnish::{Attrs, Map, Text, TextRef, Value};
+use tarnish::{Attrs, JsonKind, JsonRef, Map, Text, TextRef, Value};
 
 thread_local! {
     static ENV: Cell<Option<Env>> = const { Cell::new(None) };
@@ -263,6 +263,30 @@ pub fn attrs_from_js(value: Unknown) -> Result<Option<Map>> {
 
 pub fn value_to_js<'env>(env: &'env Env, value: &Value) -> Result<Unknown<'env>> {
     to_js(env, value)
+}
+
+/// A node's or mark's JSON, written as JavaScript straight from the document.
+pub fn json_to_js<'env>(env: &'env Env, json: JsonRef) -> Result<Unknown<'env>> {
+    match json.kind() {
+        JsonKind::Null => Null.into_unknown(env),
+        JsonKind::Bool(value) => value.into_unknown(env),
+        JsonKind::Number(value) => value.as_f64().into_unknown(env),
+        JsonKind::String(value) => value.as_ref().into_unknown(env),
+        JsonKind::Array(len) => {
+            let mut array = env.create_array(len as u32)?;
+            for (index, item) in json.items().enumerate() {
+                array.set(index as u32, stack::grow(|| json_to_js(env, item))?)?;
+            }
+            Ok(array.to_unknown())
+        }
+        JsonKind::Object(_) => {
+            let mut object = Object::new(env)?;
+            for (key, item) in json.entries() {
+                object.set(key, stack::grow(|| json_to_js(env, item))?)?;
+            }
+            Ok(object.to_unknown())
+        }
+    }
 }
 
 /// [`value_to_js`], `None` being `undefined`.

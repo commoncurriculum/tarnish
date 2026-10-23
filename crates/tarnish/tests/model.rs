@@ -56,7 +56,7 @@ fn filled_nodes_are_prosemirrors() {
             schema(&schemas, case)
                 .top_node_type()
                 .create_and_fill(None, Fragment::empty(), &[]);
-        let filled = filled.map(|node| node.map_or(Value::Null, |node| node.to_json()));
+        let filled = filled.map(|node| node.map_or(Value::Null, |node| node.to_json().to_value()));
         let filled = filled.map(|filled| json!({ "result": filled }));
         expect(case, &["schema"], outcome(filled));
     }
@@ -107,7 +107,10 @@ fn steps_give_prosemirrors_text_and_errors() {
         expect(case, &inputs, written);
         let text = json::from_str(case["result"].as_str().expect("JSON text")).expect("JSON");
         let read = Node::from_json(schema, &text).expect("a document");
-        assert_same(case.get("wellFormed").unwrap_or(&text), &read.to_json());
+        assert_same(
+            case.get("wellFormed").unwrap_or(&text),
+            &read.to_json().to_value(),
+        );
 
         // The steps themselves, which keep their lone surrogates, undo the change exactly.
         let mut tr = Transform::new(doc.clone());
@@ -124,13 +127,13 @@ fn steps_give_prosemirrors_text_and_errors() {
     }
 }
 
-/// A node's JSON read in place is its `to_json`, key for key and in the same order, and writes the
-/// same text.
+/// A node's JSON read in place is the value it copies out, key for key and in the same order,
+/// and writes the same text.
 fn assert_view(node: &Node) {
-    let owned = node.to_json();
-    let view = node.json();
+    let view = node.to_json();
+    let owned = view.to_value();
     assert!(view == owned, "{view} is not {}", json::stringify(&owned));
-    assert_eq!(view.to_value(), owned);
+    assert!(node.to_json() == view);
     assert_eq!(view.to_json_string(), node.to_json_string());
     walk(view, &owned);
 }
@@ -169,7 +172,7 @@ fn json_views_read_as_to_json() {
             node.descendants(&mut |child, _, _, _| {
                 assert_view(child);
                 for mark in child.marks().iter() {
-                    assert!(mark.json() == mark.to_json());
+                    assert!(mark.to_json() == mark.to_json().to_value());
                 }
                 Ok(true)
             })

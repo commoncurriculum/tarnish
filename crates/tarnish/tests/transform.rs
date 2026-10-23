@@ -45,11 +45,11 @@ fn steps_give_prosemirrors_document_inverse_and_mapping_and_leave_the_one_given(
             "mapped": mapped(schema, &case["steps"], doc.content().size()),
         });
         expect(recorded, &["test"], given);
-        let read = Node::from_json(schema, &changed.to_json()).expect("a document");
+        let read = Node::from_json(schema, &changed.to_json().to_value()).expect("a document");
         assert!(read == changed, "{}", changed.to_json());
-        assert_same(&case["start"], &doc.to_json());
+        assert_same(&case["start"], &doc.to_json().to_value());
         let again = api::apply_steps(&doc, &case["steps"]).expect("the steps again");
-        assert_same(&case["result"], &again.to_json());
+        assert_same(&case["result"], &again.to_json().to_value());
     }
 }
 
@@ -89,13 +89,13 @@ fn changes_read_back_from_their_chunks() {
         let mut kept = vec![source.chunk().clone()];
         let changed = api::apply_steps(&source, &case["steps"]).expect("the steps");
         let changed = reloaded(schema, &changed, &kept);
-        assert_same(&case["result"], &changed.to_json());
-        assert_same(&case["result"], &changed.compact().to_json());
+        assert_same(&case["result"], &changed.to_json().to_value());
+        assert_same(&case["result"], &changed.compact().to_json().to_value());
         kept.push(changed.chunk().clone());
         let inverted = api::invert_steps(&source, &case["steps"]).expect("the inverted steps");
         let undone = api::apply_steps(&changed, &inverted).expect("the steps undone");
         let undone = reloaded(schema, &undone, &kept);
-        assert_same(&case["start"], &undone.to_json());
+        assert_same(&case["start"], &undone.to_json().to_value());
         undone.check().expect("a valid document");
     }
 }
@@ -223,9 +223,12 @@ fn each_kind_of_step_deep_in_a_document_gives_the_document_it_should() {
     for (index, (steps, content)) in cases.into_iter().enumerate() {
         let changed = api::apply_steps(&doc, &steps).expect("the steps");
         let expected = quoted(depth, content);
-        assert_same(&expected, &changed.to_json());
+        assert_same(&expected, &changed.to_json().to_value());
         changed.check().expect("a valid document");
-        assert_same(&expected, &reloaded(schema, &changed, &kept).to_json());
+        assert_same(
+            &expected,
+            &reloaded(schema, &changed, &kept).to_json().to_value(),
+        );
         let one_at_a_time = apply_one_at_a_time(&doc, steps.as_array().expect("steps"));
         assert!(one_at_a_time == changed, "{}", steps);
         match index {
@@ -236,7 +239,7 @@ fn each_kind_of_step_deep_in_a_document_gives_the_document_it_should() {
             _ => {}
         }
     }
-    assert_same(&start, &doc.to_json());
+    assert_same(&start, &doc.to_json().to_value());
 }
 
 /// A replace that changes nothing gives the document itself: an empty slice put into an empty
@@ -296,7 +299,10 @@ fn many_steps_in_one_call_give_the_document_one_call_a_step_gives() {
             })
             .collect();
         let changed = api::apply_steps(&doc, &Value::Array(steps.clone())).expect("the steps");
-        assert_same(&quoted(depth, paragraphs("x")), &changed.to_json());
+        assert_same(
+            &quoted(depth, paragraphs("x")),
+            &changed.to_json().to_value(),
+        );
         changed.check().expect("a valid document");
         let one_at_a_time = apply_one_at_a_time(&doc, &steps);
         assert!(one_at_a_time == changed);
@@ -305,11 +311,11 @@ fn many_steps_in_one_call_give_the_document_one_call_a_step_gives() {
             written(&changed, &doc) < count * (depth + 2),
             "at depth {depth}"
         );
-        assert_same(&quoted(depth, paragraphs("")), &doc.to_json());
+        assert_same(&quoted(depth, paragraphs("")), &doc.to_json().to_value());
         let kept = vec![doc.chunk().clone()];
         assert_same(
-            &changed.to_json(),
-            &reloaded(schema, &changed, &kept).to_json(),
+            &changed.to_json().to_value(),
+            &reloaded(schema, &changed, &kept).to_json().to_value(),
         );
     }
 }
@@ -330,12 +336,12 @@ fn a_chunk_read_from_json_changes_in_place_only_when_nothing_else_holds_it() {
     let held = doc.clone();
     let changed = doc.into_replaced(2, 2, &insert).expect("a replace");
     assert_eq!(held.chunk().bytes(), bytes.as_slice());
-    assert_same(&start, &held.to_json());
+    assert_same(&start, &held.to_json().to_value());
     let typed = json!({ "type": "doc", "content": [paragraph(json!([text("axbc")])), paragraph(json!([text("def")]))] });
-    assert_same(&typed, &changed.to_json());
+    assert_same(&typed, &changed.to_json().to_value());
     // The typed paragraph refers to the text it kept, so its chunk imports the read one.
     let changed = held.into_replaced(2, 2, &insert).expect("a replace");
-    assert_same(&typed, &changed.to_json());
+    assert_same(&typed, &changed.to_json().to_value());
     assert!(
         Chunk::closure(changed.chunk())
             .iter()
@@ -347,14 +353,17 @@ fn a_chunk_read_from_json_changes_in_place_only_when_nothing_else_holds_it() {
     let doc = Node::from_json(schema, &start).expect("a document");
     let changed = doc.into_replaced(1, 4, &insert).expect("a replace");
     let replaced = json!({ "type": "doc", "content": [paragraph(json!([text("x")])), paragraph(json!([text("def")]))] });
-    assert_same(&replaced, &changed.to_json());
+    assert_same(&replaced, &changed.to_json().to_value());
     assert_eq!(
         changed.chunk().imports().len(),
         1,
         "the read chunk, importing the paragraph's"
     );
     changed.check().expect("a valid document");
-    assert_same(&replaced, &reloaded(schema, &changed, &[]).to_json());
+    assert_same(
+        &replaced,
+        &reloaded(schema, &changed, &[]).to_json().to_value(),
+    );
 }
 
 /// A list whose kids are held in more chunks than a flatten looks up the slots of once (24
@@ -389,7 +398,7 @@ fn a_list_of_kids_in_many_chunks_flattens_to_the_same_document() {
         "{} imports",
         header.imports.len()
     );
-    let expected = node.to_json();
+    let expected = node.to_json().to_value();
     let own = chunks.len() - 1;
     let choices: [Vec<usize>; 5] = [
         vec![],
@@ -401,7 +410,7 @@ fn a_list_of_kids_in_many_chunks_flattens_to_the_same_document() {
     for choice in choices {
         let kept: Vec<_> = choice.iter().map(|&at| chunks[at].clone()).collect();
         let flat = reloaded(schema, &node, &kept);
-        assert_same(&expected, &flat.to_json());
+        assert_same(&expected, &flat.to_json().to_value());
         flat.check().expect("a valid document");
     }
 }

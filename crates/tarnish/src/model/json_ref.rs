@@ -13,7 +13,7 @@ use crate::js::{self, stack};
 use crate::json::{Number, Value};
 
 /// A part of a node's or mark's JSON, read where the document holds it. It reads, compares and
-/// serializes as the [`Value`] `to_json` makes, which [`to_value`](Self::to_value) copies it to.
+/// serializes as the [`Value`] that [`to_value`](Self::to_value) copies it to.
 #[derive(Clone, Copy)]
 pub struct JsonRef<'c>(Part<'c>);
 
@@ -37,7 +37,7 @@ pub enum JsonKind<'c> {
     Null,
     Bool(bool),
     Number(Number),
-    /// A string; text with a lone surrogate has U+FFFD in its place, as in `to_json`.
+    /// A string; text with a lone surrogate has U+FFFD in its place, as in a [`Value`].
     String(Cow<'c, str>),
     Array(usize),
     Object(usize),
@@ -99,7 +99,7 @@ impl<'c> JsonRef<'c> {
         }
     }
 
-    /// A string; text with a lone surrogate has U+FFFD in its place, as in `to_json`.
+    /// A string; text with a lone surrogate has U+FFFD in its place, as in a [`Value`].
     pub fn as_str(self) -> Option<Cow<'c, str>> {
         match self.kind() {
             JsonKind::String(string) => Some(string),
@@ -165,7 +165,7 @@ impl<'c> JsonRef<'c> {
         }
     }
 
-    /// The [`Value`] `to_json` makes of it.
+    /// A copy of it, for code that edits it.
     pub fn to_value(self) -> Value {
         match self.0 {
             Part::Node(node) => super::fields::to_value(node),
@@ -312,6 +312,28 @@ impl PartialEq<Value> for JsonRef<'_> {
     }
 }
 
+/// Equal as [`Value`]s are, without copying either.
+impl PartialEq for JsonRef<'_> {
+    fn eq(&self, other: &JsonRef) -> bool {
+        match (self.kind(), other.kind()) {
+            (JsonKind::Array(a), JsonKind::Array(b)) => {
+                a == b
+                    && self
+                        .items()
+                        .zip(other.items())
+                        .all(|(a, b)| stack::grow(|| a == b))
+            }
+            (JsonKind::Object(a), JsonKind::Object(b)) => {
+                a == b
+                    && self
+                        .entries()
+                        .all(|(key, a)| other.get(key).is_some_and(|b| stack::grow(|| a == b)))
+            }
+            (a, b) => a == b,
+        }
+    }
+}
+
 impl PartialEq<JsonRef<'_>> for Value {
     fn eq(&self, other: &JsonRef) -> bool {
         other == self
@@ -327,5 +349,18 @@ impl fmt::Display for JsonRef<'_> {
 impl fmt::Debug for JsonRef<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(&self.to_json_string())
+    }
+}
+
+/// `json!` takes the JSON in, as the value it copies out.
+impl crate::js::json::IntoValue for JsonRef<'_> {
+    fn into_value(self) -> Value {
+        self.to_value()
+    }
+}
+
+impl From<JsonRef<'_>> for Value {
+    fn from(json: JsonRef) -> Value {
+        json.to_value()
     }
 }
