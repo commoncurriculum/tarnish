@@ -4,7 +4,6 @@
 
 use tarnish::Node;
 use tarnish::chunk::ValueRef;
-use tarnish::dom::Dom;
 use tarnish_js::json::{Map, Value, json, object};
 use tarnish_js::{self as js, Error, value};
 use tarnish_markdown::marked::{List, Token, TokenData};
@@ -16,8 +15,6 @@ use crate::{ParseHtml, PlainExtension, SpecAttrs, node_attr};
 const ORDERED: &str = "flatListItemOrdered";
 const TASK: &str = "flatListItemTask";
 const UNORDERED: &str = "flatListItemUnordered";
-
-const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
 
 /// Four spaces a level: a nested item has to reach its parent's content column, which is 3 for
 /// `1. ` and 2 for `- `, and stay within three columns of it, or CommonMark reads it as a
@@ -255,11 +252,6 @@ fn get_boolean_attribute(element: &HtmlNode, attribute: &str) -> bool {
         .is_some_and(|value| value != "false")
 }
 
-/// `node instanceof HTMLElement`.
-fn is_html_element(node: &HtmlNode) -> Result<bool, Error> {
-    Ok(node.dom().namespace(node)?.as_deref() == Some(HTML_NAMESPACE))
-}
-
 /// The ordered and unordered items' `contentElement`: the item itself.
 fn item_content(element: &HtmlNode) -> Result<HtmlNode, Error> {
     replace_paragraphs_with_breaks(element)?;
@@ -272,8 +264,6 @@ fn task_content_element(li: &HtmlNode) -> Result<HtmlNode, Error> {
     let children = li.children();
     if let (Some(first), Some(last)) = (children.first(), children.last())
         && first.is_tag("LABEL")
-        && is_html_element(first)?
-        && is_html_element(last)?
     {
         return Ok(last.clone());
     }
@@ -289,17 +279,16 @@ fn replace_paragraphs_with_breaks(element: &HtmlNode) -> Result<(), Error> {
     }
     let children = element.child_nodes();
     for (index, child) in children.iter().enumerate() {
-        if !(child.is_tag("P") && is_html_element(child)?) {
+        if !child.is_tag("P") {
             continue;
         }
         for grandchild in child.child_nodes() {
             child.before(&grandchild)?;
         }
-        if let Some(next) = children.get(index + 1) {
-            let list = ["OL", "UL", "LI"].iter().any(|tag| next.is_tag(tag));
-            if !(list && is_html_element(next)?) {
-                child.before(&element.dom().create_html_element("br")?)?;
-            }
+        if let Some(next) = children.get(index + 1)
+            && !["OL", "UL", "LI"].iter().any(|tag| next.is_tag(tag))
+        {
+            child.before(&element.dom().create_html_element("br")?)?;
         }
         child.remove();
     }

@@ -56,7 +56,7 @@
   "prosemirror-schema-basic": "1.2.4",
   "prosemirror-schema-list": "1.5.1",
   "prosemirror-transform": "1.12.0",
-  "tiptap-extension-flat-list": "0.4.0",
+  "tiptap-extension-flat-list": "0.4.1",
   "@tiptap/markdown > marked": "17.0.6",
   "linkedom > parse5": "8.0.1",
   "linkedom > parse5 > entities": "8.1.0",

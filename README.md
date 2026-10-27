@@ -160,7 +160,7 @@ making what its JavaScript makes:
   CodeBlockLowlight, whose documents are CodeBlock's), HorizontalRule, Image, BulletList,
   OrderedList, ListItem, TaskList, TaskItem, Table, TableRow, TableCell, TableHeader, Details,
   DetailsSummary, DetailsContent, InlineMath, BlockMath, Emoji, Mention, YouTube, Twitch and
-  Audio, and tiptap-extension-flat-list 0.4.0's flat list items.
+  Audio, and tiptap-extension-flat-list 0.4.1's flat list items.
 - **Marks:** Bold, Italic, Strike, Underline, Code, Highlight, Subscript, Superscript, Link,
   RubyText and TextStyle, with Color, BackgroundColor, FontFamily, FontSize and LineHeight.
 - **Attributes on other types:** TextAlign, UniqueID, TableOfContents' ids, and `@tiptap/core`'s
