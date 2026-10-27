@@ -69,7 +69,7 @@
     "prosemirror-schema-list": "1.5.1",
     "prosemirror-test-builder": "1.1.1",
     "prosemirror-transform": "1.12.0",
-    "tiptap-extension-flat-list": "0.4.0",
+    "tiptap-extension-flat-list": "0.4.1",
     "tsx": "4.19.2"
   }
 }
