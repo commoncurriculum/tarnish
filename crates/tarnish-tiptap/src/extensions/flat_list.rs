@@ -285,10 +285,10 @@ fn replace_paragraphs_with_breaks(element: &HtmlNode) -> Result<(), Error> {
         for grandchild in child.child_nodes() {
             child.before(&grandchild)?;
         }
-        if let Some(next) = children.get(index + 1) {
-            if !["OL", "UL", "LI"].iter().any(|tag| next.is_tag(tag)) {
-                child.before(&element.dom().create_html_element("br")?)?;
-            }
+        if let Some(next) = children.get(index + 1)
+            && !["OL", "UL", "LI"].iter().any(|tag| next.is_tag(tag))
+        {
+            child.before(&element.dom().create_html_element("br")?)?;
         }
         child.remove();
     }
