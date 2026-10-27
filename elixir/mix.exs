@@ -5,7 +5,7 @@ defmodule Tarnish.MixProject do
     [
       app: :tarnish,
       version: "0.1.0",
-      elixir: "~> 1.18",
+      elixir: "~> 1.17",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps(),
